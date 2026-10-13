@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DB Manager</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <aside>
+      <h2>Connections</h2>
+      <ul id="conns"></ul>
+      <details>
+        <summary>New connection</summary>
+        <form id="form">
+          <input name="name" placeholder="Name" required />
+          <select name="kind">
+            <option>postgres</option>
+            <option>mysql</option>
+            <option>sqlite</option>
+          </select>
+          <input name="url" placeholder="postgres://user@localhost:5432/db" required />
+          <input name="password" type="password" placeholder="Password (stored in keychain)" />
+          <button>Save</button>
+        </form>
+      </details>
+      <h2>Tables</h2>
+      <ul id="tables"></ul>
+    </aside>
+    <main>
+      <textarea id="sql" spellcheck="false" placeholder="SQL. Cmd/Ctrl+Enter runs the selection, or everything."></textarea>
+      <div class="bar"><button id="run">Run</button><span id="status"></span></div>
+      <div id="out"></div>
+    </main>
+  </body>
+</html>

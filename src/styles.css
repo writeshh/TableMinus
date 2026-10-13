@@ -1,0 +1,27 @@
+:root {
+  color-scheme: light dark;
+  font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, sans-serif;
+  --line: color-mix(in srgb, currentColor 15%, transparent);
+  --muted: color-mix(in srgb, currentColor 55%, transparent);
+}
+* { box-sizing: border-box; }
+body { margin: 0; height: 100vh; display: grid; grid-template-columns: 240px 1fr; background: Canvas; color: CanvasText; }
+aside { border-right: 1px solid var(--line); padding: 8px; overflow: auto; }
+h2 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 12px 4px 4px; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { padding: 4px 6px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; overflow-wrap: anywhere; }
+li:hover { background: var(--line); }
+li button { border: 0; background: none; color: var(--muted); cursor: pointer; }
+summary { cursor: pointer; padding: 4px; color: var(--muted); }
+form { display: grid; gap: 6px; padding: 4px; }
+input, select, textarea, button { font: inherit; }
+main { display: grid; grid-template-rows: 30% auto 1fr; min-width: 0; }
+textarea { font-family: ui-monospace, Menlo, monospace; border: 0; border-bottom: 1px solid var(--line); padding: 8px; resize: none; background: transparent; color: inherit; outline: none; }
+.bar { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+#status { color: var(--muted); }
+#status.error { color: #d33; }
+#out { overflow: auto; }
+table { border-collapse: collapse; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+th, td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; white-space: nowrap; max-width: 400px; overflow: hidden; text-overflow: ellipsis; }
+th { position: sticky; top: 0; background: Canvas; }
+td.null { color: var(--muted); font-style: italic; }
