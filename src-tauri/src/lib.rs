@@ -20,6 +20,14 @@ struct Live {
     tunnel: Option<ssh::Tunnel>, // lives exactly as long as the connection
 }
 
+impl Live {
+    /// Turns an error that means the connection dropped into [`Error::Disconnected`], so the UI can offer to
+    /// reconnect instead of showing a driver message.
+    fn check<T>(&self, result: Result<T>) -> Result<T> {
+        result.map_err(|e| if self.conn.lost_by(&e) { Error::Disconnected } else { e })
+    }
+}
+
 /// Runs the startup script, opens the SSH tunnel if there is one, then opens the database.
 async fn open_db(
     saved: &store::Saved,
@@ -137,13 +145,16 @@ async fn test_connection(
 #[tauri::command]
 async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<Info> {
     let mut open = open.0.lock().await;
-    let live = match open.entry(name) {
-        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-        std::collections::hash_map::Entry::Vacant(e) => {
-            let live = open_saved(&app, e.key()).await?;
-            e.insert(live)
+    if let Some(live) = open.get_mut(&name) {
+        match info(live).await {
+            // Dropped while the workspace was closed: open a fresh one rather than show an error.
+            Err(e) if live.conn.lost_by(&e) => {
+                open.remove(&name);
+            }
+            other => return other,
         }
-    };
+    }
+    let live = open.entry(name.clone()).or_insert(open_saved(&app, &name).await?);
     info(live).await
 }
 
@@ -178,7 +189,8 @@ async fn update_rows(
     if live.saved.confirm_writes && !confirmed {
         return Err(Error::ConfirmRequired);
     }
-    live.conn.update_rows(&table, &edits).await
+    let r = live.conn.update_rows(&table, &edits).await;
+    live.check(r)
 }
 
 /// Drops the live connection; the next connect opens a fresh one.
@@ -190,20 +202,28 @@ async fn disconnect(open: State<'_, Open>, name: String) -> Result<()> {
 
 #[tauri::command]
 async fn columns(open: State<'_, Open>, name: String, table: String) -> Result<Vec<db::Column>> {
-    open.0.lock().await.get_mut(&name).ok_or(Error::NotConnected)?.conn.columns(&table).await
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = live.conn.columns(&table).await;
+    live.check(r)
 }
 
 #[tauri::command]
 async fn list_databases(open: State<'_, Open>, name: String) -> Result<Vec<String>> {
-    open.0.lock().await.get_mut(&name).ok_or(Error::NotConnected)?.conn.databases().await
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = live.conn.databases().await;
+    live.check(r)
 }
 
 #[tauri::command]
 async fn use_database(open: State<'_, Open>, name: String, database: String) -> Result<Info> {
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    switch_database(live, &database).await?;
-    info(live).await
+    let r = switch_database(live, &database).await;
+    live.check(r)?;
+    let r = info(live).await;
+    live.check(r)
 }
 
 async fn switch_database(live: &mut Live, database: &str) -> Result<()> {
@@ -230,7 +250,8 @@ async fn run_query(open: State<'_, Open>, name: String, sql: String, confirmed: 
     if live.saved.confirm_writes && !confirmed && !readonly::is_read_only(live.saved.kind, &sql) {
         return Err(Error::ConfirmRequired);
     }
-    live.conn.query(&sql).await
+    let r = live.conn.query(&sql).await;
+    live.check(r)
 }
 
 /// Starts the app. Returns only when it quits.

@@ -242,6 +242,18 @@ impl Conn {
         Ok(())
     }
 
+    /// Whether `err` (from this connection) means the connection itself is gone, not just that a statement failed.
+    pub fn lost_by(&self, err: &Error) -> bool {
+        match (self, err) {
+            (Conn::Pg(c), _) => c.is_closed(),
+            (Conn::My(_), Error::MySql(mysql_async::Error::Io(_))) => true,
+            (Conn::My(_), Error::MySql(mysql_async::Error::Driver(d))) => {
+                matches!(d, mysql_async::DriverError::ConnectionClosed)
+            }
+            _ => false,
+        }
+    }
+
     /// Runs SQL typed by the user and returns the last result set as text cells (None = NULL).
     pub async fn query(&mut self, sql: &str) -> Result<QueryResult> {
         match self {
@@ -682,6 +694,22 @@ mod tests {
             assert_ne!(local_mysql_cipher(TlsMode::Require).await.unwrap(), "", "Require: no certificate check");
             let err = local_mysql_cipher(TlsMode::VerifyCa).await.unwrap_err();
             println!("VerifyCa refused as expected: {err}");
+        });
+    }
+
+    /// A MySQL session killed from another connection reads as lost, not as a failed statement.
+    #[test]
+    #[ignore = "needs a local MySQL"]
+    fn local_mysql_killed_session_is_lost() {
+        tauri::async_runtime::block_on(async {
+            let mut victim = open(Engine::Mysql, "mysql://root@127.0.0.1:3306").await;
+            let id = victim.scalar("select connection_id()").await.unwrap().unwrap();
+            let mut killer = open(Engine::Mysql, "mysql://root@127.0.0.1:3306").await;
+            killer.query(&format!("kill {id}")).await.unwrap();
+            let err = victim.query("select 1").await.unwrap_err();
+            assert!(victim.lost_by(&err), "{err:?}");
+            let syntax = killer.query("selec 1").await.unwrap_err();
+            assert!(!killer.lost_by(&syntax), "a bad statement keeps the connection");
         });
     }
 

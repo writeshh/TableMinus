@@ -7,6 +7,9 @@ pub enum Error {
     ConfirmRequired,
     #[error("not connected")]
     NotConnected,
+    /// The server or network dropped the connection. The UI matches this exact text and offers to reconnect.
+    #[error("DISCONNECTED")]
+    Disconnected,
     #[error("no saved connection named {0:?}")]
     NoSuchConnection(String),
     #[error("no answer from the server after {0} seconds")]

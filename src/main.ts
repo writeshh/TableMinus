@@ -388,13 +388,47 @@ function show(view: "home" | "workspace") {
 
 type Info = { server: string; database: string | null; can_switch: boolean; tables: string[] };
 let info: Info | null = null;
-const shortcut = navigator.userAgent.includes("Mac") ? "⌘K" : "Ctrl+K";
+const isMac = navigator.userAgent.includes("Mac");
+const shortcut = isMac ? "⌘K" : "Ctrl+K";
+$("reconnect-key").textContent = isMac ? "⌘⇧R" : "Ctrl+Shift+R";
+
+/** invoke for workspace commands: a dropped connection shows the reconnect banner before the error moves on. */
+async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(cmd, args);
+  } catch (e) {
+    if (e === "DISCONNECTED") $("lost").hidden = false;
+    throw e;
+  }
+}
+
+/** Reopens the active connection, keeping the open tabs; the table list is refreshed. */
+async function reconnect() {
+  if (!active) return;
+  const btn = $<HTMLButtonElement>("reconnect");
+  btn.disabled = true;
+  status("Reconnecting…", "busy");
+  try {
+    info = await invoke<Info>("reconnect", { name: active.name });
+    $("lost").hidden = true;
+    tables = info.tables;
+    columnsCache.clear();
+    renderTables();
+    status(`Reconnected · ${info.server}`, "done");
+  } catch (e) {
+    status(String(e), "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+$("reconnect").onclick = reconnect;
 
 async function connect(c: Saved) {
   setStatus("home-status", `Connecting to ${c.name}…`, "busy");
   try {
     const i = await invoke<Info>("connect", { name: c.name });
     active = c;
+    $("lost").hidden = true;
     setStatus("home-status", "");
     $("where-conn").replaceChildren(avatar(c.kind), el("span", { textContent: c.name }), el("span", { className: "host", textContent: hostOf(c) }));
     document.body.dataset.env = c.tag; // production gets a red edge
@@ -445,7 +479,7 @@ async function openDbPicker() {
   if (!d.open) d.showModal();
   $("db-search").focus();
   try {
-    databases = await invoke<string[]>("list_databases", { name: active.name });
+    databases = await call<string[]>("list_databases", { name: active.name });
     dbPick = Math.max(0, databases.indexOf(info?.database ?? ""));
     setStatus("db-status", "");
     renderDbs();
@@ -482,7 +516,7 @@ async function openDb(name?: string) {
   for (const t of tabs) if (!(await okToDiscard(t))) return;
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
-    applyInfo(await invoke<Info>("use_database", { name: active.name, database: name }));
+    applyInfo(await call<Info>("use_database", { name: active.name, database: name }));
     $<HTMLDialogElement>("dbpicker").close();
     status(`${name} · ${tables.length} tables`, "done");
     editor.focus();
@@ -518,7 +552,7 @@ const columnsCache = new Map<string, Column[]>();
 const expanded = new Set<string>();
 
 async function loadColumns(table: string) {
-  if (!columnsCache.has(table)) columnsCache.set(table, await invoke<Column[]>("columns", { name: active!.name, table }));
+  if (!columnsCache.has(table)) columnsCache.set(table, await call<Column[]>("columns", { name: active!.name, table }));
   return columnsCache.get(table)!;
 }
 
@@ -849,7 +883,7 @@ async function saveEdits(confirmed = false) {
   }));
   const n = pendingCount(tab);
   try {
-    const rows = await invoke<number>("update_rows", { name: active.name, table: tab.table, edits, confirmed });
+    const rows = await call<number>("update_rows", { name: active.name, table: tab.table, edits, confirmed });
     tab.edits.clear();
     tab.message = [`Saved ${n} change${n === 1 ? "" : "s"} (${rows} row${rows === 1 ? "" : "s"})`, "done"];
     await loadTable(tab);
@@ -871,10 +905,10 @@ async function loadTable(tab: TableTab) {
     await loadColumns(tab.table); // structure view, and the primary key for editing
     if (tab.view === "data") {
       const q = quote(tab.table);
-      tab.result = await invoke<QueryResult>("run_query", { name: active!.name, sql: `select * from ${q} limit ${PAGE} offset ${tab.page * PAGE}`, confirmed: false });
+      tab.result = await call<QueryResult>("run_query", { name: active!.name, sql: `select * from ${q} limit ${PAGE} offset ${tab.page * PAGE}`, confirmed: false });
       // ponytail: exact count(*) can be slow on huge tables; estimate from catalog stats when that hurts.
       if (tab.total === undefined) {
-        const c = await invoke<QueryResult>("run_query", { name: active!.name, sql: `select count(*) from ${q}`, confirmed: false });
+        const c = await call<QueryResult>("run_query", { name: active!.name, sql: `select count(*) from ${q}`, confirmed: false });
         tab.total = Number(c.rows[0]?.[0] ?? 0);
       }
     }
@@ -923,7 +957,7 @@ async function run(sql: string, confirmed = false) {
   say("Running…", "busy");
   const t0 = performance.now();
   try {
-    const r = await invoke<QueryResult>("run_query", { name: active.name, sql, confirmed });
+    const r = await call<QueryResult>("run_query", { name: active.name, sql, confirmed });
     tab.result = r;
     if (tab.id === currentId) render(r, 0);
     const ms = Math.round(performance.now() - t0);
@@ -1022,6 +1056,7 @@ document.addEventListener("keydown", (e) => {
     else closeTab(currentId);
   } else if (key === "t" && !$("workspace").hidden) (e.preventDefault(), openSqlTab(), editor.focus());
   else if (key === "s" && !$("workspace").hidden) (e.preventDefault(), saveEdits());
+  else if (key === "r" && e.shiftKey && !$("workspace").hidden) (e.preventDefault(), reconnect());
 });
 
 // ---------- Settings (⌘,) ----------

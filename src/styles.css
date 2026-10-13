@@ -211,6 +211,8 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .where-conn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #where .avatar { width: 24px; height: 24px; font-size: 10px; }
 #where .host { font-weight: 400; }
+.lost { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, #e5484d 14%, var(--raised)); }
+.lost > span:first-child { font-weight: 600; }
 /* Status pill: environment + server, coloured like its tag so production is never mistaken */
 .pill { font: 500 11px/1 var(--mono); padding: 6px 12px; border-radius: 999px; white-space: nowrap; background: var(--hover); color: var(--muted); }
 .pill.local { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }

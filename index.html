@@ -240,6 +240,11 @@
           <button id="db-button" class="ghost" title="Open a database"></button>
           <button id="new-sql" class="ghost sql-btn" title="New SQL query">SQL</button>
         </header>
+        <div id="lost" class="lost" role="alert" hidden>
+          <span>The database connection was lost.</span>
+          <button id="reconnect" class="primary">Reconnect</button>
+          <span class="hint inline" id="reconnect-key"></span>
+        </div>
         <nav id="tabs" class="tabs" role="tablist"></nav>
         <div id="sql-pane" class="sql-pane">
           <div id="sql" class="editor"></div>
