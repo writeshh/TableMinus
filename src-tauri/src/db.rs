@@ -1,4 +1,11 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+/// One row's edits: the primary-key values that find it, and the new values (None = NULL).
+#[derive(Deserialize)]
+pub struct RowEdit {
+    pub key: Vec<(String, String)>,
+    pub set: Vec<(String, Option<String>)>,
+}
 
 #[derive(Serialize)]
 pub struct Column {
@@ -161,6 +168,57 @@ impl Conn {
         format!("'{}'", if matches!(self, Conn::My(_)) { s.replace('\\', "\\\\") } else { s })
     }
 
+    fn ident(&self, name: &str) -> String {
+        match self {
+            Conn::My(_) => format!("`{}`", name.replace('`', "``")),
+            _ => format!("\"{}\"", name.replace('"', "\"\"")),
+        }
+    }
+
+    fn table_ident(&self, table: &str) -> String {
+        match (self, table.split_once('.')) {
+            (Conn::Pg(_), Some((schema, name))) => format!("{}.{}", self.ident(schema), self.ident(name)),
+            _ => self.ident(table),
+        }
+    }
+
+    /// Applies cell edits in one transaction, each row found by its primary key.
+    /// Values go in as string literals; the server casts them to the column type.
+    /// Rolls back everything if any statement fails or one key matches more than one row.
+    // ponytail: MySQL reports rows changed, not matched, so a vanished row is not detected there;
+    // set CLIENT_FOUND_ROWS on the connection if that matters.
+    pub async fn update_rows(&mut self, table: &str, edits: &[RowEdit]) -> Result<u64, String> {
+        let statements: Vec<String> = edits
+            .iter()
+            .map(|e| {
+                let set = e.set.iter().map(|(c, v)| format!("{} = {}", self.ident(c), v.as_deref().map_or("NULL".into(), |v| self.lit(v))));
+                let key = e.key.iter().map(|(c, v)| format!("{} = {}", self.ident(c), self.lit(v)));
+                format!("update {} set {} where {}", self.table_ident(table), set.collect::<Vec<_>>().join(", "), key.collect::<Vec<_>>().join(" and "))
+            })
+            .collect();
+        if edits.iter().any(|e| e.key.is_empty() || e.set.is_empty()) {
+            return Err("every edit needs a primary key and at least one value".into());
+        }
+        self.query(if matches!(self, Conn::My(_)) { "start transaction" } else { "begin" }).await?;
+        let mut total = 0;
+        for sql in &statements {
+            let outcome = match self.query(sql).await {
+                Ok(r) if r.affected > 1 => Err(format!("the key matched {} rows; nothing was saved", r.affected)),
+                Ok(r) => Ok(r.affected),
+                Err(e) => Err(e),
+            };
+            match outcome {
+                Ok(n) => total += n,
+                Err(e) => {
+                    let _ = self.query("rollback").await;
+                    return Err(e);
+                }
+            }
+        }
+        self.query("commit").await?;
+        Ok(total)
+    }
+
     /// Columns of `table` (`schema.table` for Postgres) in definition order.
     pub async fn columns(&mut self, table: &str) -> Result<Vec<Column>, String> {
         let sql = match self {
@@ -233,6 +291,22 @@ mod tests {
             let cols = c.columns("it's").await.unwrap(); // quote in the name must not break the lookup
             assert_eq!((cols[0].name.as_str(), cols[0].primary, cols[1].nullable), ("id", true, false));
             assert_eq!(cols[1].default.as_deref(), Some("'x'"));
+
+            // Inline edits: quotes survive, NULL works, and all-or-nothing on a bad key.
+            c.query("insert into \"it's\"(id, v) values (1, 'a'), (2, 'b')").await.unwrap();
+            let edit = |id: &str, v: Option<&str>| super::RowEdit { key: vec![("id".into(), id.into())], set: vec![("v".into(), v.map(String::from))] };
+            assert_eq!(c.update_rows("it's", &[edit("1", Some("O'Brien")), edit("2", Some("z"))]).await.unwrap(), 2);
+            let r = c.query("select v from \"it's\" order by id").await.unwrap();
+            assert_eq!(r.rows, [vec![Some("O'Brien".into())], vec![Some("z".into())]]);
+            assert!(c.update_rows("it's", &[edit("1", Some("kept?")), edit("2", None)]).await.is_err()); // v is NOT NULL
+            let r = c.query("select v from \"it's\" order by id").await.unwrap();
+            assert_eq!(r.rows[0], vec![Some("O'Brien".into())], "the first update must be rolled back");
+
+            c.query("create table dup(k integer, v text)").await.unwrap(); // no unique key: two rows share k
+            c.query("insert into dup values (1, 'a'), (1, 'b')").await.unwrap();
+            let e = super::RowEdit { key: vec![("k".into(), "1".into())], set: vec![("v".into(), None)] };
+            assert!(c.update_rows("dup", &[e]).await.unwrap_err().contains("matched 2 rows"));
+            assert_eq!(c.query("select count(*) from dup where v is null").await.unwrap().rows[0][0].as_deref(), Some("0"));
             assert!(c.server_version().await.unwrap().starts_with("SQLite 3."));
         });
     }
@@ -254,6 +328,18 @@ mod tests {
             let mut pg = super::Conn::open("postgres", "postgres://postgres@127.0.0.1:5432?sslmode=prefer").await.unwrap();
             assert!(!pg.databases().await.unwrap().is_empty());
             assert!(pg.columns("information_schema.tables").await.unwrap().iter().any(|c| c.name == "table_name"));
+
+            // Text literals into typed columns, on a session-only temp table (nothing persists).
+            pg.query("create temporary table dbm_edit(id int primary key, ok bool, at timestamp, n numeric(6,2), note text)").await.unwrap();
+            pg.query("insert into dbm_edit values (1, false, '2026-01-01', 1.5, 'x')").await.unwrap();
+            let set = |c: &str, v: Option<&str>| (c.to_string(), v.map(String::from));
+            let edit = super::RowEdit {
+                key: vec![("id".into(), "1".into())],
+                set: vec![set("ok", Some("t")), set("at", Some("2026-10-13 09:30:00")), set("n", Some("42.25")), set("note", None)],
+            };
+            assert_eq!(pg.update_rows("pg_temp.dbm_edit", &[edit]).await.unwrap(), 1);
+            let r = pg.query("select ok, at, n, note from dbm_edit").await.unwrap();
+            assert_eq!(r.rows[0], vec![Some("t".into()), Some("2026-10-13 09:30:00".into()), Some("42.25".into()), None]);
             println!("{} · current {:?}", pg.server_version().await.unwrap(), pg.current_database().await.unwrap());
         });
     }

@@ -371,6 +371,7 @@ function renderDbs() {
 async function openDb(name?: string) {
   name ??= shownDbs()[dbPick];
   if (!name || !active) return;
+  for (const t of tabs) if (!(await okToDiscard(t))) return;
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
     applyInfo(await invoke<Info>("use_database", { name: active.name, database: name }));
@@ -526,7 +527,12 @@ function renderHistory() {
 // ---------- Tabs: SQL editors and table browsers ----------
 
 type SqlTab = { id: number; kind: "sql"; title: string; sql: string; state?: EditorState; result?: QueryResult; status?: [string, StatusKind] };
-type TableTab = { id: number; kind: "table"; title: string; table: string; view: "data" | "structure"; page: number; total?: number; result?: QueryResult; error?: string; loading?: boolean };
+type TableTab = {
+  id: number; kind: "table"; title: string; table: string; view: "data" | "structure"; page: number;
+  total?: number; result?: QueryResult; error?: string; loading?: boolean;
+  edits: Map<number, Map<number, string | null>>; // row on this page -> column -> new value (null = NULL)
+  message?: [string, StatusKind];
+};
 type Tab = SqlTab | TableTab;
 type StatusKind = "" | "busy" | "error" | "done";
 const PAGE = 300;
@@ -551,7 +557,7 @@ function openSqlTab(): SqlTab {
 function openTable(table: string) {
   const existing = tabs.find((t) => t.kind === "table" && t.table === table);
   if (existing) return select(existing.id);
-  const tab: TableTab = { id: nextId++, kind: "table", title: table, table, view: "data", page: 0 };
+  const tab: TableTab = { id: nextId++, kind: "table", title: table, table, view: "data", page: 0, edits: new Map() };
   tabs.push(tab);
   select(tab.id);
   loadTable(tab);
@@ -565,9 +571,9 @@ function select(id: number) {
   renderTables();
 }
 
-function closeTab(id: number) {
+async function closeTab(id: number) {
   const i = tabs.findIndex((t) => t.id === id);
-  if (i < 0) return;
+  if (i < 0 || !(await okToDiscard(tabs[i]))) return;
   tabs.splice(i, 1);
   if (!tabs.length) return void closeWorkspace(); // last tab gone: leave the connection, like TablePlus
   if (id === currentId) select(tabs[Math.max(0, i - 1)].id);
@@ -621,10 +627,132 @@ function renderMain() {
     : `${shown ? from + 1 : 0}–${from + shown} of ${tab.total ?? "?"} rows`;
   $<HTMLButtonElement>("page-prev").disabled = tab.view !== "data" || tab.page === 0;
   $<HTMLButtonElement>("page-next").disabled = tab.view !== "data" || tab.total === undefined || from + shown >= tab.total;
+  const pending = pendingCount(tab);
+  $("edit-info").textContent = pending ? `${pending} unsaved change${pending === 1 ? "" : "s"}` : "";
+  $("discard-edits").hidden = $("save-edits").hidden = !pending;
+  const [msg, kind] = tab.message ?? ["", ""];
+  const m = $("foot-msg");
+  m.textContent = tab.view === "data" && tab.result && !keyOf(tab) ? "Read-only: no primary key" : msg;
+  m.className = `foot-msg ${kind}`;
   if (tab.error) $("out").replaceChildren(el("p", { className: "hint empty error-text", textContent: tab.error }));
   else if (tab.view === "structure") renderStructure(columnsCache.get(tab.table) ?? []);
-  else if (tab.result) render(tab.result, from);
+  else if (tab.result) (render(tab.result, from), decorateEditable(tab));
   else $("out").replaceChildren();
+}
+
+// ---------- Inline cell editing (table tabs) ----------
+
+/** Primary-key column names and their positions in the result, or null when rows can't be identified. */
+function keyOf(tab: TableTab) {
+  const names = (columnsCache.get(tab.table) ?? []).filter((c) => c.primary).map((c) => c.name);
+  const idx = names.map((n) => tab.result?.columns.indexOf(n) ?? -1);
+  return names.length && idx.every((i) => i >= 0) ? { names, idx } : null;
+}
+
+const pendingCount = (tab: Tab) => (tab.kind === "table" ? [...tab.edits.values()].reduce((n, m) => n + m.size, 0) : 0);
+
+async function okToDiscard(tab: Tab) {
+  const n = pendingCount(tab);
+  if (!n || (await confirmDialog(`Discard ${n} unsaved change${n === 1 ? "" : "s"} in ${tab.title}?`, "Discard"))) {
+    if (tab.kind === "table") tab.edits.clear();
+    return true;
+  }
+  return false;
+}
+
+function fillCell(td: HTMLTableCellElement, v: string | null) {
+  td.textContent = v ?? "NULL";
+  td.className = v === null ? "null" : v === "" ? "empty-val" : numeric.test(v) ? "num" : "";
+  td.title = v && v.length > 40 ? v : ""; // full value on hover when the cell is truncated
+}
+
+function cellAt(row: number, col: number) {
+  return $("out").querySelectorAll("tbody tr")[row]?.children[col + 1] as HTMLTableCellElement | undefined; // +1: row number
+}
+
+/** Shows staged values and wires double-click editing onto the rendered page. */
+function decorateEditable(tab: TableTab) {
+  const editable = !!keyOf(tab);
+  tab.result!.rows.forEach((_, ri) => {
+    tab.result!.columns.forEach((_, ci) => {
+      const td = cellAt(ri, ci);
+      if (!td) return;
+      const staged = tab.edits.get(ri);
+      if (staged?.has(ci)) (fillCell(td, staged.get(ci)!), td.classList.add("changed"));
+      if (editable) td.ondblclick = () => editCell(tab, ri, ci);
+    });
+  });
+}
+
+function editCell(tab: TableTab, ri: number, ci: number) {
+  const td = cellAt(ri, ci);
+  if (!td || td.querySelector("input")) return;
+  const original = tab.result!.rows[ri][ci];
+  const staged = tab.edits.get(ri);
+  const value = staged?.has(ci) ? staged.get(ci)! : original;
+  const input = document.createElement("input");
+  input.className = "cell-input";
+  input.value = value ?? "";
+  input.placeholder = value === null ? "NULL" : "";
+  input.title = "Enter to keep · Esc to cancel · Tab for next cell · ⌘⌫ for NULL";
+  td.replaceChildren(input);
+  td.classList.add("editing");
+  input.focus();
+  input.select();
+  let touched = false;
+  let done = false;
+  // undefined = cancel; a value is staged (or unstaged when it equals the original)
+  const finish = (v: string | null | undefined, then?: () => void) => {
+    if (done) return;
+    done = true;
+    if (v !== undefined && (touched || v === null)) {
+      const row = tab.edits.get(ri) ?? new Map<number, string | null>();
+      if (v === original) row.delete(ci);
+      else row.set(ci, v);
+      if (row.size) tab.edits.set(ri, row);
+      else tab.edits.delete(ri);
+      tab.message = undefined;
+    }
+    renderMain();
+    then?.();
+  };
+  input.oninput = () => (touched = true);
+  input.onblur = () => finish(input.value);
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") (e.preventDefault(), finish(input.value));
+    else if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), finish(undefined));
+    else if (e.key === "Backspace" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), finish(null));
+    else if (e.key === "Tab") {
+      e.preventDefault();
+      const next = ci + (e.shiftKey ? -1 : 1);
+      finish(input.value, () => next >= 0 && next < tab.result!.columns.length && editCell(tab, ri, next));
+    }
+  };
+}
+
+async function saveEdits(confirmed = false) {
+  const tab = current();
+  if (tab?.kind !== "table" || !tab.edits.size || !active) return;
+  const key = keyOf(tab)!;
+  const r = tab.result!;
+  const edits = [...tab.edits].map(([ri, cells]) => ({
+    key: key.names.map((n, i) => [n, r.rows[ri][key.idx[i]] ?? ""]),
+    set: [...cells].map(([ci, v]) => [r.columns[ci], v]),
+  }));
+  const n = pendingCount(tab);
+  try {
+    const rows = await invoke<number>("update_rows", { name: active.name, table: tab.table, edits, confirmed });
+    tab.edits.clear();
+    tab.message = [`Saved ${n} change${n === 1 ? "" : "s"} (${rows} row${rows === 1 ? "" : "s"})`, "done"];
+    await loadTable(tab);
+  } catch (e) {
+    if (e === "CONFIRM") {
+      if (await confirmDialog(`Save ${n} change${n === 1 ? "" : "s"} to ${tab.table} on "${active.name}"?`, "Save")) return saveEdits(true);
+      return;
+    }
+    tab.message = [String(e), "error"]; // edits stay staged so nothing typed is lost
+    renderMain();
+  }
 }
 
 async function loadTable(tab: TableTab) {
@@ -632,8 +760,8 @@ async function loadTable(tab: TableTab) {
   tab.error = undefined;
   if (tab.id === currentId) renderMain();
   try {
-    if (tab.view === "structure") await loadColumns(tab.table);
-    else {
+    await loadColumns(tab.table); // structure view, and the primary key for editing
+    if (tab.view === "data") {
       const q = quote(tab.table);
       tab.result = await invoke<QueryResult>("run_query", { name: active!.name, sql: `select * from ${q} limit ${PAGE} offset ${tab.page * PAGE}`, confirmed: false });
       // ponytail: exact count(*) can be slow on huge tables; estimate from catalog stats when that hurts.
@@ -715,14 +843,7 @@ function render(r: QueryResult, offset: number) {
   r.rows.forEach((row, i) => {
     const tr = body.insertRow();
     tr.append(el("td", { className: "rownum", textContent: String(offset + i + 1) }));
-    for (const v of row) {
-      const td = tr.insertCell();
-      td.textContent = v ?? "NULL";
-      if (v === null) td.className = "null";
-      else if (v === "") td.className = "empty-val";
-      else if (numeric.test(v)) td.className = "num";
-      if (v && v.length > 40) td.title = v; // full value on hover when the cell is truncated
-    }
+    for (const v of row) fillCell(tr.insertCell(), v);
   });
   if (!r.rows.length) {
     const tr = body.insertRow();
@@ -751,23 +872,29 @@ $("new-sql").onclick = () => (openSqlTab(), editor.focus());
 for (const b of document.querySelectorAll<HTMLElement>(".side-tabs button")) b.onclick = () => showSide(b.dataset.side as "items" | "history");
 $("history-search").addEventListener("input", renderHistory);
 for (const b of $("view-seg").querySelectorAll<HTMLElement>("button"))
-  b.onclick = () => {
+  b.onclick = async () => {
     const tab = current();
-    if (tab?.kind !== "table" || tab.view === b.dataset.view) return;
+    if (tab?.kind !== "table" || tab.view === b.dataset.view || !(await okToDiscard(tab))) return;
     tab.view = b.dataset.view as TableTab["view"];
     if (tab.view === "structure" && columnsCache.has(tab.table)) renderMain();
     else loadTable(tab);
   };
-const turnPage = (delta: number) => {
+const turnPage = async (delta: number) => {
   const tab = current();
-  if (tab?.kind !== "table") return;
+  if (tab?.kind !== "table" || !(await okToDiscard(tab))) return;
   tab.page = Math.max(0, tab.page + delta);
   loadTable(tab);
+};
+$("save-edits").onclick = () => saveEdits();
+$("discard-edits").onclick = () => {
+  const tab = current();
+  if (tab?.kind === "table") (tab.edits.clear(), renderMain());
 };
 $("page-prev").onclick = () => turnPage(-1);
 $("page-next").onclick = () => turnPage(1);
 /** Leaves the workspace and closes the server connection; the launcher comes back. */
-function closeWorkspace() {
+async function closeWorkspace() {
+  for (const t of tabs) if (!(await okToDiscard(t))) return;
   if (active) invoke("disconnect", { name: active.name }).catch(() => {});
   active = null;
   info = null;
@@ -786,6 +913,7 @@ document.addEventListener("keydown", (e) => {
     if ($("workspace").hidden) getCurrentWindow().close();
     else closeTab(currentId);
   } else if (key === "t" && !$("workspace").hidden) (e.preventDefault(), openSqlTab(), editor.focus());
+  else if (key === "s" && !$("workspace").hidden) (e.preventDefault(), saveEdits());
 });
 
 // ---------- Settings (⌘,) ----------

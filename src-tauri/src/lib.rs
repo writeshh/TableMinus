@@ -89,6 +89,17 @@ async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<
     info(open.get_mut(&name).unwrap()).await
 }
 
+/// Saves inline grid edits. Safe mode applies: "CONFIRM" until resent with `confirmed: true`.
+#[tauri::command]
+async fn update_rows(open: State<'_, Open>, name: String, table: String, edits: Vec<db::RowEdit>, confirmed: bool) -> Result<u64, String> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or("not connected")?;
+    if live.confirm_writes && !confirmed {
+        return Err("CONFIRM".into());
+    }
+    live.conn.update_rows(&table, &edits).await
+}
+
 /// Drops the live connection; the next connect opens a fresh one.
 #[tauri::command]
 async fn disconnect(open: State<'_, Open>, name: String) -> Result<(), String> {
@@ -148,6 +159,7 @@ pub fn run() {
             use_database,
             columns,
             disconnect,
+            update_rows,
             run_query
         ])
         .run(tauri::generate_context!())
