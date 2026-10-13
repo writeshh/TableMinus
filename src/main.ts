@@ -82,7 +82,11 @@ function hostOf(c: Saved) {
 // ---------- Launcher ----------
 
 async function refresh() {
-  saved = await invoke<Saved[]>("list_connections");
+  try {
+    saved = await invoke<Saved[]>("list_connections");
+  } catch (e) {
+    setStatus("home-status", String(e), "error"); // e.g. an unreadable connections file, which is left untouched
+  }
   renderConns();
 }
 

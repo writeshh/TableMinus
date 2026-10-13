@@ -1,0 +1,4 @@
+# The code favours dense one-line expressions; 120 columns keeps them readable without
+# wrapping every chain.
+max_width = 120
+use_small_heuristics = "Max"

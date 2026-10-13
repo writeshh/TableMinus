@@ -11,7 +11,7 @@ Personal database client for macOS and Linux: Tauri 2, a Rust core, a plain Type
 ```sh
 npm install
 npm run tauri dev        # app with hot reload
-cd src-tauri && cargo test
+npm run check            # tsc, rustfmt, clippy (warnings are errors), tests
 npm run tauri build      # .app/.dmg on macOS; .deb/AppImage on Linux
 ```
 
@@ -21,10 +21,11 @@ Rust comes from `rustup`. On Linux, Tauri also needs `libwebkit2gtk-4.1-dev`, `b
 
 | File | Role |
 | --- | --- |
-| `src-tauri/src/db.rs` | one `Conn` enum over the three engines: open, query (text cells), list tables |
+| `src-tauri/src/db.rs` | one `Conn` enum over the three engines: open, query (text cells), catalog, inline edits |
+| `src-tauri/src/error.rs` | the error type every command returns |
 | `src-tauri/src/readonly.rs` | safe-mode read-only check |
 | `src-tauri/src/store.rs` | saved connections + keychain passwords |
 | `src-tauri/src/lib.rs` | Tauri commands |
 | `src/main.ts`, `index.html` | sidebar, SQL box, results table |
 
-Not yet: SSH tunnels, inline editing, backup/restore, MCP server.
+Roadmap: [TODO.md](TODO.md). Coding rules: [CLAUDE.md](CLAUDE.md).

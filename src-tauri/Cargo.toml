@@ -1,8 +1,8 @@
 [package]
 name = "db-manager"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Personal database client: Postgres, MySQL/MariaDB and SQLite"
+authors = ["Ritesh Shrestha"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -30,12 +30,27 @@ url = "2.5.8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sqlparser = { version = "0.63.0", features = ["visitor"] }
 keyring = { version = "3", features = ["apple-native", "sync-secret-service", "crypto-rust"] }
+thiserror = "2"
+bytes = "1"
+secrecy = { version = "0.10", features = ["serde"] }
+tokio = { version = "1", features = ["time"] }
 
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+# https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+overflow-checks = true # release builds otherwise wrap integers silently
+# panic stays "unwind": a panic fails one command instead of killing the app
 strip = true

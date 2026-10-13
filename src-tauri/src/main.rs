@@ -1,6 +1,12 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-fn main() {
-    db_manager_lib::run()
+fn main() -> std::process::ExitCode {
+    match db_manager_lib::run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("DB Manager could not start: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }
