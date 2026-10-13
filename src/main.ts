@@ -222,6 +222,7 @@ function openEditor(kind: string, existing?: Saved) {
   }
   field("name").placeholder = d ? `${e.label} · ${d.host}` : e.label;
   field("password").placeholder = existing ? "Unchanged (in keychain)" : "None";
+  field("passphrase").placeholder = existing ? "Unchanged (in keychain), if any" : "Only for SQLCipher-encrypted files";
   field("ssh_password").placeholder = existing?.ssh ? "Unchanged (in keychain)" : "None";
   field("confirm").value = settings.safeDefault ? "1" : "0"; // overwritten below when editing
 
@@ -252,6 +253,8 @@ function openEditor(kind: string, existing?: Saved) {
 }
 
 const val = (k: string) => field(k).value.trim() || field(k).placeholder;
+/** The keychain-stored secret's input: the login password, or for SQLite the SQLCipher passphrase. */
+const secretField = () => field(editingKind === "sqlite" ? "passphrase" : "password");
 
 field("ssl").replaceChildren(...TLS_MODES.map(([v, label]) => el("option", { value: v, textContent: label })));
 
@@ -337,7 +340,7 @@ async function saveForm() {
   const conn = formToSaved();
   await invoke("save_connection", {
     conn,
-    password: field("password").value || null,
+    password: secretField().value || null,
     sshPassword: field("ssh_password").value || null,
     previous: editing?.name ?? null,
   });
@@ -357,7 +360,7 @@ $("test").onclick = () =>
     const conn = formToSaved();
     setStatus("form-status", "Testing…", "busy");
     const msg = await invoke<string>("test_connection", {
-      conn, password: field("password").value, sshPassword: field("ssh_password").value, savedName: editing?.name ?? null,
+      conn, password: secretField().value, sshPassword: field("ssh_password").value, savedName: editing?.name ?? null,
     });
     setStatus("form-status", msg, "done");
   });

@@ -180,29 +180,11 @@ pub fn delete(dir: &Path, name: &str) -> Result<()> {
     write(dir, &all)
 }
 
-/// The URL to connect with: the saved URL plus the keychain password, if any.
-pub fn connect_url(c: &Saved) -> Result<SecretString> {
-    match stored(Secret::Database, &c.name)? {
-        Some(pw) => with_password(&c.url, &pw),
-        None => Ok(c.url.clone().into()),
-    }
-}
-
-pub fn with_password(url: &str, pw: &SecretString) -> Result<SecretString> {
-    if pw.expose_secret().is_empty() {
-        return Ok(url.into());
-    }
-    let mut u = url::Url::parse(url)?;
-    u.set_password(Some(pw.expose_secret())).map_err(|()| Error::Invalid("this URL cannot hold a password"))?;
-    Ok(u.to_string().into())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Saved, load, save, with_password};
+    use super::{Saved, load, save};
     use crate::db::{Engine, Options};
     use crate::tls::{Tls, TlsMode};
-    use secrecy::{ExposeSecret, SecretString};
     use std::path::PathBuf;
 
     /// A fresh folder for one test, removed first in case a previous run left it behind.
@@ -273,11 +255,5 @@ mod tests {
             (TlsMode::Require, "postgres://u@h:5432/db?application_name=x")
         );
         assert_eq!((all[1].tls.mode, all[1].url.as_str()), (TlsMode::Require, "mysql://root@h:3306"));
-    }
-
-    #[test]
-    fn with_password_encodes_special_characters() {
-        let url = with_password("postgres://u@h/db", &SecretString::from("p@ss:w/rd")).unwrap();
-        assert_eq!(url.expose_secret(), "postgres://u:p%40ss%3Aw%2Frd@h/db");
     }
 }

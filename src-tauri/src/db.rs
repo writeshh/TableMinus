@@ -161,6 +161,7 @@ fn lite_cell(v: rusqlite::types::ValueRef) -> Option<String> {
 
 async fn open_postgres(
     url: &str,
+    password: Option<&SecretString>,
     tls: &Tls,
     options: &Options,
     tunnel_port: Option<u16>,
@@ -176,6 +177,9 @@ async fn open_postgres(
         }
         None => url.parse()?,
     };
+    if let Some(password) = password {
+        cfg.password(password.expose_secret());
+    }
     let (mode, connector) = tls.postgres()?;
     cfg.ssl_mode(mode);
     if options.direct_tls {
@@ -189,11 +193,20 @@ async fn open_postgres(
     Ok(client)
 }
 
-async fn open_mysql(url: &str, tls: &Tls, options: &Options, tunnel_port: Option<u16>) -> Result<mysql_async::Conn> {
+async fn open_mysql(
+    url: &str,
+    password: Option<&SecretString>,
+    tls: &Tls,
+    options: &Options,
+    tunnel_port: Option<u16>,
+) -> Result<mysql_async::Conn> {
     let opts = mysql_async::Opts::from_url(url).map_err(mysql_async::Error::from)?;
     let host = opts.ip_or_hostname().to_string();
     let mut builder =
         mysql_async::OptsBuilder::from_opts(opts).enable_cleartext_plugin(options.cleartext_auth).prefer_socket(false);
+    if let Some(password) = password {
+        builder = builder.pass(Some(password.expose_secret()));
+    }
     if let Some(port) = tunnel_port {
         builder = builder.ip_or_hostname("127.0.0.1").tcp_port(port);
     } else if !options.socket.is_empty() {
@@ -214,23 +227,42 @@ async fn open_mysql(url: &str, tls: &Tls, options: &Options, tunnel_port: Option
     }
 }
 
+/// Opens a SQLite file. With `key`, the file is an `SQLCipher` database: the key is a passphrase, or a raw key
+/// written `x'…'`.
+fn open_sqlite(path: &str, key: Option<&SecretString>) -> Result<rusqlite::Connection> {
+    let c = rusqlite::Connection::open(path)?;
+    if let Some(key) = key.filter(|k| !k.expose_secret().is_empty()) {
+        c.pragma_update(None, "key", key.expose_secret())?;
+        // SQLCipher only checks the key on first read; read now so a wrong one is reported here.
+        c.query_row("select count(*) from sqlite_master", [], |_| Ok(())).map_err(|e| match e {
+            rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::NotADatabase => {
+                Error::Invalid("wrong passphrase, or the file isn't an SQLCipher database")
+            }
+            e => e.into(),
+        })?;
+    }
+    Ok(c)
+}
+
 impl Conn {
-    /// Opens a connection and runs its startup SQL; `url` is a connection URL, or a file path for SQLite.
-    /// With `tunnel_port`, the driver dials that port on 127.0.0.1 instead of the URL's host, but still checks
-    /// TLS against the URL's host.
+    /// Opens a connection and runs its startup SQL. `url` is a connection URL without its password, or a file
+    /// path for SQLite; `password` is the login password, or the `SQLCipher` key for SQLite. With `tunnel_port`,
+    /// the driver dials that port on 127.0.0.1 instead of the URL's host, but still checks TLS against it.
     pub async fn open(
         engine: Engine,
-        url: &SecretString,
+        url: &str,
+        password: Option<&SecretString>,
         tls: &Tls,
         options: &Options,
         tunnel_port: Option<u16>,
     ) -> Result<Conn> {
-        let url = url.expose_secret();
         let open = async {
             Ok::<_, Error>(match engine {
-                Engine::Postgres => Conn::Pg(open_postgres(url, tls, options, tunnel_port).await?),
-                Engine::Mysql | Engine::Mariadb => Conn::My(open_mysql(url, tls, options, tunnel_port).await?),
-                Engine::Sqlite => Conn::Lite(rusqlite::Connection::open(url)?),
+                Engine::Postgres => Conn::Pg(open_postgres(url, password, tls, options, tunnel_port).await?),
+                Engine::Mysql | Engine::Mariadb => {
+                    Conn::My(open_mysql(url, password, tls, options, tunnel_port).await?)
+                }
+                Engine::Sqlite => Conn::Lite(open_sqlite(url, password)?),
             })
         };
         let mut conn: Conn = tokio::time::timeout(CONNECT_TIMEOUT, open)
@@ -590,10 +622,9 @@ impl Conn {
 mod tests {
     use super::{Conn, Engine, RowEdit};
     use crate::tls::Tls;
-    use secrecy::SecretString;
 
     async fn open(engine: Engine, url: &str) -> Conn {
-        Conn::open(engine, &SecretString::from(url), &Tls::default(), &super::Options::default(), None).await.unwrap()
+        Conn::open(engine, url, None, &Tls::default(), &super::Options::default(), None).await.unwrap()
     }
 
     #[test]
@@ -676,9 +707,7 @@ mod tests {
                 startup_sql: "create table t(x); insert into t values (7);".into(),
                 ..Default::default()
             };
-            let mut c = Conn::open(Engine::Sqlite, &SecretString::from(":memory:"), &Tls::default(), &options, None)
-                .await
-                .unwrap();
+            let mut c = Conn::open(Engine::Sqlite, ":memory:", None, &Tls::default(), &options, None).await.unwrap();
             assert_eq!(c.query("select x from t").await.unwrap().rows[0][0].as_deref(), Some("7"));
         });
     }
@@ -687,7 +716,7 @@ mod tests {
     fn open_reports_failing_startup_sql() {
         tauri::async_runtime::block_on(async {
             let options = super::Options { startup_sql: "not sql".into(), ..Default::default() };
-            let r = Conn::open(Engine::Sqlite, &SecretString::from(":memory:"), &Tls::default(), &options, None).await;
+            let r = Conn::open(Engine::Sqlite, ":memory:", None, &Tls::default(), &options, None).await;
             let err = r.err().unwrap().to_string();
             assert!(err.starts_with("startup SQL: "), "{err}");
         });
@@ -707,11 +736,41 @@ mod tests {
     }
 
     #[test]
+    fn sqlcipher_key_should_unlock_only_with_the_right_passphrase() {
+        tauri::async_runtime::block_on(async {
+            let path = std::env::temp_dir().join(format!("dbmanager-{}-cipher.db", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            let path = path.to_str().unwrap();
+            let opts = super::Options::default();
+            let key = |k: &str| secrecy::SecretString::from(k);
+
+            let mut c =
+                Conn::open(Engine::Sqlite, path, Some(&key("hunter2")), &Tls::default(), &opts, None).await.unwrap();
+            c.query("create table secret(v text)").await.unwrap();
+            c.query("insert into secret values ('kept')").await.unwrap();
+            drop(c);
+            assert!(!std::fs::read(path).unwrap().starts_with(b"SQLite format 3"), "the file is encrypted on disk");
+
+            let err = Conn::open(Engine::Sqlite, path, Some(&key("wrong")), &Tls::default(), &opts, None)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(err.to_string(), "wrong passphrase, or the file isn't an SQLCipher database");
+
+            let mut c =
+                Conn::open(Engine::Sqlite, path, Some(&key("hunter2")), &Tls::default(), &opts, None).await.unwrap();
+            assert_eq!(c.query("select v from secret").await.unwrap().rows[0][0].as_deref(), Some("kept"));
+            let _ = std::fs::remove_file(path);
+        });
+    }
+
+    #[test]
     fn open_reports_bad_sqlite_path() {
         tauri::async_runtime::block_on(async {
             let r = Conn::open(
                 Engine::Sqlite,
-                &SecretString::from("/no/such/dir/x.db"),
+                "/no/such/dir/x.db",
+                None,
                 &Tls::default(),
                 &super::Options::default(),
                 None,
@@ -725,8 +784,7 @@ mod tests {
     async fn local_mysql_cipher(mode: crate::tls::TlsMode) -> crate::error::Result<String> {
         let tls = Tls { mode, ..Tls::default() };
         let options = super::Options::default();
-        let mut c =
-            Conn::open(Engine::Mysql, &SecretString::from("mysql://root@127.0.0.1:3306"), &tls, &options, None).await?;
+        let mut c = Conn::open(Engine::Mysql, "mysql://root@127.0.0.1:3306", None, &tls, &options, None).await?;
         let r = c.query("show status like 'Ssl_cipher'").await?;
         Ok(r.rows[0][1].clone().unwrap_or_default())
     }

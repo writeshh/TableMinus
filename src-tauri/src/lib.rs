@@ -61,7 +61,9 @@ async fn keep_alive(app: AppHandle) {
 
 struct Live {
     saved: store::Saved,
-    url: SecretString, // with password; kept in memory only, to reconnect when Postgres switches database
+    /// The saved URL, or with another database when Postgres switched (Postgres switches by reconnecting).
+    url: String,
+    password: Option<SecretString>,
     conn: db::Conn,
     tunnel: Option<ssh::Tunnel>, // lives exactly as long as the connection
 }
@@ -77,9 +79,10 @@ impl Live {
 /// Runs the startup script, opens the SSH tunnel if there is one, then opens the database.
 async fn open_db(
     saved: &store::Saved,
-    url: &SecretString,
+    password: Option<&SecretString>,
     ssh_secret: Option<SecretString>,
 ) -> Result<(db::Conn, Option<ssh::Tunnel>)> {
+    let url = saved.url.as_str();
     if !saved.options.startup_script.trim().is_empty() {
         db::run_startup_script(&saved.options.startup_script).await?;
     }
@@ -87,7 +90,8 @@ async fn open_db(
         Some(ssh) => Some(ssh::open_for(saved.kind, url, ssh, ssh_secret.as_ref()).await?),
         None => None,
     };
-    let conn = db::Conn::open(saved.kind, url, &saved.tls, &saved.options, tunnel.as_ref().map(|t| t.port)).await?;
+    let port = tunnel.as_ref().map(|t| t.port);
+    let conn = db::Conn::open(saved.kind, url, password, &saved.tls, &saved.options, port).await?;
     Ok((conn, tunnel))
 }
 
@@ -97,10 +101,10 @@ async fn open_saved(app: &AppHandle, name: &str) -> Result<Live> {
         .into_iter()
         .find(|c| c.name == name)
         .ok_or_else(|| Error::NoSuchConnection(name.to_string()))?;
-    let url = store::connect_url(&saved)?;
+    let password = store::stored(store::Secret::Database, &saved.name)?;
     let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
-    let (conn, tunnel) = open_db(&saved, &url, ssh_secret).await?;
-    Ok(Live { saved, url, conn, tunnel })
+    let (conn, tunnel) = open_db(&saved, password.as_ref(), ssh_secret).await?;
+    Ok(Live { url: saved.url.clone(), saved, password, conn, tunnel })
 }
 
 /// What the workspace header and sidebar show for an open connection.
@@ -177,12 +181,9 @@ async fn test_connection(
         }
         Ok(saved_name.as_deref().map(|name| store::stored(which, name)).transpose()?.flatten())
     };
-    let url = match fallback(password, store::Secret::Database)? {
-        Some(pw) => store::with_password(&conn.url, &pw)?,
-        None => conn.url.clone().into(),
-    };
+    let password = fallback(password, store::Secret::Database)?;
     let ssh_secret = if conn.ssh.is_some() { fallback(ssh_password, store::Secret::Ssh)? } else { None };
-    let (mut db, _tunnel) = open_db(&conn, &url, ssh_secret).await?;
+    let (mut db, _tunnel) = open_db(&conn, password.as_ref(), ssh_secret).await?;
     let n = db.tables(conn.options.system_schemas).await?.len();
     Ok(format!("Connected · {n} tables"))
 }
@@ -274,12 +275,12 @@ async fn use_database(open: State<'_, Open>, name: String, database: String) -> 
 
 async fn switch_database(live: &mut Live, database: &str) -> Result<()> {
     if live.saved.kind == Engine::Postgres {
-        let mut u = url::Url::parse(live.url.expose_secret())?;
+        let mut u = url::Url::parse(&live.url)?;
         u.set_path(&format!("/{database}")); // set_path percent-encodes
-        let url = SecretString::from(u.to_string());
+        let url = u.to_string();
         // Borrow only the settings across the await: `Live` holds a SQLite handle, which isn't Sync.
         let (s, port) = (&live.saved, live.tunnel.as_ref().map(|t| t.port));
-        let conn = db::Conn::open(s.kind, &url, &s.tls, &s.options, port).await?; // swap only once it works
+        let conn = db::Conn::open(s.kind, &url, live.password.as_ref(), &s.tls, &s.options, port).await?; // swap only once it works
         (live.url, live.conn) = (url, conn);
         Ok(())
     } else {
@@ -291,7 +292,7 @@ async fn switch_database(live: &mut Live, database: &str) -> Result<()> {
 async fn query_with_limit(live: &mut Live, sql: &str, limit: Option<Duration>) -> Result<db::QueryResult> {
     let Some(limit) = limit else { return live.conn.query(sql).await };
     let timed_out = || Error::QueryTimeout(limit.as_secs());
-    let Live { saved, url, conn, tunnel } = live;
+    let Live { saved, url, password, conn, tunnel } = live;
     match conn.stopper() {
         db::Stopper::Lite(handle) => {
             // The query blocks this thread, so a timer thread interrupts it; finishing first drops `done`.
@@ -312,7 +313,7 @@ async fn query_with_limit(live: &mut Live, sql: &str, limit: Option<Duration>) -
                 return r;
             }
             // Best effort: if the stop request fails, the wait below still ends things.
-            let _ = stop_query(stopper, saved, url, tunnel.as_ref().map(|t| t.port)).await;
+            let _ = stop_query(stopper, saved, url, password.as_ref(), tunnel.as_ref().map(|t| t.port)).await;
             // The server answers the stopped query with an error; wait for it so the connection stays in step.
             let _ = tokio::time::timeout(Duration::from_secs(10), query).await;
             Err(timed_out())
@@ -320,13 +321,19 @@ async fn query_with_limit(live: &mut Live, sql: &str, limit: Option<Duration>) -
     }
 }
 
-async fn stop_query(stopper: db::Stopper, saved: &store::Saved, url: &SecretString, port: Option<u16>) -> Result<()> {
+async fn stop_query(
+    stopper: db::Stopper,
+    saved: &store::Saved,
+    url: &str,
+    password: Option<&SecretString>,
+    port: Option<u16>,
+) -> Result<()> {
     match stopper {
         db::Stopper::Pg(token) => Ok(token.cancel_query(saved.tls.postgres()?.1).await?),
         db::Stopper::My(id) => {
             // A side connection with the same settings, minus startup SQL, which isn't wanted here.
             let options = db::Options { startup_sql: String::new(), ..saved.options.clone() };
-            let mut side = db::Conn::open(saved.kind, url, &saved.tls, &options, port).await?;
+            let mut side = db::Conn::open(saved.kind, url, password, &saved.tls, &options, port).await?;
             side.query(&format!("kill query {id}")).await.map(|_| ())
         }
         db::Stopper::Lite(handle) => {
@@ -425,23 +432,21 @@ mod tests {
     use crate::db::{Conn, Engine, Options};
     use crate::error::Error;
     use crate::{store, tls::Tls};
-    use secrecy::SecretString;
     use std::time::{Duration, Instant};
 
     async fn live(engine: Engine, url: &str) -> Live {
-        let url = SecretString::from(url);
         let saved = store::Saved {
             name: "t".into(),
             kind: engine,
-            url: String::new(),
+            url: url.into(),
             tag: String::new(),
             confirm_writes: false,
             ssh: None,
             tls: Tls::default(),
             options: Options::default(),
         };
-        let conn = Conn::open(engine, &url, &saved.tls, &saved.options, None).await.unwrap();
-        Live { saved, url, conn, tunnel: None }
+        let conn = Conn::open(engine, url, None, &saved.tls, &saved.options, None).await.unwrap();
+        Live { url: url.into(), saved, password: None, conn, tunnel: None }
     }
 
     #[test]

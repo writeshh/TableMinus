@@ -84,13 +84,13 @@ pub fn expand_home(path: &str) -> Result<PathBuf> {
 
 /// Opens a tunnel to the host and port in `url`. The driver then dials `127.0.0.1:<tunnel.port>` but keeps
 /// the real host name for TLS checks.
-pub async fn open_for(engine: Engine, url: &SecretString, ssh: &Ssh, secret: Option<&SecretString>) -> Result<Tunnel> {
+pub async fn open_for(engine: Engine, url: &str, ssh: &Ssh, secret: Option<&SecretString>) -> Result<Tunnel> {
     let default_port = match engine {
         Engine::Postgres => 5432,
         Engine::Mysql | Engine::Mariadb => 3306,
         Engine::Sqlite => return Err(Error::Invalid("SQLite files can't be opened over SSH")),
     };
-    let u = url::Url::parse(url.expose_secret())?;
+    let u = url::Url::parse(url)?;
     let target_host = u.host_str().unwrap_or("127.0.0.1").to_string();
     let target_port = u.port().unwrap_or(default_port);
     tokio::time::timeout(CONNECT_TIMEOUT, open(ssh, secret, target_host, target_port))
@@ -241,7 +241,6 @@ mod tests {
     use crate::error::Error;
     use crate::tls::Tls;
     use russh::keys::PublicKey;
-    use secrecy::SecretString;
 
     const KEY_A: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJTCjG4ZXZcrALy2p8gWVxHE4NCwRhwQFp3FrlWcU5jH";
     const KEY_B: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFCZxOLLXSW1+tNRkqLg+JLnjZAkM3bOKuyxf8PMWTd2";
@@ -282,11 +281,12 @@ mod tests {
             let home = std::env::home_dir().unwrap();
             let mut ssh = Ssh { host: "127.0.0.1".into(), port: Some(2222), user: String::new(), key: String::new() };
             // No key given: falls back to the default key file.
-            let url_local = SecretString::from("mysql://root@127.0.0.1:3306");
-            let tunnel = open_for(Engine::Mysql, &url_local, &ssh, None).await.unwrap();
+            let url_local = "mysql://root@127.0.0.1:3306";
+            let tunnel = open_for(Engine::Mysql, url_local, &ssh, None).await.unwrap();
             let mut conn = Conn::open(
                 Engine::Mysql,
-                &url_local,
+                url_local,
+                None,
                 &Tls::default(),
                 &crate::db::Options::default(),
                 Some(tunnel.port),
@@ -299,13 +299,12 @@ mod tests {
 
             // A key the server doesn't accept.
             ssh.key = home.join("wrong_key").to_string_lossy().into_owned();
-            let err = open_for(Engine::Mysql, &url_local, &ssh, None).await.err().unwrap();
+            let err = open_for(Engine::Mysql, url_local, &ssh, None).await.err().unwrap();
             assert_eq!(err.to_string(), "SSH sign-in failed: the server rejected the private key");
 
             // The SSH server can't reach the database (nothing listens on port 1).
             ssh.key = "~/.ssh/id_ed25519".into();
-            let closed = SecretString::from("mysql://root@127.0.0.1:1");
-            let err = open_for(Engine::Mysql, &closed, &ssh, None).await.err().unwrap();
+            let err = open_for(Engine::Mysql, "mysql://root@127.0.0.1:1", &ssh, None).await.err().unwrap();
             assert!(matches!(err, Error::SshForward { port: 1, .. }), "{err}");
         });
     }
