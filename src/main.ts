@@ -1,4 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { EditorState } from "@codemirror/state";
+import { createEditor } from "./editor";
 
 type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean };
 type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number };
@@ -34,7 +37,14 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLEl
 };
 const form = $<HTMLFormElement>("form");
 const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement & HTMLSelectElement;
-const sqlBox = $<HTMLTextAreaElement>("sql");
+const editor = createEditor($("sql"), {
+  change: (doc) => {
+    const tab = current();
+    if (tab?.kind === "sql") tab.sql = doc;
+  },
+  cursor: () => updateCursor(),
+  run: () => runEditor(),
+});
 
 let saved: Saved[] = [];
 let active: Saved | null = null;
@@ -287,7 +297,7 @@ async function connect(c: Saved) {
     status(`Connected · ${i.server}`, "done");
     // Connected without a database: go straight to choosing one.
     if (i.can_switch && !i.database) openDbPicker();
-    else sqlBox.focus();
+    else editor.focus();
   } catch (e) {
     setStatus("home-status", String(e), "error");
   }
@@ -305,8 +315,9 @@ function applyInfo(i: Info) {
   btn.title = `Open a database (${shortcut})`;
   $<HTMLInputElement>("filter").value = "";
   $<HTMLInputElement>("filter").hidden = !tables.length;
+  editor.setDialect(active!.kind, tables); // before the new tab's state is created
   tabs = [];
-  sqlCount = 0;
+  shownId = 0;
   openSqlTab();
   renderTables();
 }
@@ -365,7 +376,7 @@ async function openDb(name?: string) {
     applyInfo(await invoke<Info>("use_database", { name: active.name, database: name }));
     $<HTMLDialogElement>("dbpicker").close();
     status(`${name} · ${tables.length} tables`, "done");
-    sqlBox.focus();
+    editor.focus();
   } catch (e) {
     setStatus("db-status", String(e), "error");
   }
@@ -499,8 +510,10 @@ function renderHistory() {
         item.onclick = () => {
           const tab = current()?.kind === "sql" ? (current() as SqlTab) : openSqlTab();
           tab.sql = h.sql;
+          tab.state = editor.newState(h.sql);
+          shownId = 0; // force renderMain to load the new state
           renderMain();
-          sqlBox.focus();
+          editor.focus();
         };
         d.append(item);
       }
@@ -512,7 +525,7 @@ function renderHistory() {
 
 // ---------- Tabs: SQL editors and table browsers ----------
 
-type SqlTab = { id: number; kind: "sql"; title: string; sql: string; result?: QueryResult; status?: [string, StatusKind] };
+type SqlTab = { id: number; kind: "sql"; title: string; sql: string; state?: EditorState; result?: QueryResult; status?: [string, StatusKind] };
 type TableTab = { id: number; kind: "table"; title: string; table: string; view: "data" | "structure"; page: number; total?: number; result?: QueryResult; error?: string; loading?: boolean };
 type Tab = SqlTab | TableTab;
 type StatusKind = "" | "busy" | "error" | "done";
@@ -520,12 +533,16 @@ const PAGE = 300;
 let tabs: Tab[] = [];
 let currentId = 0;
 let nextId = 1;
-let sqlCount = 0;
+let shownId = 0; // the SQL tab whose state is in the editor right now
 const current = () => tabs.find((t) => t.id === currentId);
 
 function openSqlTab(): SqlTab {
-  sqlCount += 1;
-  const tab: SqlTab = { id: nextId++, kind: "sql", title: sqlCount === 1 ? "SQL Query" : `SQL Query ${sqlCount}`, sql: "" };
+  // Lowest free number, so closing tabs doesn't make the names climb forever.
+  const used = new Set(tabs.map((t) => t.title));
+  const name = (n: number) => (n === 1 ? "SQL Query" : `SQL Query ${n}`);
+  let n = 1;
+  while (used.has(name(n))) n++;
+  const tab: SqlTab = { id: nextId++, kind: "sql", title: name(n), sql: "" };
   tabs.push(tab);
   select(tab.id);
   return tab;
@@ -542,7 +559,7 @@ function openTable(table: string) {
 
 function select(id: number) {
   const prev = current();
-  if (prev?.kind === "sql") prev.sql = sqlBox.value; // keep unsaved text with its tab
+  if (prev?.kind === "sql" && shownId === prev.id) prev.state = editor.view.state; // text + undo stay with the tab
   currentId = id;
   renderMain();
   renderTables();
@@ -552,7 +569,7 @@ function closeTab(id: number) {
   const i = tabs.findIndex((t) => t.id === id);
   if (i < 0) return;
   tabs.splice(i, 1);
-  if (!tabs.length) return void openSqlTab();
+  if (!tabs.length) return void closeWorkspace(); // last tab gone: leave the connection, like TablePlus
   if (id === currentId) select(tabs[Math.max(0, i - 1)].id);
   else renderMain();
 }
@@ -585,7 +602,10 @@ function renderMain() {
   $("sql-pane").hidden = tab.kind !== "sql";
   $("table-foot").hidden = tab.kind !== "table";
   if (tab.kind === "sql") {
-    sqlBox.value = tab.sql;
+    if (shownId !== tab.id) {
+      editor.setState((tab.state ??= editor.newState(tab.sql)));
+      shownId = tab.id;
+    }
     updateCursor();
     status(...(tab.status ?? ["", ""]));
     if (tab.result) render(tab.result, 0);
@@ -723,12 +743,11 @@ function renderStructure(cols: Column[]) {
 }
 
 function updateCursor() {
-  const before = sqlBox.value.slice(0, sqlBox.selectionStart);
-  const lines = before.split("\n");
-  $("cursor").textContent = `line ${lines.length}, column ${lines[lines.length - 1].length + 1}`;
+  const { line, column } = editor.cursor();
+  $("cursor").textContent = `line ${line}, column ${column}`;
 }
 
-$("new-sql").onclick = () => (openSqlTab(), sqlBox.focus());
+$("new-sql").onclick = () => (openSqlTab(), editor.focus());
 for (const b of document.querySelectorAll<HTMLElement>(".side-tabs button")) b.onclick = () => showSide(b.dataset.side as "items" | "history");
 $("history-search").addEventListener("input", renderHistory);
 for (const b of $("view-seg").querySelectorAll<HTMLElement>("button"))
@@ -747,16 +766,26 @@ const turnPage = (delta: number) => {
 };
 $("page-prev").onclick = () => turnPage(-1);
 $("page-next").onclick = () => turnPage(1);
-sqlBox.addEventListener("input", () => {
-  const tab = current();
-  if (tab?.kind === "sql") tab.sql = sqlBox.value;
-  updateCursor();
-});
-for (const ev of ["keyup", "click", "select"]) sqlBox.addEventListener(ev, updateCursor);
+/** Leaves the workspace and closes the server connection; the launcher comes back. */
+function closeWorkspace() {
+  if (active) invoke("disconnect", { name: active.name }).catch(() => {});
+  active = null;
+  info = null;
+  tabs = [];
+  shownId = 0;
+  delete document.body.dataset.env;
+  show("home");
+}
+
+// Cmd/Ctrl+W: close the tab; on the last tab close the workspace; on the launcher close the window.
 document.addEventListener("keydown", (e) => {
-  if (!(e.metaKey || e.ctrlKey) || $("workspace").hidden || document.querySelector("dialog[open]")) return;
-  if (e.key.toLowerCase() === "t") (e.preventDefault(), openSqlTab(), sqlBox.focus());
-  else if (e.key.toLowerCase() === "w" && current()) (e.preventDefault(), closeTab(currentId));
+  if (!(e.metaKey || e.ctrlKey) || document.querySelector("dialog[open]")) return;
+  const key = e.key.toLowerCase();
+  if (key === "w") {
+    e.preventDefault();
+    if ($("workspace").hidden) getCurrentWindow().close();
+    else closeTab(currentId);
+  } else if (key === "t" && !$("workspace").hidden) (e.preventDefault(), openSqlTab(), editor.focus());
 });
 
 // ---------- Settings (⌘,) ----------
@@ -794,6 +823,7 @@ function applySettings() {
   $<HTMLInputElement>("font-size").value = String(settings.fontSize);
   $<HTMLInputElement>("line-height").value = String(settings.lineHeight);
   $<HTMLSelectElement>("indent").value = settings.indent;
+  editor.setIndent(settings.indent === "tab" ? "\t" : " ".repeat(Number(settings.indent)));
   $<HTMLSelectElement>("safe-default").value = settings.safeDefault ? "1" : "0";
 }
 
@@ -832,14 +862,6 @@ document.addEventListener("keydown", (e) => {
   if (size) (e.preventDefault(), setSetting("fontSize", clamp(size, 9, 28)));
 });
 
-// Tab indents inside the editor instead of moving focus; execCommand keeps native undo.
-sqlBox.addEventListener("keydown", (e) => {
-  if (e.key !== "Tab" || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return; // Shift+Tab still leaves the editor
-  e.preventDefault();
-  const text = settings.indent === "tab" ? "\t" : " ".repeat(Number(settings.indent));
-  if (!document.execCommand("insertText", false, text)) sqlBox.setRangeText(text, sqlBox.selectionStart, sqlBox.selectionEnd, "end");
-});
-
 showTab("appearance");
 applySettings();
 
@@ -858,15 +880,12 @@ $("engine-search").addEventListener("keydown", (e) => e.key === "Enter" && (e.pr
 $("picker-next").onclick = nextFromPicker;
 $("picker-cancel").onclick = () => $<HTMLDialogElement>("picker").close();
 $("editor-cancel").onclick = () => $<HTMLDialogElement>("editor").close();
-$("back").onclick = () => show("home");
+$("back").onclick = closeWorkspace;
 $("filter").addEventListener("input", renderTables);
 
 $("keys").textContent = navigator.userAgent.includes("Mac") ? "⌘↵" : "Ctrl+↵";
-const runEditor = () => run(sqlBox.value.slice(sqlBox.selectionStart, sqlBox.selectionEnd) || sqlBox.value);
+const runEditor = () => run(editor.selectionOrAll());
 $("run").onclick = runEditor;
-sqlBox.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), runEditor());
-});
 
 show("home");
 refresh();

@@ -11,6 +11,14 @@
   --warn: #ff9f0a;
   --danger: #ff453a;
   --ok: #30d158;
+  /* SQL syntax colours; light-dark() follows the theme setting (color-scheme) */
+  --syn-keyword: light-dark(#0b57d0, #529bd8);
+  --syn-type: light-dark(#00796b, #4ec9b0);
+  --syn-function: light-dark(#7a5d00, #7cb342);
+  --syn-string: light-dark(#b3261e, #ca6e6e);
+  --syn-quoted: light-dark(#c2185b, #e04978);
+  --syn-number: light-dark(#7b3fbf, #b57aff);
+  --syn-comment: light-dark(#2e7d32, #3fb950);
   --mono: ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
 }
 @supports (color: AccentColor) {
@@ -139,7 +147,7 @@ aside { display: flex; flex-direction: column; }
 .tab .close:hover { opacity: 1; background: var(--press); }
 .tab-sql { font: 700 9px var(--mono); color: var(--accent); }
 .sql-pane { display: flex; flex-direction: column; height: 38%; min-height: 140px; flex: none; }
-.sql-pane textarea { flex: 1; min-height: 0; }
+.sql-pane .editor { flex: 1; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--line); }
 .cursor { font: 11px var(--mono); color: var(--muted); }
 .table-foot { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); flex: none; }
 .page-info { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -193,8 +201,6 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .pill.staging { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
 .pill.production { background: var(--danger); color: white; }
 #db-button { font-weight: 500; color: CanvasText; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-textarea { font: var(--editor-size, 13px)/var(--editor-line, 1.5) var(--mono); tab-size: 4; border: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; resize: none; background: transparent; }
-textarea:focus-visible { outline: none; } /* the editor is the main surface; a ring around it is noise */
 .bar { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 #status { color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #status.error { color: var(--danger); white-space: normal; }

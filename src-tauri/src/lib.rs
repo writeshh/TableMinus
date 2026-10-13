@@ -89,6 +89,13 @@ async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<
     info(open.get_mut(&name).unwrap()).await
 }
 
+/// Drops the live connection; the next connect opens a fresh one.
+#[tauri::command]
+async fn disconnect(open: State<'_, Open>, name: String) -> Result<(), String> {
+    open.0.lock().await.remove(&name);
+    Ok(())
+}
+
 #[tauri::command]
 async fn columns(open: State<'_, Open>, name: String, table: String) -> Result<Vec<db::Column>, String> {
     open.0.lock().await.get_mut(&name).ok_or("not connected")?.conn.columns(&table).await
@@ -140,6 +147,7 @@ pub fn run() {
             list_databases,
             use_database,
             columns,
+            disconnect,
             run_query
         ])
         .run(tauri::generate_context!())
