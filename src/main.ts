@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor, type FormatStyle, type Schema } from "./editor";
 import { fillParams, findParams, type ParamFormat } from "./statements";
 import { $, el } from "./dom";
@@ -518,14 +518,14 @@ function applyInfo(i: Info) {
   shownId = 0;
   const kept = settings.keepTabs ? loadSqlTabs() : [];
   if (!kept.length) openSqlTab();
-  for (const k of kept) tabs.push({ id: nextId++, kind: "sql", title: k.title, sql: k.sql });
+  for (const k of kept) tabs.push({ id: nextId++, kind: "sql", title: k.title, sql: k.sql, path: k.path });
   if (kept.length) select(tabs[0].id);
   renderTables();
 }
 
 // ---------- SQL tabs kept per connection ----------
 
-type KeptTab = { title: string; sql: string };
+type KeptTab = { title: string; sql: string; path?: string };
 const keptKey = () => `sql-tabs:${active?.name}`;
 
 function loadSqlTabs(): KeptTab[] {
@@ -539,11 +539,54 @@ function loadSqlTabs(): KeptTab[] {
 
 function saveSqlTabs() {
   if (!active || !settings.keepTabs) return;
-  const kept: KeptTab[] = tabs.flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql }] : []));
+  const kept: KeptTab[] = tabs.flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql, path: t.path }] : []));
   try {
     if (kept.length) localStorage.setItem(keptKey(), JSON.stringify(kept));
     else localStorage.removeItem(keptKey());
   } catch {} // unavailable storage: the tabs just aren't reopened next time
+}
+
+// ---------- .sql files (⌘O, ⌘S, ⌘⇧S on SQL tabs) ----------
+
+const SQL_FILES = [{ name: "SQL", extensions: ["sql"] }, { name: "All files", extensions: ["*"] }];
+const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
+
+async function openSqlFile() {
+  if ($("workspace").hidden) return;
+  const path = await openFileDialog({ multiple: false, directory: false, filters: SQL_FILES });
+  if (typeof path !== "string") return;
+  try {
+    const sql = await invoke<string>("read_text_file", { path });
+    const tab: SqlTab = { id: nextId++, kind: "sql", title: fileName(path), sql, path };
+    tabs.push(tab);
+    select(tab.id);
+    saveSqlTabs();
+  } catch (e) {
+    status(String(e), "error");
+  }
+}
+
+/** Saves the current SQL tab to its file; with `pick`, or when it has none yet, asks where first. */
+async function saveSqlFile(pick: boolean) {
+  const tab = current();
+  if (tab?.kind !== "sql") return;
+  const sql = shownId === tab.id ? editor.view.state.doc.toString() : tab.sql;
+  let path = tab.path;
+  if (pick || !path) {
+    const chosen = await saveFileDialog({ defaultPath: path ?? `${tab.title}.sql`, filters: SQL_FILES });
+    if (!chosen) return;
+    path = chosen;
+  }
+  try {
+    await invoke("write_text_file", { path, text: sql });
+    tab.path = path;
+    tab.title = fileName(path);
+    renderMain();
+    saveSqlTabs();
+    status(`Saved ${tab.title}`, "done");
+  } catch (e) {
+    status(String(e), "error");
+  }
 }
 
 let saveTimer = 0;
@@ -756,7 +799,11 @@ function renderHistory() {
 
 // ---------- Tabs: SQL editors and table browsers ----------
 
-type SqlTab = { id: number; kind: "sql"; title: string; sql: string; state?: EditorState; result?: QueryResult; status?: [string, StatusKind] };
+type SqlTab = {
+  id: number; kind: "sql"; title: string; sql: string; state?: EditorState; result?: QueryResult; status?: [string, StatusKind];
+  /** The .sql file the tab was opened from or saved to. */
+  path?: string;
+};
 type Sort = { column: string; desc: boolean };
 type TableTab = {
   id: number; kind: "table"; title: string; table: string; view: "data" | "structure"; page: number;
@@ -823,7 +870,7 @@ function renderMain() {
     ...tabs.map((t) => {
       const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
       close.onclick = (e) => (e.stopPropagation(), closeTab(t.id));
-      const b = el("button", { className: `tab ${t.kind}`, title: t.title },
+      const b = el("button", { className: `tab ${t.kind}`, title: t.kind === "sql" && t.path ? t.path : t.title },
         el("span", { className: t.kind === "sql" ? "tab-sql" : "tbl-icon", textContent: t.kind === "sql" ? "SQL" : "" }),
         el("span", { className: "label", textContent: t.title }),
         close,
@@ -1614,7 +1661,11 @@ document.addEventListener("keydown", (e) => {
     if ($("workspace").hidden) getCurrentWindow().close();
     else closeTab(currentId);
   } else if (key === "t" && !$("workspace").hidden) (e.preventDefault(), openSqlTab(), editor.focus());
-  else if (key === "s" && !$("workspace").hidden) (e.preventDefault(), saveEdits());
+  else if (key === "s" && !$("workspace").hidden) {
+    e.preventDefault();
+    if (current()?.kind === "sql") saveSqlFile(e.shiftKey);
+    else saveEdits();
+  } else if (key === "o" && !$("workspace").hidden) (e.preventDefault(), openSqlFile());
   else if (key === "r" && e.shiftKey && !$("workspace").hidden) (e.preventDefault(), reconnect());
   else if (key === "f" && current()?.kind === "table" && !$("workspace").hidden) (e.preventDefault(), toggleFilters(true));
 });

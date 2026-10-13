@@ -407,6 +407,31 @@ async fn run_query(
     live.check(r)
 }
 
+/// The largest SQL file the editor opens.
+const MAX_SQL_FILE: u64 = 20 * 1024 * 1024;
+
+/// A text file chosen in the open dialog, for a SQL tab.
+#[tauri::command]
+async fn read_text_file(path: std::path::PathBuf) -> Result<String> {
+    let failed = |source| Error::File { path: path.display().to_string(), source };
+    let size = std::fs::metadata(&path).map_err(failed)?.len();
+    if size > MAX_SQL_FILE {
+        return Err(Error::Invalid("the file is over 20 MB; run it with the SQL import instead"));
+    }
+    let bytes = std::fs::read(&path).map_err(failed)?;
+    String::from_utf8(bytes).map_err(|_| Error::Invalid("the file isn't UTF-8 text"))
+}
+
+/// Saves a SQL tab to the path chosen in the save dialog: written to a temporary file, then renamed over.
+#[tauri::command]
+async fn write_text_file(path: std::path::PathBuf, text: String) -> Result<()> {
+    let failed = |source| Error::File { path: path.display().to_string(), source };
+    let mut tmp = path.clone().into_os_string();
+    tmp.push(".dbmanager-tmp");
+    std::fs::write(&tmp, text).map_err(failed)?;
+    std::fs::rename(&tmp, &path).map_err(failed)
+}
+
 /// Every table's columns, for editor autocomplete: (table, column) pairs.
 #[tauri::command]
 async fn schema(open: State<'_, Open>, name: String) -> Result<Vec<(String, String)>> {
@@ -461,7 +486,9 @@ pub fn run() -> tauri::Result<()> {
             update_rows,
             run_query,
             browse,
-            schema
+            schema,
+            read_text_file,
+            write_text_file
         ])
         .run(tauri::generate_context!())
 }
@@ -497,6 +524,26 @@ mod tests {
         };
         let conn = Conn::open(engine, url, None, &saved.tls, &saved.options, None).await.unwrap();
         Live { url: url.into(), saved, password: None, conn, tunnel: None }
+    }
+
+    #[test]
+    fn text_files_should_round_trip_and_refuse_huge_or_binary_ones() {
+        tauri::async_runtime::block_on(async {
+            let dir = std::env::temp_dir().join(format!("dbmanager-{}-files", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("q.sql");
+            super::write_text_file(path.clone(), "select 'é';\n".into()).await.unwrap();
+            assert_eq!(super::read_text_file(path.clone()).await.unwrap(), "select 'é';\n");
+
+            let big = dir.join("big.sql");
+            std::fs::write(&big, vec![b' '; 21 * 1024 * 1024]).unwrap();
+            assert!(super::read_text_file(big).await.unwrap_err().to_string().contains("over 20 MB"));
+
+            let binary = dir.join("bin.sql");
+            std::fs::write(&binary, [0xff, 0xfe, 0x00]).unwrap();
+            assert_eq!(super::read_text_file(binary).await.unwrap_err().to_string(), "the file isn't UTF-8 text");
+            let _ = std::fs::remove_dir_all(dir);
+        });
     }
 
     #[test]
