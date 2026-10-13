@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 pub fn is_read_only(kind: &str, sql: &str) -> bool {
     let dialect: &dyn Dialect = match kind {
         "postgres" => &PostgreSqlDialect {},
-        "mysql" => &MySqlDialect {},
+        "mysql" | "mariadb" => &MySqlDialect {},
         _ => &SQLiteDialect {},
     };
     let Ok(stmts) = Parser::parse_sql(dialect, sql) else { return false };

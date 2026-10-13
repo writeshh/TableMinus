@@ -8,30 +8,219 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <aside>
-      <h2>Connections</h2>
-      <ul id="conns"></ul>
-      <details>
-        <summary>New connection</summary>
-        <form id="form">
-          <input name="name" placeholder="Name" required />
-          <select name="kind">
-            <option>postgres</option>
-            <option>mysql</option>
-            <option>sqlite</option>
+    <!-- Launcher: shown until a connection opens -->
+    <section id="home">
+      <div class="intro">
+        <div class="mark" aria-hidden="true">db</div>
+        <h1>DB Manager</h1>
+        <p class="muted">Version 0.1.0</p>
+        <button id="create" class="wide">New connection…</button>
+        <button class="wide ghost open-settings">Settings…</button>
+      </div>
+      <div class="launcher">
+        <div class="search-row">
+          <button id="add" class="round" title="New connection" aria-label="New connection">+</button>
+          <input id="search" type="search" placeholder="Search connections" autocomplete="off" />
+        </div>
+        <ul id="conns" class="conns"></ul>
+        <p id="no-conns" class="hint center" hidden>No connections yet.<br />Create one to get started.</p>
+        <p id="home-status" class="status"></p>
+      </div>
+    </section>
+
+    <!-- Step 1: choose an engine -->
+    <dialog id="picker">
+      <input id="engine-search" type="search" placeholder="Search engines" autocomplete="off" />
+      <div id="engines" class="engines" role="listbox"></div>
+      <footer>
+        <button id="picker-cancel">Cancel</button>
+        <span class="spacer"></span>
+        <button id="picker-next" class="primary">Next</button>
+      </footer>
+    </dialog>
+
+    <!-- Step 2: connection details -->
+    <dialog id="editor">
+      <h3 id="editor-title"></h3>
+      <form id="form" autocomplete="off">
+        <fieldset>
+          <label>Name <input name="name" /></label>
+          <label>Environment
+            <select name="tag">
+              <option value="">None</option>
+              <option value="local">Local</option>
+              <option value="development">Development</option>
+              <option value="staging">Staging</option>
+              <option value="production">Production</option>
+            </select>
+          </label>
+          <label>Safe mode
+            <select name="confirm">
+              <option value="1">Confirm before changing data</option>
+              <option value="0">Silent: run everything</option>
+            </select>
+          </label>
+        </fieldset>
+        <fieldset class="net">
+          <div class="pair">
+            <label>Host <input name="host" placeholder="127.0.0.1" /></label>
+            <label class="port">Port <input name="port" inputmode="numeric" /></label>
+          </div>
+          <label>User <input name="user" placeholder="user name" /></label>
+          <label>Password <input name="password" type="password" placeholder="Stored in the keychain" /></label>
+          <label>Database <input name="database" placeholder="database name" /></label>
+          <label>SSL mode <select name="ssl"></select></label>
+        </fieldset>
+        <fieldset class="file" hidden>
+          <label>File <input name="path" placeholder="/path/to/database.sqlite" /></label>
+        </fieldset>
+        <p id="form-status" class="status"></p>
+        <footer>
+          <button type="button" id="editor-cancel">Cancel</button>
+          <span class="spacer"></span>
+          <button type="button" id="test">Test</button>
+          <button type="button" id="save">Save</button>
+          <button type="submit" class="primary">Connect</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="dbpicker">
+      <h3>Open database</h3>
+      <input id="db-search" type="search" placeholder="Search databases" autocomplete="off" />
+      <ul id="dbs" class="dbs" role="listbox"></ul>
+      <p id="db-status" class="status"></p>
+      <footer>
+        <button id="db-cancel">Cancel</button>
+        <span class="spacer"></span>
+        <button id="db-open" class="primary">Open</button>
+      </footer>
+    </dialog>
+
+    <!-- Settings (⌘,): every change applies immediately -->
+    <dialog id="settings" class="prefs">
+      <nav class="prefs-tabs" role="tablist">
+        <button role="tab" data-tab="appearance">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" /></svg>
+          Appearance
+        </button>
+        <button role="tab" data-tab="editor">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16z" /><path d="M13 7l4 4" /></svg>
+          Editor
+        </button>
+        <button role="tab" data-tab="security">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z" /></svg>
+          Security
+        </button>
+      </nav>
+      <section data-pane="appearance">
+        <div class="row">
+          <span class="k">Theme</span>
+          <div class="seg" id="theme" role="radiogroup">
+            <button data-value="auto">Auto</button><button data-value="light">Light</button><button data-value="dark">Dark</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="k">Results</span>
+          <label class="check"><input type="checkbox" id="zebra" /> Alternating row backgrounds</label>
+        </div>
+      </section>
+      <section data-pane="editor" hidden>
+        <div class="row">
+          <span class="k">Font size</span>
+          <span><input id="font-size" type="number" min="9" max="28" step="1" class="num-input" /> px <span class="hint inline" id="font-keys"></span></span>
+        </div>
+        <div class="row">
+          <span class="k">Line height</span>
+          <input id="line-height" type="number" min="1.1" max="2.2" step="0.1" class="num-input" />
+        </div>
+        <div class="row">
+          <span class="k">Indent with</span>
+          <select id="indent"><option value="tab">Tab</option><option value="2">2 spaces</option><option value="4">4 spaces</option></select>
+        </div>
+      </section>
+      <section data-pane="security" hidden>
+        <div class="row">
+          <span class="k">New connections</span>
+          <select id="safe-default">
+            <option value="1">Confirm before changing data</option>
+            <option value="0">Silent: run everything</option>
           </select>
-          <input name="url" placeholder="postgres://user@localhost:5432/db" required />
-          <input name="password" type="password" placeholder="Password (stored in keychain)" />
-          <button>Save</button>
-        </form>
-      </details>
-      <h2>Tables</h2>
-      <ul id="tables"></ul>
-    </aside>
-    <main>
-      <textarea id="sql" spellcheck="false" placeholder="SQL. Cmd/Ctrl+Enter runs the selection, or everything."></textarea>
-      <div class="bar"><button id="run">Run</button><span id="status"></span></div>
-      <div id="out"></div>
-    </main>
+        </div>
+        <p class="hint note">Safe mode asks before running any query it can't prove is read-only. Each connection can override this in its own settings.</p>
+      </section>
+      <footer>
+        <button id="settings-reset">Restore defaults</button>
+        <span class="spacer"></span>
+        <button id="settings-done" class="primary">Done</button>
+      </footer>
+    </dialog>
+
+    <dialog id="confirm" class="small">
+      <p id="confirm-text"></p>
+      <footer>
+        <span class="spacer"></span>
+        <button id="confirm-cancel">Cancel</button>
+        <button id="confirm-ok" class="danger"></button>
+      </footer>
+    </dialog>
+
+    <!-- Workspace: one open connection -->
+    <section id="workspace" hidden>
+      <aside>
+        <div class="ws-head">
+          <button id="back" class="ghost" title="All connections">‹ Connections</button>
+          <button class="ghost open-settings" title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
+          </button>
+        </div>
+        <div class="seg side-tabs" role="tablist">
+          <button data-side="items">Items</button><button data-side="history">History</button>
+        </div>
+        <div id="side-items" class="side-pane">
+          <input id="filter" type="search" placeholder="Search tables" />
+          <ul id="tables" class="tree"></ul>
+          <p id="no-tables" class="hint"></p>
+        </div>
+        <div id="side-history" class="side-pane" hidden>
+          <input id="history-search" type="search" placeholder="Search history" />
+          <div id="history"></div>
+          <p id="no-history" class="hint">Queries you run appear here.</p>
+        </div>
+      </aside>
+      <main>
+        <header id="where">
+          <span id="where-conn" class="where-conn"></span>
+          <span class="spacer"></span>
+          <span id="pill" class="pill"></span>
+          <button id="db-button" class="ghost" title="Open a database"></button>
+          <button id="new-sql" class="ghost sql-btn" title="New SQL query">SQL</button>
+        </header>
+        <nav id="tabs" class="tabs" role="tablist"></nav>
+        <div id="sql-pane" class="sql-pane">
+          <textarea id="sql" spellcheck="false" placeholder="Write SQL here. Run the selection, or everything."></textarea>
+          <div class="bar">
+            <button id="run" class="primary">Run <kbd id="keys"></kbd></button>
+            <span id="status"></span>
+            <span class="spacer"></span>
+            <span id="cursor" class="cursor"></span>
+          </div>
+          <div id="ask" role="alertdialog" aria-live="assertive" hidden>
+            <span id="ask-text"></span>
+            <code id="ask-detail"></code>
+            <button id="ask-cancel">Cancel</button>
+            <button id="ask-ok" class="danger"></button>
+          </div>
+        </div>
+        <div id="out"></div>
+        <footer id="table-foot" class="table-foot" hidden>
+          <div class="seg" id="view-seg"><button data-view="data">Data</button><button data-view="structure">Structure</button></div>
+          <span class="spacer"></span>
+          <span id="page-info" class="page-info"></span>
+          <button id="page-prev" class="ghost" title="Previous page" aria-label="Previous page">‹</button>
+          <button id="page-next" class="ghost" title="Next page" aria-label="Next page">›</button>
+        </footer>
+      </main>
+    </section>
   </body>
 </html>

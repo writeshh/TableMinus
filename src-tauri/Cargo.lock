@@ -2533,12 +2533,15 @@ dependencies = [
  "keyed_priority_queue",
  "lru",
  "mysql_common",
+ "native-tls",
+ "pem",
  "percent-encoding",
  "rand 0.10.3",
  "serde",
  "socket2",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-native-tls",
  "tokio-util",
  "twox-hash",
  "url",
@@ -3079,6 +3082,16 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "pem"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+dependencies = [
+ "base64 0.22.1",
+ "serde_core",
 ]
 
 [[package]]

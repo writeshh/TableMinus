@@ -1,5 +1,14 @@
 use serde::Serialize;
 
+#[derive(Serialize)]
+pub struct Column {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub primary: bool,
+}
+
 #[derive(Serialize, Default)]
 pub struct QueryResult {
     pub columns: Vec<String>,
@@ -19,7 +28,7 @@ fn err(e: impl ToString) -> String {
 }
 
 impl Conn {
-    /// `kind` is "postgres", "mysql" or "sqlite"; `url` is a connection URL (a file path for SQLite).
+    /// `kind` is "postgres", "mysql"/"mariadb" or "sqlite"; `url` is a connection URL (a file path for SQLite).
     pub async fn open(kind: &str, url: &str) -> Result<Conn, String> {
         match kind {
             "postgres" => {
@@ -29,7 +38,7 @@ impl Conn {
                 tauri::async_runtime::spawn(connection); // drives the socket; ends when the client is dropped
                 Ok(Conn::Pg(client))
             }
-            "mysql" => Ok(Conn::My(mysql_async::Conn::from_url(url).await.map_err(err)?)),
+            "mysql" | "mariadb" => Ok(Conn::My(mysql_async::Conn::from_url(url).await.map_err(err)?)),
             "sqlite" => Ok(Conn::Lite(rusqlite::Connection::open(url).map_err(err)?)),
             other => Err(format!("unknown engine: {other}")),
         }
@@ -104,6 +113,97 @@ impl Conn {
         }
     }
 
+    async fn scalar(&mut self, sql: &str) -> Result<Option<String>, String> {
+        Ok(self.query(sql).await?.rows.into_iter().next().and_then(|mut row| row.swap_remove(0)))
+    }
+
+    /// Databases on the server; empty for SQLite (one file, one database).
+    pub async fn databases(&mut self) -> Result<Vec<String>, String> {
+        let sql = match self {
+            Conn::Pg(_) => "select datname from pg_database where not datistemplate and datallowconn order by 1",
+            Conn::My(_) => "select schema_name from information_schema.schemata order by 1",
+            Conn::Lite(_) => return Ok(vec![]),
+        };
+        Ok(self.query(sql).await?.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
+    }
+
+    /// The selected database; None when a MySQL connection has none yet.
+    pub async fn current_database(&mut self) -> Result<Option<String>, String> {
+        match self {
+            Conn::Pg(_) => self.scalar("select current_database()").await,
+            Conn::My(_) => self.scalar("select database()").await,
+            Conn::Lite(_) => Ok(None),
+        }
+    }
+
+    pub async fn server_version(&mut self) -> Result<String, String> {
+        let (label, sql) = match self {
+            Conn::Pg(_) => ("PostgreSQL", "show server_version"),
+            Conn::My(_) => ("MySQL", "select version()"),
+            Conn::Lite(_) => ("SQLite", "select sqlite_version()"),
+        };
+        let v = self.scalar(sql).await?.unwrap_or_default();
+        // MariaDB reports e.g. "11.4.2-MariaDB"; name it after what the server says it is.
+        Ok(if v.contains("MariaDB") { format!("MariaDB {}", v.split('-').next().unwrap_or(&v)) } else { format!("{label} {v}") })
+    }
+
+    /// MySQL switches in place; Postgres cannot change database within a session, so the caller reconnects.
+    pub async fn use_database(&mut self, db: &str) -> Result<(), String> {
+        match self {
+            Conn::My(_) => self.query(&format!("use `{}`", db.replace('`', "``"))).await.map(|_| ()),
+            _ => Err("this engine switches database by reconnecting".into()),
+        }
+    }
+
+    /// A SQL string literal. MySQL also treats backslash as an escape character by default.
+    fn lit(&self, s: &str) -> String {
+        let s = s.replace('\'', "''");
+        format!("'{}'", if matches!(self, Conn::My(_)) { s.replace('\\', "\\\\") } else { s })
+    }
+
+    /// Columns of `table` (`schema.table` for Postgres) in definition order.
+    pub async fn columns(&mut self, table: &str) -> Result<Vec<Column>, String> {
+        let sql = match self {
+            Conn::Pg(_) => {
+                let (schema, name) = table.split_once('.').unwrap_or(("public", table));
+                format!(
+                    "select c.column_name, c.udt_name || coalesce('(' || c.character_maximum_length || ')', ''), c.is_nullable, \
+                     c.column_default, case when exists (select 1 from information_schema.table_constraints t \
+                     join information_schema.key_column_usage k on k.constraint_name = t.constraint_name \
+                     and k.table_schema = t.table_schema and k.table_name = t.table_name \
+                     where t.constraint_type = 'PRIMARY KEY' and t.table_schema = c.table_schema \
+                     and t.table_name = c.table_name and k.column_name = c.column_name) then 'PRI' else '' end \
+                     from information_schema.columns c where c.table_schema = {} and c.table_name = {} order by c.ordinal_position",
+                    self.lit(schema),
+                    self.lit(name)
+                )
+            }
+            Conn::My(_) => format!(
+                "select column_name, column_type, is_nullable, column_default, column_key from information_schema.columns \
+                 where table_schema = database() and table_name = {} order by ordinal_position",
+                self.lit(table)
+            ),
+            Conn::Lite(_) => format!(
+                "select name, type, case when \"notnull\" then 'NO' else 'YES' end, dflt_value, \
+                 case when pk > 0 then 'PRI' else '' end from pragma_table_info({})",
+                self.lit(table)
+            ),
+        };
+        Ok(self
+            .query(&sql)
+            .await?
+            .rows
+            .into_iter()
+            .map(|r| Column {
+                name: r[0].clone().unwrap_or_default(),
+                data_type: r[1].clone().unwrap_or_default(),
+                nullable: r[2].as_deref() == Some("YES"),
+                default: r[3].clone(),
+                primary: r[4].as_deref() == Some("PRI"),
+            })
+            .collect())
+    }
+
     pub async fn tables(&mut self) -> Result<Vec<String>, String> {
         let sql = match self {
             Conn::Pg(_) => "select table_schema || '.' || table_name from information_schema.tables \
@@ -128,6 +228,33 @@ mod tests {
             assert_eq!(r.columns, ["id", "name"]);
             assert_eq!(r.rows, [vec![Some("1".into()), Some("a".into())], vec![Some("2".into()), None]]);
             assert_eq!(c.tables().await.unwrap(), ["t"]);
+            assert!(c.databases().await.unwrap().is_empty());
+            c.query("create table \"it's\"(id integer primary key, v text not null default 'x')").await.unwrap();
+            let cols = c.columns("it's").await.unwrap(); // quote in the name must not break the lookup
+            assert_eq!((cols[0].name.as_str(), cols[0].primary, cols[1].nullable), ("id", true, false));
+            assert_eq!(cols[1].default.as_deref(), Some("'x'"));
+            assert!(c.server_version().await.unwrap().starts_with("SQLite 3."));
+        });
+    }
+
+    /// Read-only check against local servers with default credentials: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn local_servers_without_database() {
+        tauri::async_runtime::block_on(async {
+            let mut my = super::Conn::open("mysql", "mysql://root@127.0.0.1:3306").await.unwrap();
+            assert_eq!(my.current_database().await.unwrap(), None);
+            assert!(my.databases().await.unwrap().contains(&"mysql".to_string()));
+            my.use_database("mysql").await.unwrap();
+            assert_eq!(my.current_database().await.unwrap().as_deref(), Some("mysql"));
+            assert!(!my.tables().await.unwrap().is_empty());
+            assert!(my.columns("user").await.unwrap().iter().any(|c| c.name == "Host" && c.primary));
+            println!("{}", my.server_version().await.unwrap());
+
+            let mut pg = super::Conn::open("postgres", "postgres://postgres@127.0.0.1:5432?sslmode=prefer").await.unwrap();
+            assert!(!pg.databases().await.unwrap().is_empty());
+            assert!(pg.columns("information_schema.tables").await.unwrap().iter().any(|c| c.name == "table_name"));
+            println!("{} · current {:?}", pg.server_version().await.unwrap(), pg.current_database().await.unwrap());
         });
     }
 }

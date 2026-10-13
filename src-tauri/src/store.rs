@@ -7,8 +7,16 @@ const SERVICE: &str = "dev.ritesh.dbmanager";
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Saved {
     pub name: String,
-    pub kind: String, // postgres | mysql | sqlite
+    pub kind: String, // postgres | mysql | mariadb | sqlite
     pub url: String,
+    #[serde(default)]
+    pub tag: String, // "" | local | development | staging | production
+    #[serde(default = "yes")]
+    pub confirm_writes: bool, // safe mode
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn file(dir: PathBuf) -> PathBuf {
@@ -29,10 +37,17 @@ fn entry(name: &str) -> Result<keyring::Entry, String> {
 }
 
 /// Saves or replaces by name. `password: None` keeps the stored one; `Some("")` removes it.
-pub fn save(dir: PathBuf, mut c: Saved, password: Option<String>) -> Result<(), String> {
+/// `previous` is the old name when renaming; its record goes and its keychain password moves over.
+pub fn save(dir: PathBuf, mut c: Saved, password: Option<String>, previous: Option<String>) -> Result<(), String> {
     if let Ok(mut u) = url::Url::parse(&c.url) {
         let _ = u.set_password(None); // never persist a password typed into the URL
         c.url = u.to_string();
+    }
+    if let Some(old) = previous.filter(|old| *old != c.name) {
+        if let Ok(pw) = entry(&old)?.get_password() {
+            entry(&c.name)?.set_password(&pw).map_err(|e| e.to_string())?;
+        }
+        delete(dir.clone(), &old)?;
     }
     match password.as_deref() {
         Some("") => { let _ = entry(&c.name)?.delete_credential(); }
@@ -55,8 +70,17 @@ pub fn delete(dir: PathBuf, name: &str) -> Result<(), String> {
 
 /// The URL to connect with: the saved URL plus the keychain password, if any.
 pub fn connect_url(c: &Saved) -> Result<String, String> {
-    let Ok(pw) = entry(&c.name)?.get_password() else { return Ok(c.url.clone()) };
-    let mut u = url::Url::parse(&c.url).map_err(|e| e.to_string())?;
-    u.set_password(Some(&pw)).map_err(|_| "this URL cannot hold a password".to_string())?;
+    match entry(&c.name)?.get_password() {
+        Ok(pw) => with_password(&c.url, &pw),
+        Err(_) => Ok(c.url.clone()),
+    }
+}
+
+pub fn with_password(url: &str, pw: &str) -> Result<String, String> {
+    if pw.is_empty() {
+        return Ok(url.to_string());
+    }
+    let mut u = url::Url::parse(url).map_err(|e| e.to_string())?;
+    u.set_password(Some(pw)).map_err(|_| "this URL cannot hold a password".to_string())?;
     Ok(u.to_string())
 }

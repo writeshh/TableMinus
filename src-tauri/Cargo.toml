@@ -25,7 +25,7 @@ serde_json = "1"
 tokio-postgres = "0.7.18"
 postgres-native-tls = "0.5.3"
 native-tls = "0.2.18"
-mysql_async = "0.37.1"
+mysql_async = { version = "0.37.1", features = ["native-tls-tls"] }
 url = "2.5.8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sqlparser = { version = "0.63.0", features = ["visitor"] }
