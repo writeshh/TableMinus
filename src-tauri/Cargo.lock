@@ -1051,6 +1051,7 @@ name = "db-manager"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "futures-util",
  "keyring",
  "mysql_async",
  "native-tls",

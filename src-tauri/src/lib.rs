@@ -394,13 +394,25 @@ async fn run_query(
     name: String,
     sql: String,
     confirmed: bool,
+    max_rows: Option<u32>,
 ) -> Result<db::QueryResult> {
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
     if live.saved.confirm_writes && !confirmed && !readonly::is_read_only(live.saved.kind, &sql) {
         return Err(Error::ConfirmRequired);
     }
-    let r = with_limit(live, query_limit(&prefs), move |c| Box::pin(async move { c.query(&sql).await })).await;
+    let max = max_rows.map(|n| n as usize);
+    let r =
+        with_limit(live, query_limit(&prefs), move |c| Box::pin(async move { c.query_limited(&sql, max).await })).await;
+    live.check(r)
+}
+
+/// Every table's columns, for editor autocomplete: (table, column) pairs.
+#[tauri::command]
+async fn schema(open: State<'_, Open>, name: String) -> Result<Vec<(String, String)>> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = live.conn.schema().await;
     live.check(r)
 }
 
@@ -448,7 +460,8 @@ pub fn run() -> tauri::Result<()> {
             disconnect,
             update_rows,
             run_query,
-            browse
+            browse,
+            schema
         ])
         .run(tauri::generate_context!())
 }

@@ -89,6 +89,8 @@ pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub affected: u64,
+    /// The row limit cut the result short.
+    pub truncated: bool,
 }
 
 /// A way to stop a running query from outside its connection.
@@ -361,51 +363,100 @@ impl Conn {
 
     /// Runs SQL typed by the user and returns the last result set as text cells (None = NULL).
     pub async fn query(&mut self, sql: &str) -> Result<QueryResult> {
+        self.query_limited(sql, None).await
+    }
+
+    /// Like [`Conn::query`], but keeps at most `max_rows` rows of the result; `truncated` says more were there.
+    /// Rows past the limit are read and dropped, so memory stays bounded and the connection stays in step.
+    pub async fn query_limited(&mut self, sql: &str, max_rows: Option<usize>) -> Result<QueryResult> {
+        let max = max_rows.unwrap_or(usize::MAX);
+        let mut r = QueryResult::default();
         match self {
             // The simple-query (text) protocol renders every Postgres type as text, so no per-type decoding.
             Conn::Pg(c) => {
+                use futures_util::StreamExt;
                 use tokio_postgres::SimpleQueryMessage as M;
-                let mut r = QueryResult::default();
-                for msg in c.simple_query(sql).await? {
-                    match msg {
+                let stream = c.simple_query_raw(sql).await?;
+                futures_util::pin_mut!(stream);
+                while let Some(msg) = stream.next().await {
+                    match msg? {
+                        // Each statement's result replaces the previous one's: the last result set is shown.
                         M::RowDescription(cols) => {
                             r.columns = cols.iter().map(|c| c.name().to_string()).collect();
                             r.rows.clear();
+                            r.truncated = false;
                         }
-                        M::Row(row) => r.rows.push((0..row.len()).map(|i| row.get(i).map(String::from)).collect()),
+                        M::Row(row) if r.rows.len() < max => {
+                            r.rows.push((0..row.len()).map(|i| row.get(i).map(String::from)).collect());
+                        }
+                        M::Row(_) => r.truncated = true,
                         M::CommandComplete(n) => r.affected = n,
                         _ => {}
                     }
                 }
-                Ok(r)
             }
             Conn::My(c) => {
                 use mysql_async::prelude::Queryable;
                 let mut res = c.query_iter(sql).await?;
-                let columns = res.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
-                let rows: Vec<mysql_async::Row> = res.collect().await?;
-                let affected = res.affected_rows();
+                r.columns = res.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
+                while let Some(row) = res.next().await? {
+                    if r.rows.len() < max {
+                        r.rows.push(my_row(row));
+                    } else {
+                        r.truncated = true;
+                    }
+                }
+                r.affected = res.affected_rows();
                 res.drop_result().await?; // ponytail: only the first result set of a multi-statement query
-                let rows = rows.into_iter().map(my_row).collect();
-                Ok(QueryResult { columns, rows, affected })
             }
             Conn::Lite(c) => {
-                // ponytail: SQLite runs only the first statement; use execute_batch if scripts are needed.
+                // SQLite prepares one statement at a time; the editor sends scripts statement by statement.
                 let mut st = c.prepare(sql)?;
-                let columns: Vec<String> = st.column_names().into_iter().map(String::from).collect();
-                if columns.is_empty() {
-                    let n = st.execute([])?;
-                    return Ok(QueryResult { affected: n as u64, ..Default::default() });
+                r.columns = st.column_names().into_iter().map(String::from).collect();
+                if r.columns.is_empty() {
+                    r.affected = st.execute([])? as u64;
+                    return Ok(r);
                 }
-                let n = columns.len();
-                let rows = st
-                    .query_map([], |r| {
-                        (0..n).map(|i| r.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<Vec<_>>>()
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(QueryResult { columns, rows, affected: 0 })
+                let n = r.columns.len();
+                let mut rows = st.query([])?;
+                while let Some(row) = rows.next()? {
+                    if r.rows.len() == max {
+                        r.truncated = true; // SQLite steps lazily, so there's nothing more to read
+                        break;
+                    }
+                    r.rows.push((0..n).map(|i| row.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<Vec<_>>>()?);
+                }
             }
         }
+        Ok(r)
+    }
+
+    /// Every table's columns in the current database, for autocomplete: (table, column) pairs in column order.
+    /// Postgres tables are `schema.table`.
+    pub async fn schema(&mut self) -> Result<Vec<(String, String)>> {
+        let sql = match self {
+            Conn::Pg(_) => {
+                "select table_schema || '.' || table_name, column_name from information_schema.columns \
+                 where table_schema not in ('pg_catalog', 'information_schema') \
+                 order by table_schema, table_name, ordinal_position"
+            }
+            Conn::My(_) => {
+                "select table_name, column_name from information_schema.columns where table_schema = database() \
+                 order by table_name, ordinal_position"
+            }
+            Conn::Lite(_) => {
+                "select m.name, p.name from sqlite_master m join pragma_table_info(m.name) p \
+                 where m.type in ('table', 'view') order by m.name, p.cid"
+            }
+        };
+        let r = self.query(sql).await?;
+        Ok(r.rows
+            .into_iter()
+            .filter_map(|mut row| {
+                let column = row.pop().flatten()?;
+                Some((row.pop().flatten()?, column))
+            })
+            .collect())
     }
 
     /// The placeholder for the `n`th (1-based) bound parameter.
@@ -726,6 +777,30 @@ mod tests {
     }
 
     #[test]
+    fn query_limited_should_cap_rows_and_say_so() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            let sql = "with recursive n(x) as (select 1 union all select x + 1 from n where x < 50) select x from n";
+            let r = c.query_limited(sql, Some(10)).await.unwrap();
+            assert_eq!((r.rows.len(), r.truncated), (10, true));
+            let r = c.query_limited(sql, Some(50)).await.unwrap();
+            assert_eq!((r.rows.len(), r.truncated), (50, false));
+        });
+    }
+
+    #[test]
+    fn schema_should_list_columns_per_table_in_order() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            c.query("create table b(y text, x text)").await.unwrap();
+            c.query("create table a(id integer)").await.unwrap();
+            let pairs = c.schema().await.unwrap();
+            let pairs: Vec<(&str, &str)> = pairs.iter().map(|(t, col)| (t.as_str(), col.as_str())).collect();
+            assert_eq!(pairs, [("a", "id"), ("b", "y"), ("b", "x")]);
+        });
+    }
+
+    #[test]
     fn open_runs_the_startup_sql() {
         tauri::async_runtime::block_on(async {
             let options = super::Options {
@@ -851,6 +926,9 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let mut my = open(Engine::Mysql, "mysql://root@127.0.0.1:3306").await;
             assert_eq!(my.current_database().await.unwrap(), None);
+            let r = my.query_limited("select * from information_schema.columns", Some(5)).await.unwrap();
+            assert_eq!((r.rows.len(), r.truncated), (5, true));
+            assert_eq!(my.query("select 1").await.unwrap().rows[0][0].as_deref(), Some("1"), "still in step");
             assert!(my.databases().await.unwrap().contains(&"mysql".to_string()));
             my.use_database("mysql").await.unwrap();
             assert_eq!(my.current_database().await.unwrap().as_deref(), Some("mysql"));

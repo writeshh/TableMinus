@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { createEditor } from "./editor";
+import { createEditor, type Schema } from "./editor";
 import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
@@ -21,7 +21,7 @@ const OPTIONS_DEFAULT: Options = {
   socket: "", sni: "", cleartext_auth: false,
 };
 type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean; ssh?: Ssh; tls?: Tls; options?: Options };
-type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number };
+type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number; truncated?: boolean };
 type Engine = {
   kind: string;
   label: string;
@@ -58,7 +58,8 @@ const editor = createEditor($("sql"), {
     if (tab?.kind === "sql") tab.sql = doc;
   },
   cursor: () => updateCursor(),
-  run: () => runEditor(),
+  runCurrent: () => runCurrent(),
+  runAll: () => runAll(),
 });
 
 let saved: Saved[] = [];
@@ -416,6 +417,7 @@ async function reconnect() {
     tables = info.tables;
     columnsCache.clear();
     renderTables();
+    loadSchema();
     status(`Reconnected · ${info.server}`, "done");
   } catch (e) {
     status(String(e), "error");
@@ -499,7 +501,8 @@ function applyInfo(i: Info) {
   btn.title = `Open a database (${shortcut})`;
   $<HTMLInputElement>("filter").value = "";
   $<HTMLInputElement>("filter").hidden = !tables.length;
-  editor.setDialect(active!.kind, tables); // before the new tab's state is created
+  editor.setDialect(active!.kind, new Map(tables.map((t) => [t, []]))); // before the new tab's state is created
+  loadSchema();
   tabs = [];
   shownId = 0;
   openSqlTab();
@@ -1099,6 +1102,22 @@ function ask(text: string, detail: string, okLabel: string): Promise<boolean> {
   });
 }
 
+/** Columns for every table, for autocomplete. Runs in the background; the editor works without it meanwhile. */
+async function loadSchema() {
+  if (!active) return;
+  const conn = active;
+  try {
+    const pairs = await invoke<[string, string][]>("schema", { name: conn.name });
+    if (active !== conn) return; // switched connections meanwhile
+    const schema: Schema = new Map(tables.map((t) => [t, []]));
+    for (const [table, column] of pairs) (schema.get(table) ?? schema.set(table, []).get(table)!).push(column);
+    editor.setDialect(conn.kind, schema);
+  } catch {} // autocomplete just keeps table names
+}
+
+const fmt = (n: number) => n.toLocaleString();
+const rowLimit = () => settings.sqlLimit || null;
+
 /** Runs SQL from the current SQL tab; the result and status stay with that tab. */
 async function run(sql: string, confirmed = false) {
   const tab = current();
@@ -1110,11 +1129,12 @@ async function run(sql: string, confirmed = false) {
   say("Running…", "busy");
   const t0 = performance.now();
   try {
-    const r = await call<QueryResult>("run_query", { name: active.name, sql, confirmed });
+    const r = await call<QueryResult>("run_query", { name: active.name, sql, confirmed, maxRows: rowLimit() });
     tab.result = r;
     if (tab.id === currentId) render(r, 0);
     const ms = Math.round(performance.now() - t0);
-    say(r.columns.length ? `${r.rows.length} rows · ${ms} ms` : `${r.affected} rows affected · ${ms} ms`, "done");
+    const limited = r.truncated ? ` (first ${fmt(r.rows.length)}; raise the row limit to see more)` : "";
+    say(r.columns.length ? `${fmt(r.rows.length)} rows${limited} · ${ms} ms` : `${fmt(r.affected)} rows affected · ${ms} ms`, "done");
     addHistory(sql);
   } catch (e) {
     if (e !== "CONFIRM") return say(String(e), "error");
@@ -1122,6 +1142,48 @@ async function run(sql: string, confirmed = false) {
     if (await ask(`This may change data on "${active.name}".`, sql.trim(), "Run anyway")) return run(sql, true);
     say("Cancelled", "");
   }
+}
+
+const runCurrent = () => run(editor.current());
+
+/** Runs each statement in turn, stopping at the first error; the last result is shown. Safe mode asks once. */
+async function runAll() {
+  const tab = current();
+  const statements = editor.all();
+  if (!active || tab?.kind !== "sql" || !statements.length) return;
+  if (statements.length === 1) return run(statements[0].text);
+  const say = (text: string, kind: StatusKind) => {
+    tab.status = [text, kind];
+    if (tab.id === currentId) status(text, kind);
+  };
+  const t0 = performance.now();
+  let confirmed = false;
+  let affected = 0;
+  for (let i = 0; i < statements.length; i++) {
+    const sql = statements[i].text;
+    say(`Running ${i + 1} of ${statements.length}…`, "busy");
+    try {
+      const r = await call<QueryResult>("run_query", { name: active.name, sql, confirmed, maxRows: rowLimit() });
+      affected += r.affected;
+      if (r.columns.length || i === statements.length - 1) {
+        tab.result = r;
+        if (tab.id === currentId) render(r, 0);
+      }
+      addHistory(sql);
+    } catch (e) {
+      if (e !== "CONFIRM" || confirmed) return say(`Statement ${i + 1} of ${statements.length} failed: ${e}`, "error");
+      say("", "");
+      const rest = statements.slice(i).map((x) => x.text).join(";\n");
+      if (!(await ask(`These statements may change data on "${active.name}".`, rest, "Run anyway"))) {
+        return say(`Cancelled before statement ${i + 1}`, "");
+      }
+      confirmed = true;
+      i--; // run this statement again, confirmed
+    }
+  }
+  const ms = Math.round(performance.now() - t0);
+  const cut = tab.result?.truncated ? ` · last result cut at ${fmt(tab.result.rows.length)} rows` : "";
+  say(`${statements.length} statements · ${fmt(affected)} rows affected${cut} · ${ms} ms`, "done");
 }
 
 const numeric = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i;
@@ -1469,9 +1531,12 @@ document.addEventListener("keydown", (e) => {
 type Settings = {
   theme: "auto" | "light" | "dark"; zebra: boolean; fontSize: number; lineHeight: number; indent: "tab" | "2" | "4";
   safeDefault: boolean; queryTimeout: number; keepAlive: boolean;
+  /** Most rows an editor query shows; 0 = no limit. */
+  sqlLimit: number;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeDefault: true, queryTimeout: 300, keepAlive: true,
+  sqlLimit: 1000,
 };
 let settings: Settings = loadSettings();
 
@@ -1508,6 +1573,7 @@ function applySettings() {
   $<HTMLSelectElement>("safe-default").value = settings.safeDefault ? "1" : "0";
   $<HTMLInputElement>("query-timeout").value = String(settings.queryTimeout);
   $<HTMLInputElement>("keep-alive").checked = settings.keepAlive;
+  $<HTMLSelectElement>("row-limit").value = String(settings.sqlLimit);
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
   invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout }).catch(() => {});
 }
@@ -1571,8 +1637,10 @@ $("back").onclick = closeWorkspace;
 $("filter").addEventListener("input", renderTables);
 
 $("keys").textContent = navigator.userAgent.includes("Mac") ? "⌘↵" : "Ctrl+↵";
-const runEditor = () => run(editor.selectionOrAll());
-$("run").onclick = runEditor;
+$("run").onclick = runCurrent;
+$("run-all").onclick = runAll;
+$("keys-all").textContent = navigator.userAgent.includes("Mac") ? "⌘⇧↵" : "Ctrl+Shift+↵";
+$<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));
 
 show("home");
 refresh();
