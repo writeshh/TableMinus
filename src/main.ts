@@ -9,6 +9,7 @@ import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
 import { MIN_WIDTH, layoutCss, loadLayout, saveLayout, type Layout } from "./columns";
+import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -1731,7 +1732,7 @@ function applySettings() {
   $<HTMLInputElement>("keep-tabs").checked = settings.keepTabs;
   editor.setDisplay(settings.wrapLines, settings.showInvisibles);
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
-  invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout }).catch(() => {});
+  invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout, maxRows: settings.sqlLimit }).catch(() => {});
 }
 
 function showTab(tab: string) {

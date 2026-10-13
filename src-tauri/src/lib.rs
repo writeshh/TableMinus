@@ -3,6 +3,7 @@
 mod browse;
 mod db;
 mod error;
+mod mcp;
 mod readonly;
 mod ssh;
 mod store;
@@ -12,28 +13,40 @@ use db::Engine;
 use error::{Error, Result};
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State, async_runtime::Mutex};
 
-/// Settings the UI keeps and hands over at startup and on every change.
+/// Settings the UI keeps and hands over at startup and on every change. Clones share the values (the MCP
+/// server holds one).
+#[derive(Clone)]
 struct Prefs {
-    keep_alive: AtomicBool,
+    keep_alive: Arc<AtomicBool>,
     /// 0 means no limit.
-    query_timeout_secs: AtomicU64,
+    query_timeout_secs: Arc<AtomicU64>,
+    /// The editor's row limit, which MCP queries follow too; 0 means no limit.
+    max_rows: Arc<AtomicU64>,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { keep_alive: AtomicBool::new(true), query_timeout_secs: AtomicU64::new(300) }
+        Prefs {
+            keep_alive: Arc::new(AtomicBool::new(true)),
+            query_timeout_secs: Arc::new(AtomicU64::new(300)),
+            max_rows: Arc::new(AtomicU64::new(1000)),
+        }
     }
 }
 
 #[tauri::command]
 #[expect(clippy::needless_pass_by_value, reason = "Tauri hands command arguments over by value")]
-fn set_preferences(prefs: State<'_, Prefs>, keep_alive: bool, query_timeout_secs: u64) {
+fn set_preferences(prefs: State<'_, Prefs>, keep_alive: bool, query_timeout_secs: u64, max_rows: Option<u64>) {
     prefs.keep_alive.store(keep_alive, Ordering::Relaxed);
     prefs.query_timeout_secs.store(query_timeout_secs, Ordering::Relaxed);
+    if let Some(n) = max_rows {
+        prefs.max_rows.store(n, Ordering::Relaxed);
+    }
 }
 
 /// Every 30 s, pings each open connection when keep-alive is on. A connection that doesn't answer is reported
@@ -97,8 +110,8 @@ async fn open_db(
 }
 
 /// Opens a saved connection by name, with its keychain secrets.
-async fn open_saved(app: &AppHandle, name: &str) -> Result<Live> {
-    let saved = store::load(&dir(app)?)?
+async fn open_saved(dir: &std::path::Path, name: &str) -> Result<Live> {
+    let saved = store::load(dir)?
         .into_iter()
         .find(|c| c.name == name)
         .ok_or_else(|| Error::NoSuchConnection(name.to_string()))?;
@@ -131,8 +144,9 @@ async fn info(live: &mut Live) -> Result<Info> {
 
 // ponytail: one lock for all open connections serialises queries across them, and SQLite's blocking calls
 // run on the async runtime; per-connection locks plus spawn_blocking if either hurts.
-#[derive(Default)]
-struct Open(Mutex<HashMap<String, Live>>);
+/// The open connections by name. Clones share the map (the MCP server holds one).
+#[derive(Default, Clone)]
+struct Open(Arc<Mutex<HashMap<String, Live>>>);
 
 fn dir(app: &AppHandle) -> Result<std::path::PathBuf> {
     Ok(app.path().app_config_dir()?)
@@ -202,7 +216,7 @@ async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<
             other => return other,
         }
     }
-    let live = open.entry(name.clone()).or_insert(open_saved(&app, &name).await?);
+    let live = open.entry(name.clone()).or_insert(open_saved(&dir(&app)?, &name).await?);
     info(live).await
 }
 
@@ -215,7 +229,7 @@ async fn reconnect(app: AppHandle, open: State<'_, Open>, name: String) -> Resul
         Some(mut old) => old.conn.current_database().await.ok().flatten(), // a dead connection can't say
         None => None,
     };
-    let mut live = open_saved(&app, &name).await?;
+    let mut live = open_saved(&dir(&app)?, &name).await?;
     if let Some(db) = database {
         // A database dropped meanwhile isn't worth failing the reconnect over; the default one stays.
         let _ = switch_database(&mut live, &db).await;
@@ -461,13 +475,15 @@ async fn browse(
 /// When the window or webview can't be created.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> tauri::Result<()> {
+    let (open, prefs) = (Open::default(), Prefs::default());
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(Open::default())
-        .manage(Prefs::default())
+        .manage(open.clone())
+        .manage(prefs.clone())
         .setup(|app| {
             tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
+            mcp::setup(app.handle(), open, prefs)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -488,7 +504,14 @@ pub fn run() -> tauri::Result<()> {
             browse,
             schema,
             read_text_file,
-            write_text_file
+            write_text_file,
+            mcp::mcp_status,
+            mcp::mcp_configure,
+            mcp::mcp_create_token,
+            mcp::mcp_revoke_token,
+            mcp::mcp_activity,
+            mcp::mcp_clear_activity,
+            mcp::mcp_answer
         ])
         .run(tauri::generate_context!())
 }
