@@ -502,6 +502,23 @@ mod tests {
         });
     }
 
+    /// The requests importexport.ts sends, as captured from the dialog.
+    #[test]
+    fn export_requests_from_the_ui_should_deserialize() {
+        let tables = r#"{"items":[{"path":"/x/people.sql","source":{"table":"people"}}],
+            "format":{"sql":{"structure":true,"drop":true,"content":true}},"gzip":false}"#;
+        assert!(matches!(serde_json::from_str::<Export>(tables).unwrap().format, Format::Sql(_)));
+        let rows = r#"{"items":[{"path":"/x/p.json","source":{"rows":{"request":{"table":"people","filters":[],
+            "combine":"and","sort":[],"limit":300,"offset":0,"count":false},"page":true}}}],"format":"json","gzip":true}"#;
+        assert!(serde_json::from_str::<Export>(rows).unwrap().gzip);
+        let query = r#"{"items":[{"path":"/x/q.csv","source":{"query":{"sql":"select 1","table":"t"}}}],
+            "format":{"csv":{"delimiter":"\t","quote_all":false,"crlf":true,"header":true,"null_empty":true}},"gzip":false}"#;
+        assert!(matches!(
+            serde_json::from_str::<Export>(query).unwrap().format,
+            Format::Csv(Csv { delimiter: '\t', .. })
+        ));
+    }
+
     #[test]
     fn mysql_literals_should_double_backslashes() {
         assert_eq!(super::literal(true, Some("a\\'b")), "'a\\\\''b'");

@@ -601,6 +601,17 @@ mod tests {
         vec![Some(id.into()), Some(name.into()), note.map(String::from)]
     }
 
+    /// The requests importexport.ts sends, as captured from the wizard.
+    #[test]
+    fn import_requests_from_the_ui_should_deserialize() {
+        let csv = r#"{"path":"/x/people.csv","format":{"csv":{"delimiter":",","quote":"\"","header":true,"empty_is_null":true}},
+            "table":"people","columns":["id","Name",null],"create":false,"conflict":"stop"}"#;
+        assert_eq!(serde_json::from_str::<Import>(csv).unwrap().columns[2], None);
+        let json = r#"{"path":"/x/o.json","format":"json","table":"orders","columns":["id","name"],"create":true,"conflict":"update"}"#;
+        let imp = serde_json::from_str::<Import>(json).unwrap();
+        assert!(imp.create && imp.conflict == Conflict::Update);
+    }
+
     #[test]
     fn csv_preview_should_read_quotes_line_breaks_and_a_bom() {
         let p = file("preview.csv", "\u{feff}id,name,note\r\n1,\"O\"\"Hara, Jr\",\"a\nb\"\r\n\r\n2,Bo,\n");
