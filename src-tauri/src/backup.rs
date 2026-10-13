@@ -835,7 +835,7 @@ pub async fn start_restore(app: AppHandle, name: String, request: RestoreRequest
 
 #[tauri::command]
 #[expect(clippy::needless_pass_by_value, reason = "Tauri hands command arguments over by value")]
-pub fn cancel_job(jobs: State<'_, Jobs>, id: u64) {
+pub fn cancel_backup(jobs: State<'_, Jobs>, id: u64) {
     if let Some(stop) = lock(&jobs.running).get(&id) {
         stop.cancel();
     }

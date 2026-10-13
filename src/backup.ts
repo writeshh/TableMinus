@@ -209,7 +209,7 @@ function addJob(id: number, title: string, file: string) {
   const line = el("div", { className: "job-line" });
   const bar = el("progress");
   const button = el("button", { type: "button", className: "icon", textContent: "Cancel" });
-  button.onclick = () => invoke("cancel_job", { id });
+  button.onclick = () => invoke("cancel_backup", { id });
   const root = el("div", { className: "job" }, el("div", { className: "job-head" }, el("strong", { textContent: title }), el("span", { className: "spacer" }), button),
     el("div", { className: "job-file", textContent: file }), bar, el("div", { className: "job-meta" }, bytes), line);
   panel.append(root);

@@ -72,6 +72,10 @@ pub enum Error {
     NoTools { tool: &'static str, server: String, found: String },
     #[error("cancelled")]
     Cancelled,
+    #[error("statement {n}: {source}")]
+    Statement { n: u64, source: Box<Error> },
+    #[error("not a JSON array of objects: {0}")]
+    JsonImport(serde_json::Error),
     #[error("the SSH server could not reach {host}:{port}: {reason}")]
     SshForward { host: String, port: u16, reason: String },
 }

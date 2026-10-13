@@ -5,6 +5,9 @@ mod browse;
 mod db;
 mod ddl;
 mod error;
+mod export;
+mod import;
+mod jobs;
 mod mcp;
 mod processes;
 mod readonly;
@@ -542,6 +545,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(prefs.clone())
         .manage(backup::Jobs::default())
         .manage(processes::Sessions::default())
+        .manage(jobs::Jobs::default())
         .setup(|app| {
             tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
             mcp::setup(app.handle(), open, prefs)?;
@@ -574,7 +578,7 @@ pub fn run() -> tauri::Result<()> {
             backup::backup_setup,
             backup::start_backup,
             backup::start_restore,
-            backup::cancel_job,
+            backup::cancel_backup,
             processes::processes,
             processes::kill_process,
             processes::close_processes,
@@ -584,7 +588,12 @@ pub fn run() -> tauri::Result<()> {
             mcp::mcp_revoke_token,
             mcp::mcp_activity,
             mcp::mcp_clear_activity,
-            mcp::mcp_answer
+            mcp::mcp_answer,
+            jobs::start_export,
+            jobs::start_import,
+            jobs::start_sql_import,
+            jobs::preview_import,
+            jobs::cancel_job
         ])
         .run(tauri::generate_context!())
 }

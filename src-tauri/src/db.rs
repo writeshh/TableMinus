@@ -143,6 +143,29 @@ impl Dialect {
     }
 }
 
+/// A quoted identifier for code that only knows whether it's MySQL; [`Dialect::ident`] does the quoting.
+pub(crate) fn quote_ident(mysql: bool, name: &str) -> String {
+    if mysql { Dialect::My.ident(name) } else { Dialect::Pg.ident(name) }
+}
+
+/// Receives a query result as it arrives: the column names once, then each row.
+pub(crate) trait RowSink {
+    fn columns(&mut self, names: Vec<String>) -> Result<()>;
+    fn row(&mut self, row: Vec<Option<String>>) -> Result<()>;
+}
+
+/// Feeds a MySQL result to `sink` row by row.
+async fn my_stream<P: mysql_async::prelude::Protocol>(
+    mut res: mysql_async::QueryResult<'_, '_, P>,
+    sink: &mut dyn RowSink,
+) -> Result<()> {
+    sink.columns(res.columns_ref().iter().map(|c| c.name_str().into_owned()).collect())?;
+    while let Some(row) = res.next().await? {
+        sink.row(my_row(row))?;
+    }
+    Ok(())
+}
+
 // ponytail: an enum over three engines, not a Driver trait; extract a trait when a 4th engine needs it.
 pub enum Conn {
     Pg(tokio_postgres::Client),
@@ -508,7 +531,7 @@ impl Conn {
     }
 
     /// Runs one statement with bound parameters and returns the rows it affected.
-    async fn execute_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<u64> {
+    pub(crate) async fn execute_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<u64> {
         match self {
             Conn::Pg(c) => {
                 let params: Vec<PgText> = params.iter().copied().map(PgText).collect();
@@ -556,6 +579,63 @@ impl Conn {
                 Ok(rows)
             }
         }
+    }
+
+    /// Runs one query and hands its rows to `sink` as they arrive, so a large result never sits in memory. An
+    /// error from the sink stops the query. With `params` on Postgres, every selected column must be text (as for
+    /// [`Conn::fetch_with`]); without, any query works.
+    pub(crate) async fn stream(&mut self, sql: &str, params: &[Option<&str>], sink: &mut dyn RowSink) -> Result<()> {
+        use futures_util::StreamExt;
+        match self {
+            Conn::Pg(c) if params.is_empty() => {
+                use tokio_postgres::SimpleQueryMessage as M;
+                let stream = c.simple_query_raw(sql).await?;
+                futures_util::pin_mut!(stream);
+                let mut described = false;
+                while let Some(msg) = stream.next().await {
+                    match msg? {
+                        M::RowDescription(_) if described => {
+                            return Err(Error::Invalid("export one statement at a time"));
+                        }
+                        M::RowDescription(cols) => {
+                            described = true;
+                            sink.columns(cols.iter().map(|c| c.name().to_string()).collect())?;
+                        }
+                        M::Row(row) => sink.row((0..row.len()).map(|i| row.get(i).map(String::from)).collect())?,
+                        _ => {}
+                    }
+                }
+            }
+            Conn::Pg(c) => {
+                let st = c.prepare(sql).await?;
+                sink.columns(st.columns().iter().map(|c| c.name().to_string()).collect())?;
+                let params: Vec<PgText> = params.iter().copied().map(PgText).collect();
+                let stream = c.query_raw(&st, params).await?;
+                futures_util::pin_mut!(stream);
+                while let Some(row) = stream.next().await {
+                    let row = row?;
+                    sink.row((0..row.len()).map(|i| row.try_get(i)).collect::<std::result::Result<_, _>>()?)?;
+                }
+            }
+            Conn::My(c) if params.is_empty() => {
+                // The text protocol: some statements (SHOW …) can't be prepared.
+                my_stream(mysql_async::prelude::Queryable::query_iter(c, sql).await?, sink).await?;
+            }
+            Conn::My(c) => {
+                let params: Vec<_> = params.iter().copied().map(mysql_async::Value::from).collect();
+                my_stream(mysql_async::prelude::Queryable::exec_iter(c, sql, params).await?, sink).await?;
+            }
+            Conn::Lite(c) => {
+                let mut st = c.prepare(sql)?;
+                let n = st.column_count();
+                sink.columns(st.column_names().into_iter().map(String::from).collect())?;
+                let mut rows = st.query(rusqlite::params_from_iter(params))?;
+                while let Some(row) = rows.next()? {
+                    sink.row((0..n).map(|i| row.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<_>>()?)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn scalar(&mut self, sql: &str) -> Result<Option<String>> {

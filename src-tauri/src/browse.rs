@@ -5,7 +5,7 @@ use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 /// The most rows one page may ask for.
-const MAX_PAGE: u32 = 100_000;
+pub(crate) const MAX_PAGE: u32 = 100_000;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -173,8 +173,8 @@ impl Conn {
         }
     }
 
-    /// One page of `req.table`. Column names in filters and sorts must belong to the table; values are bound.
-    pub async fn browse(&mut self, req: &Browse) -> Result<Page> {
+    /// The queries behind a browse request, without paging: its rows (filtered and sorted) and their count.
+    pub(crate) async fn select(&mut self, req: &Browse) -> Result<Select> {
         let columns: Vec<String> = self.columns(&req.table).await?.into_iter().map(|c| c.name).collect();
         if columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
@@ -205,21 +205,45 @@ impl Conn {
             })
             .collect();
         let from = self.table_ident(&req.table);
+        let count = if matches!(self, Conn::Pg(_)) { "count(*)::text" } else { "count(*)" };
+        Ok(Select {
+            rows: format!("select {} from {from}{filter}{order}", select.join(", ")),
+            count: format!("select {count} from {from}{filter}"),
+            columns,
+            params,
+        })
+    }
+
+    /// The total from a [`Select::count`] query.
+    pub(crate) async fn count(&mut self, s: &Select) -> Result<Option<u64>> {
+        let r = self.fetch_with(&s.count, &s.bound()).await?;
+        Ok(r.first().and_then(|row| row.first().cloned().flatten()).and_then(|n| n.parse().ok()))
+    }
+
+    /// One page of `req.table`. Column names in filters and sorts must belong to the table; values are bound.
+    pub async fn browse(&mut self, req: &Browse) -> Result<Page> {
+        let s = self.select(req).await?;
         // Limit and offset are numbers from the request type, so they're written in, not bound: MySQL refuses
         // string parameters there.
-        let limit = req.limit.min(MAX_PAGE);
-        let sql =
-            format!("select {} from {from}{filter}{order} limit {limit} offset {}", select.join(", "), req.offset);
-        let bound: Vec<Option<&str>> = params.iter().map(|p| Some(p.as_str())).collect();
-        let rows = self.fetch_with(&sql, &bound).await?;
-        let total = if req.count {
-            let count = if matches!(self, Conn::Pg(_)) { "count(*)::text" } else { "count(*)" };
-            let r = self.fetch_with(&format!("select {count} from {from}{filter}"), &bound).await?;
-            r.first().and_then(|row| row.first().cloned().flatten()).and_then(|n| n.parse().ok())
-        } else {
-            None
-        };
-        Ok(Page { columns, rows, total })
+        let sql = format!("{} limit {} offset {}", s.rows, req.limit.min(MAX_PAGE), req.offset);
+        let rows = self.fetch_with(&sql, &s.bound()).await?;
+        let total = if req.count { self.count(&s).await? } else { None };
+        Ok(Page { columns: s.columns, rows, total })
+    }
+}
+
+/// The SQL for a browse request: see [`Conn::select`].
+pub(crate) struct Select {
+    pub columns: Vec<String>,
+    /// Every matching row, sorted; add `limit … offset …` for a page.
+    pub rows: String,
+    pub count: String,
+    pub params: Vec<String>,
+}
+
+impl Select {
+    pub fn bound(&self) -> Vec<Option<&str>> {
+        self.params.iter().map(|p| Some(p.as_str())).collect()
     }
 }
 

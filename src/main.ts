@@ -13,6 +13,7 @@ import { dropDraft, initStructure, saveStructure, showStructure, sidebarMenu, st
 import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
+import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -718,7 +719,7 @@ function renderTables() {
       const row = el("div", { className: "tree-row", title: t }, chevron, el("span", { className: "tbl-icon" }), el("span", { className: "label", textContent: t }));
       row.classList.toggle("active", t === open);
       row.onclick = () => openTable(t);
-      row.oncontextmenu = (e) => (e.stopPropagation(), contextMenu(e, tableMenu(t)));
+      row.oncontextmenu = (e) => (e.stopPropagation(), contextMenu(e, [...tableMenu(t), "-", ...transferMenu(t)]));
       const li = el("li", {}, row);
       if (isOpen)
         li.append(
@@ -809,6 +810,8 @@ type SqlTab = {
   id: number; kind: "sql"; title: string; sql: string; state?: EditorState; result?: QueryResult; status?: [string, StatusKind];
   /** The .sql file the tab was opened from or saved to. */
   path?: string;
+  /** The statement behind `result`, for exporting it. */
+  ran?: string;
 };
 type Sort = { column: string; desc: boolean };
 type TableTab = {
@@ -1251,6 +1254,7 @@ async function run(sql: string, confirmed = false) {
   try {
     const r = await call<QueryResult>("run_query", { name: active.name, sql, confirmed, maxRows: rowLimit() });
     tab.result = r;
+    tab.ran = sql;
     if (tab.id === currentId) render(r, 0);
     const ms = Math.round(performance.now() - t0);
     const limited = r.truncated ? ` (first ${fmt(r.rows.length)}; raise the row limit to see more)` : "";
@@ -1336,6 +1340,7 @@ async function runAll() {
       affected += r.affected;
       if (r.columns.length || i === statements.length - 1) {
         tab.result = r;
+        tab.ran = sql;
         if (tab.id === currentId) render(r, 0);
       }
       addHistory(sql);
@@ -1692,6 +1697,52 @@ initStructure({
   note,
   pendingChanged: () => current() && showPending(current()!),
 });
+
+// ---------- Import and export (importexport.ts) ----------
+
+function transferCtx(): TransferCtx {
+  return {
+    conn: active!.name,
+    database: info?.database ?? "",
+    tables,
+    columns: async (table) => (await loadColumns(table)).map((c) => c.name),
+    confirm: confirmDialog,
+    imported: async (table) => {
+      // A new table appears in the sidebar; an open tab of the table shows the new rows.
+      try {
+        tables = (await call<Info>("connect", { name: active!.name })).tables;
+        if (info) info.tables = tables;
+        columnsCache.delete(table);
+        renderTables();
+        for (const t of tabs) if (t.kind === "table" && t.table === table) (t.total = undefined), loadTable(t);
+      } catch {} // the import itself is done; a stale sidebar is all that's left
+    },
+  };
+}
+
+function transferMenu(table: string): MenuItem[] {
+  return [
+    ["Export…", () => exportDialog(transferCtx(), { kind: "tables", tables: [table] })],
+    "-",
+    ["Import from CSV…", () => importFile(transferCtx(), "csv", table)],
+    ["Import from JSON…", () => importFile(transferCtx(), "json", table)],
+    ["Import from SQL…", () => importFile(transferCtx(), "sql", table)],
+  ];
+}
+
+$("export-table").onclick = () => {
+  const tab = current();
+  if (tab?.kind !== "table" || !active) return;
+  const request = { table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort, limit: PAGE, offset: tab.page * PAGE, count: false };
+  const source: ExportSource = { kind: "rows", request, pageRows: tab.result?.rows.length ?? 0 };
+  exportDialog(transferCtx(), source);
+};
+$("export-result").onclick = () => {
+  const tab = current();
+  if (tab?.kind !== "sql" || !active) return;
+  if (!tab.ran || !tab.result?.columns.length) return status("Run a query first; its result is exported by running it again.", "error");
+  exportDialog(transferCtx(), { kind: "query", sql: tab.ran });
+};
 $("columns-button").onclick = () => (menuClose ? menuClose() : showColumnsMenu());
 $("page-prev").onclick = () => turnPage(-1);
 $("page-next").onclick = () => turnPage(1);
