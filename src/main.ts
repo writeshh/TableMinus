@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { createEditor, type Schema } from "./editor";
+import { createEditor, type FormatStyle, type Schema } from "./editor";
 import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
@@ -60,7 +60,16 @@ const editor = createEditor($("sql"), {
   cursor: () => updateCursor(),
   runCurrent: () => runCurrent(),
   runAll: () => runAll(),
+  format: () => formatSql(),
 });
+
+function formatSql() {
+  try {
+    editor.format(settings.formatStyle);
+  } catch (e) {
+    status(`Couldn't format: ${e instanceof Error ? e.message.split("\n")[0] : e}`, "error");
+  }
+}
 
 let saved: Saved[] = [];
 let active: Saved | null = null;
@@ -1533,10 +1542,11 @@ type Settings = {
   safeDefault: boolean; queryTimeout: number; keepAlive: boolean;
   /** Most rows an editor query shows; 0 = no limit. */
   sqlLimit: number;
+  formatStyle: FormatStyle;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeDefault: true, queryTimeout: 300, keepAlive: true,
-  sqlLimit: 1000,
+  sqlLimit: 1000, formatStyle: "standard",
 };
 let settings: Settings = loadSettings();
 
@@ -1574,6 +1584,7 @@ function applySettings() {
   $<HTMLInputElement>("query-timeout").value = String(settings.queryTimeout);
   $<HTMLInputElement>("keep-alive").checked = settings.keepAlive;
   $<HTMLSelectElement>("row-limit").value = String(settings.sqlLimit);
+  $<HTMLSelectElement>("format-style").value = settings.formatStyle;
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
   invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout }).catch(() => {});
 }
@@ -1639,6 +1650,9 @@ $("filter").addEventListener("input", renderTables);
 $("keys").textContent = navigator.userAgent.includes("Mac") ? "⌘↵" : "Ctrl+↵";
 $("run").onclick = runCurrent;
 $("run-all").onclick = runAll;
+$("format-sql").onclick = () => (formatSql(), editor.focus());
+$("keys-format").textContent = navigator.userAgent.includes("Mac") ? "⌘I" : "Ctrl+I";
+$<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
 $("keys-all").textContent = navigator.userAgent.includes("Mac") ? "⌘⇧↵" : "Ctrl+Shift+↵";
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));
 

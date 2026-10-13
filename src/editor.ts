@@ -6,6 +6,10 @@ import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/lang
 import { MariaSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
 import { tags as t } from "@lezer/highlight";
 import { statementAt, splitStatements, type Dialect, type Statement } from "./statements";
+import { formatDialect, mariadb, mysql, postgresql, sqlite } from "sql-formatter";
+
+const FORMAT_DIALECTS = { postgres: postgresql, mysql, mariadb, sqlite } as const;
+export type FormatStyle = "standard" | "tabularLeft" | "tabularRight";
 
 const DIALECTS = { postgres: PostgreSQL, mysql: MySQL, mariadb: MariaSQL, sqlite: SQLite } as const;
 
@@ -49,7 +53,7 @@ export type Editor = ReturnType<typeof createEditor>;
 /** The SQL editor. Each tab keeps its own EditorState (text + undo history); `setState` swaps them in. */
 export function createEditor(
   parent: HTMLElement,
-  on: { change: (doc: string) => void; cursor: () => void; runCurrent: () => void; runAll: () => void },
+  on: { change: (doc: string) => void; cursor: () => void; runCurrent: () => void; runAll: () => void; format: () => void },
 ) {
   const language = new Compartment();
   const indent = new Compartment();
@@ -91,6 +95,7 @@ export function createEditor(
       keymap.of([
         { key: "Mod-Enter", run: () => (on.runCurrent(), true) },
         { key: "Shift-Mod-Enter", run: () => (on.runAll(), true) },
+        { key: "Mod-i", run: () => (on.format(), true) },
       ]),
     ),
     currentStatement,
@@ -140,6 +145,20 @@ export function createEditor(
       const { from, to, head } = view.state.selection.main;
       if (from !== to) return view.state.sliceDoc(from, to);
       return statementAt(view.state.doc.toString(), head, dialect)?.text ?? "";
+    },
+    /** Reformats the selection, or everything when nothing is selected, as one undoable change. Throws when the
+     *  SQL can't be parsed, leaving the text as it was. */
+    format(style: FormatStyle) {
+      const { from, to } = view.state.selection.main;
+      const [a, b] = from === to ? [0, view.state.doc.length] : [from, to];
+      const text = formatDialect(view.state.sliceDoc(a, b), {
+        dialect: FORMAT_DIALECTS[dialect],
+        tabWidth: unit === "\t" ? 2 : unit.length,
+        useTabs: unit === "\t",
+        keywordCase: "preserve",
+        indentStyle: style,
+      });
+      view.dispatch({ changes: { from: a, to: b, insert: text }, selection: { anchor: a, head: a + text.length } });
     },
     /** Every statement in the selection, or in the whole text when nothing is selected. */
     all(): Statement[] {
