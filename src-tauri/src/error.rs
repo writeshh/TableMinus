@@ -56,6 +56,15 @@ pub enum Error {
     StartupScript(String),
     #[error("startup SQL: {0}")]
     StartupSql(Box<Error>),
+    #[error("can't write {path}: {source}")]
+    Write { path: String, source: std::io::Error },
+    /// A backup or restore tool failed; its own error lines.
+    #[error("{0}")]
+    Tool(String),
+    #[error("no {tool} for {server} found{found}. Install the server's client tools, or choose them with Choose…")]
+    NoTools { tool: &'static str, server: String, found: String },
+    #[error("cancelled")]
+    Cancelled,
     #[error("the SSH server could not reach {host}:{port}: {reason}")]
     SshForward { host: String, port: u16, reason: String },
 }

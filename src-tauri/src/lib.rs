@@ -1,8 +1,10 @@
 //! DB Manager's Tauri commands: the only surface the UI can call.
 
+mod backup;
 mod browse;
 mod db;
 mod error;
+mod processes;
 mod readonly;
 mod ssh;
 mod store;
@@ -466,6 +468,8 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .manage(Open::default())
         .manage(Prefs::default())
+        .manage(backup::Jobs::default())
+        .manage(processes::Sessions::default())
         .setup(|app| {
             tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
             Ok(())
@@ -488,7 +492,14 @@ pub fn run() -> tauri::Result<()> {
             browse,
             schema,
             read_text_file,
-            write_text_file
+            write_text_file,
+            backup::backup_setup,
+            backup::start_backup,
+            backup::start_restore,
+            backup::cancel_job,
+            processes::processes,
+            processes::kill_process,
+            processes::close_processes
         ])
         .run(tauri::generate_context!())
 }

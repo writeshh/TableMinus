@@ -27,7 +27,7 @@ postgres-native-tls = "0.5.3"
 native-tls = "0.2.18"
 mysql_async = { version = "0.37.1", default-features = false, features = ["default-rustls-ring"] }
 url = "2.5.8"
-rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher", "backup"] }
 sqlparser = { version = "0.63.0", features = ["visitor"] }
 keyring = { version = "3", features = ["apple-native", "sync-secret-service", "crypto-rust"] }
 thiserror = "2"
@@ -38,6 +38,7 @@ russh = { version = "0.64", default-features = false, features = ["ring", "flate
 russh-config = "0.58.0"
 tauri-plugin-dialog = "2"
 futures-util = { version = "0.3", default-features = false }
+flate2 = "1"
 
 
 [lints.rust]
