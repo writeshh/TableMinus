@@ -35,6 +35,8 @@ pub enum Error {
     File { path: String, source: std::io::Error },
     #[error("connections file is not valid ({0}); fix or move it, then reopen the app")]
     Json(#[from] serde_json::Error),
+    #[error("MCP settings file is not valid ({0}); fix or move mcp.json, then reopen the app")]
+    McpConfig(serde_json::Error),
     #[error("invalid connection URL: {0}")]
     Url(#[from] url::ParseError),
     #[error(transparent)]

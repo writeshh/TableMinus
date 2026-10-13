@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Personal database client: Postgres, MySQL/MariaDB and SQLite"
 authors = ["Ritesh Shrestha"]
 edition = "2024"
+default-run = "db-manager"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -33,12 +34,20 @@ keyring = { version = "3", features = ["apple-native", "sync-secret-service", "c
 thiserror = "2"
 bytes = "1"
 secrecy = { version = "0.10", features = ["serde"] }
-tokio = { version = "1", features = ["time", "process"] }
+tokio = { version = "1", features = ["time", "process", "net", "io-std", "io-util", "rt-multi-thread"] }
 russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-config = "0.58.0"
 tauri-plugin-dialog = "2"
 futures-util = { version = "0.3", default-features = false }
 flate2 = "1"
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "transport-streamable-http-server"] }
+hyper = { version = "1", features = ["server", "client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+sha2 = "0.10"
+subtle = "2"
+getrandom = "0.3"
+dirs = "7"
 
 
 [lints.rust]

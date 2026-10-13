@@ -26,7 +26,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
     let mut sessions = sessions.0.lock().await;
     let live = match sessions.entry(name.clone()) {
         Entry::Occupied(e) => e.into_mut(),
-        Entry::Vacant(e) => e.insert(crate::open_saved(&app, &name).await?),
+        Entry::Vacant(e) => e.insert(crate::open_saved(&crate::dir(&app)?, &name).await?),
     };
     let sql = match live.saved.kind {
         Engine::Postgres => POSTGRES,
