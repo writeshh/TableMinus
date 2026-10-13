@@ -1,6 +1,6 @@
 //! A table's full structure (columns, indexes, foreign keys, checks, triggers), read from each engine's catalog.
 
-use crate::db::Conn;
+use crate::db::{Conn, Dialect};
 use crate::error::{Error, Result};
 use serde::Serialize;
 
@@ -28,6 +28,9 @@ pub struct ColumnInfo {
     pub comment: Option<String>,
     pub auto_increment: bool,
     pub primary: bool,
+    /// MySQL's `ON UPDATE CURRENT_TIMESTAMP`, kept so changing the column doesn't drop it.
+    #[serde(skip)]
+    pub on_update: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -39,6 +42,9 @@ pub struct IndexInfo {
     pub primary: bool,
     /// btree, hash, gin… where the engine has a choice.
     pub method: Option<String>,
+    /// Backs a constraint (primary key, or a Postgres unique constraint), so it's dropped as the constraint.
+    #[serde(skip)]
+    pub constraint: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -73,6 +79,44 @@ fn pg_action(code: Option<&str>) -> String {
         _ => "NO ACTION",
     }
     .into()
+}
+
+/// A MySQL column default as an SQL expression. MariaDB already writes it that way (with `NULL` for none);
+/// MySQL gives literals unquoted and marks expressions `DEFAULT_GENERATED` in `extra`.
+fn my_default(maria: bool, data_type: &str, extra: &str, default: String) -> Option<String> {
+    const NUMERIC: [&str; 9] =
+        ["tinyint", "smallint", "mediumint", "int", "bigint", "decimal", "float", "double", "bit"];
+    if maria {
+        return (default != "NULL").then_some(default);
+    }
+    let generated = extra.contains("DEFAULT_GENERATED");
+    let numeric = NUMERIC.iter().any(|t| data_type.starts_with(t));
+    Some(if generated && default.to_ascii_uppercase().starts_with("CURRENT_TIMESTAMP") {
+        default
+    } else if generated {
+        format!("({default})")
+    } else if numeric {
+        default // numbers, and bit literals such as b'1'
+    } else {
+        Dialect::My.literal(&default)
+    })
+}
+
+/// A MySQL `information_schema.columns` row: name, type, nullable, default, comment, extra, key.
+fn my_column(maria: bool, mut r: Vec<Option<String>>) -> ColumnInfo {
+    let data_type = take(&mut r, 1).unwrap_or_default();
+    let extra = take(&mut r, 5).unwrap_or_default();
+    let default = take(&mut r, 3).and_then(|d| my_default(maria, &data_type, &extra, d));
+    ColumnInfo {
+        name: take(&mut r, 0).unwrap_or_default(),
+        nullable: take(&mut r, 2).as_deref() == Some("YES"),
+        default,
+        comment: take(&mut r, 4).filter(|c| !c.is_empty()),
+        auto_increment: extra.contains("auto_increment"),
+        primary: take(&mut r, 6).as_deref() == Some("PRI"),
+        on_update: extra.to_ascii_lowercase().find("on update ").map(|i| extra[i + 10..].to_string()),
+        data_type,
+    }
 }
 
 /// Cell `i` of a catalog row, taken out (rows are read once, front to back).
@@ -130,6 +174,7 @@ impl Conn {
                 comment: take(&mut r, 4),
                 auto_increment: take(&mut r, 5).as_deref() == Some("true"),
                 primary: take(&mut r, 6).as_deref() == Some("true"),
+                on_update: None,
             })
             .collect();
 
@@ -138,7 +183,8 @@ impl Conn {
                 "select i.relname::text, \
                  array_to_string(array(select pg_get_indexdef(ix.indexrelid, k + 1, true) \
                    from generate_subscripts(ix.indkey, 1) k order by k), chr(31)), \
-                 ix.indisunique::text, ix.indisprimary::text, am.amname::text \
+                 ix.indisunique::text, ix.indisprimary::text, am.amname::text, \
+                 exists(select 1 from pg_constraint c where c.conindid = ix.indexrelid and c.contype in ('p', 'u'))::text \
                  from pg_index ix join pg_class i on i.oid = ix.indexrelid join pg_am am on am.oid = i.relam \
                  where ix.indrelid = $1::oid order by ix.indisprimary desc, i.relname",
                 &oid_param,
@@ -151,6 +197,7 @@ impl Conn {
                 unique: take(&mut r, 2).as_deref() == Some("true"),
                 primary: take(&mut r, 3).as_deref() == Some("true"),
                 method: take(&mut r, 4),
+                constraint: take(&mut r, 5).as_deref() == Some("true"),
             })
             .collect();
 
@@ -198,6 +245,7 @@ impl Conn {
 
     async fn my_structure(&mut self, table: &str) -> Result<Structure> {
         let t = [Some(table)];
+        let maria = self.server_version().await?.starts_with("MariaDB");
         let columns = self
             .fetch_with(
                 "select column_name, column_type, is_nullable, column_default, column_comment, extra, column_key \
@@ -207,19 +255,12 @@ impl Conn {
             )
             .await?
             .into_iter()
-            .map(|mut r| ColumnInfo {
-                name: take(&mut r, 0).unwrap_or_default(),
-                data_type: take(&mut r, 1).unwrap_or_default(),
-                nullable: take(&mut r, 2).as_deref() == Some("YES"),
-                default: take(&mut r, 3),
-                comment: take(&mut r, 4).filter(|c| !c.is_empty()),
-                auto_increment: take(&mut r, 5).is_some_and(|e| e.contains("auto_increment")),
-                primary: take(&mut r, 6).as_deref() == Some("PRI"),
-            })
+            .map(|r| my_column(maria, r))
             .collect();
         let indexes = self
             .fetch_with(
-                "select index_name, group_concat(coalesce(column_name, expression) order by seq_in_index \
+                // Functional indexes (MySQL 8) have no column name; MariaDB has no `expression` column to show instead.
+                "select index_name, group_concat(coalesce(column_name, '<expression>') order by seq_in_index \
                  separator 0x1f), min(non_unique), index_type \
                  from information_schema.statistics where table_schema = database() and table_name = ? \
                  group by index_name, index_type order by index_name = 'PRIMARY' desc, index_name",
@@ -229,12 +270,14 @@ impl Conn {
             .into_iter()
             .map(|mut r| {
                 let name = take(&mut r, 0).unwrap_or_default();
+                let primary = name == "PRIMARY";
                 IndexInfo {
-                    primary: name == "PRIMARY",
+                    primary,
                     name,
                     columns: list(take(&mut r, 1)),
                     unique: take(&mut r, 2).as_deref() == Some("0"),
                     method: take(&mut r, 3),
+                    constraint: primary,
                 }
             })
             .collect();
@@ -320,29 +363,32 @@ impl Conn {
                     default: take(&mut r, 3),
                     comment: None,
                     primary,
+                    on_update: None,
                 }
             })
             .collect();
         let mut indexes = Vec::new();
-        let list_rows = self
-            .fetch_with("select name, \"unique\", origin from pragma_index_list($1) order by name", &t)
-            .await?;
+        let list_rows =
+            self.fetch_with("select name, \"unique\", origin from pragma_index_list($1) order by name", &t).await?;
         for mut r in list_rows {
             let name = take(&mut r, 0).unwrap_or_default();
             let cols = self
-                .fetch_with("select coalesce(name, '<expression>') from pragma_index_info($1) order by seqno", &[Some(
-                    name.as_str(),
-                )])
+                .fetch_with(
+                    "select coalesce(name, '<expression>') from pragma_index_info($1) order by seqno",
+                    &[Some(name.as_str())],
+                )
                 .await?
                 .into_iter()
                 .filter_map(|mut c| take(&mut c, 0))
                 .collect();
+            let primary = take(&mut r, 2).as_deref() == Some("pk");
             indexes.push(IndexInfo {
                 unique: take(&mut r, 1).as_deref() == Some("1"),
-                primary: take(&mut r, 2).as_deref() == Some("pk"),
+                primary,
                 name,
                 columns: cols,
                 method: None,
+                constraint: primary,
             });
         }
         let mut foreign_keys: Vec<ForeignKeyInfo> = Vec::new();
@@ -373,10 +419,7 @@ impl Conn {
             }
         }
         let triggers = self
-            .named(
-                "select name, sql from sqlite_master where type = 'trigger' and tbl_name = $1 order by name",
-                &t,
-            )
+            .named("select name, sql from sqlite_master where type = 'trigger' and tbl_name = $1 order by name", &t)
             .await?;
         Ok(Structure { columns, indexes, foreign_keys, checks: vec![], triggers, comment: None })
     }
@@ -386,7 +429,10 @@ impl Conn {
             .fetch_with(sql, params)
             .await?
             .into_iter()
-            .map(|mut r| NamedDef { name: take(&mut r, 0).unwrap_or_default(), definition: take(&mut r, 1).unwrap_or_default() })
+            .map(|mut r| NamedDef {
+                name: take(&mut r, 0).unwrap_or_default(),
+                definition: take(&mut r, 1).unwrap_or_default(),
+            })
             .collect())
     }
 }

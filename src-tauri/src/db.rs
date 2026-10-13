@@ -103,6 +103,46 @@ pub enum Stopper {
     Lite(rusqlite::InterruptHandle),
 }
 
+/// How an engine writes SQL, for code that builds statements without needing a live connection (DDL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    Pg,
+    My,
+    Lite,
+}
+
+impl Dialect {
+    /// A quoted identifier. Identifiers can't be bound as parameters, so this and [`Dialect::literal`] are the
+    /// only places SQL is escaped by hand.
+    pub fn ident(self, name: &str) -> String {
+        match self {
+            Dialect::My => format!("`{}`", name.replace('`', "``")),
+            _ => format!("\"{}\"", name.replace('"', "\"\"")),
+        }
+    }
+
+    /// A table name; Postgres tables are `schema.table`.
+    pub fn table_ident(self, table: &str) -> String {
+        match (self, table.split_once('.')) {
+            (Dialect::Pg, Some((schema, name))) => format!("{}.{}", self.ident(schema), self.ident(name)),
+            _ => self.ident(table),
+        }
+    }
+
+    /// A quoted string literal, for the few places a value can't be bound: DDL such as `COMMENT ON` takes no
+    /// parameters. Postgres gets an `E''` string, whose meaning doesn't depend on `standard_conforming_strings`.
+    /// MySQL gets escaped backslashes too: under `NO_BACKSLASH_ESCAPES` a backslash then reads doubled, but the
+    /// quote still can't be closed early.
+    pub fn literal(self, value: &str) -> String {
+        let quoted = value.replace('\'', "''");
+        match self {
+            Dialect::Pg => format!("E'{}'", quoted.replace('\\', "\\\\")),
+            Dialect::My => format!("'{}'", quoted.replace('\\', "\\\\")),
+            Dialect::Lite => format!("'{quoted}'"),
+        }
+    }
+}
+
 // ponytail: an enum over three engines, not a Driver trait; extract a trait when a 4th engine needs it.
 pub enum Conn {
     Pg(tokio_postgres::Client),
@@ -568,19 +608,21 @@ impl Conn {
         }
     }
 
-    /// A quoted identifier. Identifiers can't be bound as parameters, so this is the one place SQL is escaped.
-    pub(crate) fn ident(&self, name: &str) -> String {
+    pub(crate) fn dialect(&self) -> Dialect {
         match self {
-            Conn::My(_) => format!("`{}`", name.replace('`', "``")),
-            _ => format!("\"{}\"", name.replace('"', "\"\"")),
+            Conn::Pg(_) => Dialect::Pg,
+            Conn::My(_) => Dialect::My,
+            Conn::Lite(_) => Dialect::Lite,
         }
     }
 
+    /// A quoted identifier; see [`Dialect::ident`].
+    pub(crate) fn ident(&self, name: &str) -> String {
+        self.dialect().ident(name)
+    }
+
     pub(crate) fn table_ident(&self, table: &str) -> String {
-        match (self, table.split_once('.')) {
-            (Conn::Pg(_), Some((schema, name))) => format!("{}.{}", self.ident(schema), self.ident(name)),
-            _ => self.ident(table),
-        }
+        self.dialect().table_ident(table)
     }
 
     /// Applies cell edits in one transaction, each row found by its primary key.
