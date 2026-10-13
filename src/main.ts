@@ -7,6 +7,7 @@ import { createEditor } from "./editor";
 import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
+import { MIN_WIDTH, layoutCss, loadLayout, saveLayout, type Layout } from "./columns";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -714,7 +715,7 @@ type Sort = { column: string; desc: boolean };
 type TableTab = {
   id: number; kind: "table"; title: string; table: string; view: "data" | "structure"; page: number;
   total?: number; result?: QueryResult; error?: string; loading?: boolean;
-  sort: Sort[]; filters: FilterRow[]; combine: "and" | "or"; filtersShown: boolean;
+  sort: Sort[]; filters: FilterRow[]; combine: "and" | "or"; filtersShown: boolean; layout: Layout;
   edits: Map<number, Map<number, string | null>>; // row on this page -> column -> new value (null = NULL)
   message?: [string, StatusKind];
 };
@@ -744,7 +745,7 @@ function openTable(table: string) {
   if (existing) return select(existing.id);
   const tab: TableTab = {
     id: nextId++, kind: "table", title: table, table, view: "data", page: 0, edits: new Map(),
-    sort: [], filters: [blankFilter()], combine: "and", filtersShown: false,
+    sort: [], filters: [blankFilter()], combine: "and", filtersShown: false, layout: loadLayout(active!.name, table),
   };
   tabs.push(tab);
   select(tab.id);
@@ -796,6 +797,7 @@ function renderMain() {
   $("sql-pane").hidden = tab.kind !== "sql";
   $("table-foot").hidden = tab.kind !== "table";
   showFilters(tab);
+  applyLayout(tab);
   if (tab.kind === "sql") {
     if (shownId !== tab.id) {
       editor.setState((tab.state ??= editor.newState(tab.sql)));
@@ -832,7 +834,10 @@ function renderMain() {
       const shown = value === null ? "NULL" : value.length > 24 ? value.slice(0, 24) + "…" : value;
       return ["-", [`Filter rows where ${column} = ${shown}`, () => filterByCell(tab, column, value)]];
     };
-    render(tab.result, from, { sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add), table: tab.table, menu: quickFilter });
+    render(tab.result, from, {
+      sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add), table: tab.table, menu: quickFilter,
+      resize: (column, width, done) => resizeColumn(tab, column, width, done),
+    });
     decorateEditable(tab);
   }
   else $("out").replaceChildren();
@@ -1128,6 +1133,8 @@ type RenderOptions = {
   table: string;
   /** Extra context-menu items for a cell. */
   menu?: (row: number, col: number) => MenuItem[];
+  /** Header drag: a new width while dragging, the final one when `done`; null resets to automatic. */
+  resize?: (column: string, width: number | null, done: boolean) => void;
 };
 
 /** Result grid with row numbers starting after `offset`. With options, headers sort the rows when clicked. */
@@ -1148,6 +1155,7 @@ function render(r: QueryResult, offset: number, sorting?: RenderOptions) {
         th.setAttribute("aria-sort", s.desc ? "descending" : "ascending");
       }
       th.onclick = (e) => sorting.onSort(c, e.shiftKey);
+      if (sorting.resize) th.append(resizeGrip(th, c, sorting.resize));
     }
     head.append(th);
   }
@@ -1189,15 +1197,102 @@ function paintSelection() {
   });
 }
 
-/** The selected cells (or, with `wholeRows`, every column of the selected rows) with their column names. */
+/** The selected cells (or, with `wholeRows`, every column of the selected rows) with their column names. Hidden
+ *  columns are left out. */
 function selectedCells(wholeRows = false) {
   if (!selection) return null;
   const { r0, r1, c0, c1 } = selectedBlock(selection);
   const [from, to] = wholeRows ? [0, selection.r.columns.length - 1] : [c0, c1];
+  const tab = current();
+  const hidden = new Set(tab?.kind === "table" && tab.table === selection.table ? tab.layout.hidden : []);
+  const keep = selection.r.columns.map((_, i) => i).filter((i) => i >= from && i <= to && !hidden.has(selection!.r.columns[i]));
   return {
-    columns: selection.r.columns.slice(from, to + 1),
-    rows: selection.r.rows.slice(r0, r1 + 1).map((row) => row.slice(from, to + 1)),
+    columns: keep.map((i) => selection!.r.columns[i]),
+    rows: selection.r.rows.slice(r0, r1 + 1).map((row) => keep.map((i) => row[i])),
   };
+}
+
+// ---------- Column layout (table tabs) ----------
+
+function applyLayout(tab: Tab) {
+  const columns = tab.kind === "table" && tab.view === "data" ? tab.result?.columns : undefined;
+  $("column-layout").textContent = columns ? layoutCss(columns, (tab as TableTab).layout) : "";
+  if (tab.kind === "table") {
+    const n = tab.layout.hidden.length;
+    $("columns-button").textContent = n ? `Columns (${n} hidden)` : "Columns";
+  }
+}
+
+function resizeColumn(tab: TableTab, column: string, width: number | null, done: boolean) {
+  if (width === null) delete tab.layout.widths[column];
+  else tab.layout.widths[column] = Math.round(width);
+  applyLayout(tab);
+  if (done) saveLayout(active!.name, tab.table, tab.layout);
+}
+
+/** A drag handle on a header's right edge; double-click returns the column to its automatic width. */
+function resizeGrip(th: HTMLElement, column: string, resize: NonNullable<RenderOptions["resize"]>) {
+  const grip = el("span", { className: "grip", title: "Drag to resize; double-click to fit" });
+  grip.onclick = (e) => e.stopPropagation(); // not a sort click
+  grip.ondblclick = (e) => (e.stopPropagation(), resize(column, null, true));
+  grip.onpointerdown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add("active");
+    const startX = e.clientX;
+    const startWidth = th.getBoundingClientRect().width;
+    let width = startWidth;
+    grip.onpointermove = (m) => resize(column, (width = Math.max(MIN_WIDTH, startWidth + m.clientX - startX)), false);
+    grip.onpointerup = () => {
+      grip.onpointermove = grip.onpointerup = null;
+      grip.classList.remove("active");
+      resize(column, width, true);
+    };
+  };
+  return grip;
+}
+
+/** The Columns button: a checklist of the table's columns. Unchecking hides a column. */
+function showColumnsMenu() {
+  const tab = current();
+  if (tab?.kind !== "table" || !tab.result) return;
+  menuClose?.();
+  const t = tab;
+  const menu = el("div", { className: "popover columns-menu" });
+  const save = () => (saveLayout(active!.name, t.table, t.layout), applyLayout(t));
+  const boxes = t.result!.columns.map((c) => {
+    const box = el("input", { type: "checkbox", checked: !t.layout.hidden.includes(c) });
+    box.onchange = () => {
+      t.layout.hidden = box.checked ? t.layout.hidden.filter((h) => h !== c) : [...t.layout.hidden, c];
+      save();
+    };
+    const row = el("label", { className: "check" });
+    row.append(box, c);
+    return { row, box };
+  });
+  const showAll = el("button", { type: "button", textContent: "Show all" });
+  showAll.onclick = () => ((t.layout.hidden = []), boxes.forEach((b) => (b.box.checked = true)), save());
+  const reset = el("button", { type: "button", textContent: "Reset widths" });
+  reset.onclick = () => ((t.layout.widths = {}), save());
+  const foot = el("footer");
+  foot.append(showAll, el("span", { className: "spacer" }), reset);
+  menu.append(...boxes.map((b) => b.row), foot);
+  document.body.append(menu);
+  const r = $("columns-button").getBoundingClientRect();
+  const h = menu.getBoundingClientRect().height;
+  Object.assign(menu.style, { left: `${Math.max(8, r.left)}px`, top: `${Math.max(8, r.top - h - 6)}px` });
+  const onDown = (ev: Event) => !menu.contains(ev.target as Node) && ev.target !== $("columns-button") && close();
+  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && close();
+  function close() {
+    menu.remove();
+    removeEventListener("pointerdown", onDown, true);
+    removeEventListener("keydown", onKey, true);
+    menuClose = null;
+  }
+  addEventListener("pointerdown", onDown, true);
+  addEventListener("keydown", onKey, true);
+  menuClose = close;
 }
 
 /** A short note where the current tab shows messages: the run bar for SQL tabs, the footer for table tabs. */
@@ -1340,6 +1435,7 @@ $("discard-edits").onclick = () => {
   if (tab?.kind === "table") (tab.edits.clear(), renderMain());
 };
 $("toggle-filters").onclick = () => toggleFilters();
+$("columns-button").onclick = () => (menuClose ? menuClose() : showColumnsMenu());
 $("page-prev").onclick = () => turnPage(-1);
 $("page-next").onclick = () => turnPage(1);
 /** Leaves the workspace and closes the server connection; the launcher comes back. */
