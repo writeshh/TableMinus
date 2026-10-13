@@ -10,6 +10,8 @@ import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./fil
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
 import { MIN_WIDTH, layoutCss, loadLayout, saveLayout, type Layout } from "./columns";
 import { dropDraft, initStructure, saveStructure, showStructure, sidebarMenu, structurePending, tableMenu } from "./structure";
+import { openBackup, openRestore } from "./backup";
+import { openProcesses } from "./processes";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -143,6 +145,7 @@ function renderConns() {
         el("div", { className: "actions" }, edit, del),
       );
       li.onclick = () => connect(c);
+      li.oncontextmenu = (e) => contextMenu(e, toolsMenu(c));
       li.onkeydown = (e) => e.key === "Enter" && connect(c);
       return li;
     }),
@@ -1152,6 +1155,17 @@ function filterByCell(tab: TableTab, column: string, value: string | null) {
 
 let menuClose: (() => void) | null = null;
 type MenuItem = [string, () => void] | "-";
+
+/** Backup, restore and the process list, on a launcher row's right-click and the workspace's Tools button. */
+function toolsMenu(c: Saved, database?: string | null): MenuItem[] {
+  const items: MenuItem[] = [["Backup…", () => openBackup(c, database)], ["Restore…", () => openRestore(c, database, confirmDialog)]];
+  if (c.kind !== "sqlite") items.push("-", ["Processes", () => openProcesses(c, confirmDialog)]);
+  return items;
+}
+$("tools-button").onclick = () => {
+  const r = $("tools-button").getBoundingClientRect(); // under the button, also when opened from the keyboard
+  if (active) contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), toolsMenu(active, info?.database));
+};
 
 /** A small context menu at the pointer; any click or Esc closes it. */
 function contextMenu(e: MouseEvent, items: MenuItem[]) {
