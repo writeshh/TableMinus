@@ -2,10 +2,12 @@
 
 mod browse;
 mod db;
+mod ddl;
 mod error;
 mod readonly;
 mod ssh;
 mod store;
+mod structure;
 mod tls;
 
 use db::Engine;
@@ -455,6 +457,61 @@ async fn browse(
     live.check(r)
 }
 
+/// A table's full structure for the structure view; see [`structure::Structure`].
+#[tauri::command]
+async fn table_structure(open: State<'_, Open>, name: String, table: String) -> Result<structure::Structure> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = live.conn.structure(&table).await;
+    live.check(r)
+}
+
+/// The statements a structure edit would run, for the preview; `create` makes `table` as a new table.
+#[tauri::command]
+async fn structure_sql(
+    open: State<'_, Open>,
+    name: String,
+    table: String,
+    create: bool,
+    changes: Vec<ddl::Change>,
+) -> Result<Vec<String>> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = live.conn.alter_sql(&table, create, &changes).await;
+    live.check(r)
+}
+
+/// The statements a table operation (rename, clone, truncate, drop…) would run, for the confirmation.
+#[tauri::command]
+async fn table_op_sql(open: State<'_, Open>, name: String, op: ddl::TableOp) -> Result<Vec<String>> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = live.conn.op_sql(&op).await;
+    live.check(r)
+}
+
+/// Runs the statements the user saw in a preview. Safe mode applies: [`Error::ConfirmRequired`] until resent
+/// with `confirmed: true`, which applying from the preview does.
+#[tauri::command]
+async fn run_ddl(open: State<'_, Open>, name: String, statements: Vec<String>, confirmed: bool) -> Result<()> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    if live.saved.confirm_writes && !confirmed {
+        return Err(Error::ConfirmRequired);
+    }
+    let r = live.conn.run_ddl(&statements).await;
+    live.check(r)
+}
+
+/// The CREATE statement of a table or view.
+#[tauri::command]
+async fn table_ddl(open: State<'_, Open>, name: String, table: String) -> Result<String> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = live.conn.ddl(&table).await;
+    live.check(r)
+}
+
 /// Starts the app. Returns only when it quits.
 ///
 /// # Errors
@@ -488,7 +545,12 @@ pub fn run() -> tauri::Result<()> {
             browse,
             schema,
             read_text_file,
-            write_text_file
+            write_text_file,
+            table_structure,
+            structure_sql,
+            table_op_sql,
+            run_ddl,
+            table_ddl
         ])
         .run(tauri::generate_context!())
 }

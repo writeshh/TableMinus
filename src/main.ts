@@ -9,6 +9,7 @@ import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
 import { MIN_WIDTH, layoutCss, loadLayout, saveLayout, type Layout } from "./columns";
+import { dropDraft, initStructure, saveStructure, showStructure, sidebarMenu, structurePending, tableMenu } from "./structure";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -713,6 +714,7 @@ function renderTables() {
       const row = el("div", { className: "tree-row", title: t }, chevron, el("span", { className: "tbl-icon" }), el("span", { className: "label", textContent: t }));
       row.classList.toggle("active", t === open);
       row.onclick = () => openTable(t);
+      row.oncontextmenu = (e) => (e.stopPropagation(), contextMenu(e, tableMenu(t)));
       const li = el("li", {}, row);
       if (isOpen)
         li.append(
@@ -811,6 +813,8 @@ type TableTab = {
   sort: Sort[]; filters: FilterRow[]; combine: "and" | "or"; filtersShown: boolean; layout: Layout;
   edits: Map<number, Map<number, string | null>>; // row on this page -> column -> new value (null = NULL)
   message?: [string, StatusKind];
+  /** A table being created in the structure view; it doesn't exist yet. */
+  create?: boolean;
 };
 type Tab = SqlTab | TableTab;
 type StatusKind = "" | "busy" | "error" | "done";
@@ -833,16 +837,19 @@ function openSqlTab(): SqlTab {
   return tab;
 }
 
-function openTable(table: string) {
-  const existing = tabs.find((t) => t.kind === "table" && t.table === table);
-  if (existing) return select(existing.id);
+function openTable(table: string, view: TableTab["view"] = "data", create = false) {
+  const existing = tabs.find((t) => t.kind === "table" && t.table === table) as TableTab | undefined;
+  if (existing) {
+    if (existing.view !== view && !pendingCount(existing)) existing.view = view;
+    return select(existing.id);
+  }
   const tab: TableTab = {
-    id: nextId++, kind: "table", title: table, table, view: "data", page: 0, edits: new Map(),
+    id: nextId++, kind: "table", title: table, table, view, page: 0, edits: new Map(), create,
     sort: [], filters: [blankFilter()], combine: "and", filtersShown: false, layout: loadLayout(active!.name, table),
   };
   tabs.push(tab);
   select(tab.id);
-  loadTable(tab);
+  if (view === "data") loadTable(tab);
 }
 
 function select(id: number) {
@@ -907,20 +914,18 @@ function renderMain() {
   const from = tab.page * PAGE;
   const shown = tab.result?.rows.length ?? 0;
   $("page-info").textContent =
-    tab.view === "structure" ? `${columnsCache.get(tab.table)?.length ?? 0} columns`
+    tab.view === "structure" ? (tab.create ? "New table" : "")
     : tab.loading ? "Loading…"
     : `${shown ? from + 1 : 0}–${from + shown} of ${tab.total ?? "?"} rows`;
   $<HTMLButtonElement>("page-prev").disabled = tab.view !== "data" || tab.page === 0;
   $<HTMLButtonElement>("page-next").disabled = tab.view !== "data" || tab.total === undefined || from + shown >= tab.total;
-  const pending = pendingCount(tab);
-  $("edit-info").textContent = pending ? `${pending} unsaved change${pending === 1 ? "" : "s"}` : "";
-  $("discard-edits").hidden = $("save-edits").hidden = !pending;
+  showPending(tab);
   const [msg, kind] = tab.message ?? ["", ""];
   const m = $("foot-msg");
   m.textContent = tab.view === "data" && tab.result && !keyOf(tab) ? "Read-only: no primary key" : msg;
   m.className = `foot-msg ${kind}`;
-  if (tab.error) $("out").replaceChildren(el("p", { className: "hint empty error-text", textContent: tab.error }));
-  else if (tab.view === "structure") renderStructure(columnsCache.get(tab.table) ?? []);
+  if (tab.view === "structure") showStructure($("out"), tab.id, tab.table, !!tab.create);
+  else if (tab.error) $("out").replaceChildren(el("p", { className: "hint empty error-text", textContent: tab.error }));
   else if (tab.result) {
     const quickFilter = (ri: number, ci: number): MenuItem[] => {
       const column = tab.result!.columns[ci];
@@ -937,6 +942,13 @@ function renderMain() {
   else $("out").replaceChildren();
 }
 
+function showPending(tab: Tab) {
+  const pending = pendingCount(tab);
+  $("edit-info").textContent = pending ? `${pending} unsaved change${pending === 1 ? "" : "s"}` : "";
+  $("discard-edits").hidden = $("save-edits").hidden = !pending;
+  $("save-edits").textContent = tab.kind === "table" && tab.view === "structure" ? "Preview SQL…" : "Save";
+}
+
 // ---------- Inline cell editing (table tabs) ----------
 
 /** Primary-key column names and their positions in the result, or null when rows can't be identified. */
@@ -946,12 +958,13 @@ function keyOf(tab: TableTab) {
   return names.length && idx.every((i) => i >= 0) ? { names, idx } : null;
 }
 
-const pendingCount = (tab: Tab) => (tab.kind === "table" ? [...tab.edits.values()].reduce((n, m) => n + m.size, 0) : 0);
+const pendingCount = (tab: Tab) =>
+  tab.kind === "table" ? [...tab.edits.values()].reduce((n, m) => n + m.size, 0) + structurePending(tab.id) : 0;
 
 async function okToDiscard(tab: Tab) {
   const n = pendingCount(tab);
   if (!n || (await confirmDialog(`Discard ${n} unsaved change${n === 1 ? "" : "s"} in ${tab.title}?`, "Discard"))) {
-    if (tab.kind === "table") tab.edits.clear();
+    if (tab.kind === "table") (tab.edits.clear(), dropDraft(tab.id));
     return true;
   }
   return false;
@@ -1029,6 +1042,7 @@ function editCell(tab: TableTab, ri: number, ci: number) {
 
 async function saveEdits(confirmed = false) {
   const tab = current();
+  if (tab?.kind === "table" && tab.view === "structure") return saveStructure(tab.id, $("out"));
   if (tab?.kind !== "table" || !tab.edits.size || !active) return;
   const key = keyOf(tab)!;
   const r = tab.result!;
@@ -1598,17 +1612,6 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-function renderStructure(cols: Column[]) {
-  render(
-    {
-      columns: ["column", "type", "nullable", "default", "key"],
-      rows: cols.map((c) => [c.name, c.data_type, c.nullable ? "YES" : "NO", c.default, c.primary ? "PRIMARY" : ""]),
-      affected: 0,
-    },
-    0,
-  );
-}
-
 function updateCursor() {
   const { line, column } = editor.cursor();
   $("cursor").textContent = `line ${line}, column ${column}`;
@@ -1622,7 +1625,7 @@ for (const b of $("view-seg").querySelectorAll<HTMLElement>("button"))
     const tab = current();
     if (tab?.kind !== "table" || tab.view === b.dataset.view || !(await okToDiscard(tab))) return;
     tab.view = b.dataset.view as TableTab["view"];
-    if (tab.view === "structure" && columnsCache.has(tab.table)) renderMain();
+    if (tab.view === "structure") renderMain(); // the structure view loads its own
     else loadTable(tab);
   };
 const turnPage = async (delta: number) => {
@@ -1634,9 +1637,46 @@ const turnPage = async (delta: number) => {
 $("save-edits").onclick = () => saveEdits();
 $("discard-edits").onclick = () => {
   const tab = current();
-  if (tab?.kind === "table") (tab.edits.clear(), renderMain());
+  if (tab?.kind === "table") (tab.edits.clear(), dropDraft(tab.id), renderMain());
 };
 $("toggle-filters").onclick = () => toggleFilters();
+$("side-items").oncontextmenu = (e) => active && contextMenu(e, sidebarMenu());
+initStructure({
+  call,
+  conn: () => active,
+  tables: () => tables,
+  async refreshTables() {
+    const i = await call<Info>("connect", { name: active!.name }); // reuses the open connection
+    info = i;
+    tables = i.tables;
+    columnsCache.clear();
+    renderTables();
+    loadSchema();
+  },
+  openStructure: (table, create) => openTable(table, "structure", create),
+  forgetTable(table) {
+    for (const t of tabs.filter((t): t is TableTab => t.kind === "table" && t.table === table)) {
+      t.edits.clear();
+      dropDraft(t.id);
+      if (tabs.length === 1) openSqlTab(); // closing the last tab would leave the workspace
+      closeTab(t.id);
+    }
+  },
+  retarget(id, table) {
+    const t = tabs.find((t): t is TableTab => t.id === id && t.kind === "table");
+    if (!t) return;
+    columnsCache.delete(t.table);
+    Object.assign(t, { table, title: table, create: false, result: undefined, total: undefined });
+    if (id === currentId) renderMain();
+    renderTables();
+  },
+  openSql(sql) {
+    const t = openSqlTab();
+    editor.setState((t.state = editor.newState(sql)));
+  },
+  note,
+  pendingChanged: () => current() && showPending(current()!),
+});
 $("columns-button").onclick = () => (menuClose ? menuClose() : showColumnsMenu());
 $("page-prev").onclick = () => turnPage(-1);
 $("page-next").onclick = () => turnPage(1);

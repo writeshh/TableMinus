@@ -56,6 +56,11 @@ pub enum Error {
     StartupScript(String),
     #[error("startup SQL: {0}")]
     StartupSql(Box<Error>),
+    #[error("SQLite can't {0} without rebuilding the table, which this app doesn't do yet")]
+    SqliteRebuild(&'static str),
+    /// MySQL commits DDL statement by statement, so an error can come after some statements took effect.
+    #[error("{source}\n\nMySQL commits each DDL statement, so these had already run:\n{ran}")]
+    DdlPartlyApplied { ran: String, source: Box<Error> },
     #[error("the SSH server could not reach {host}:{port}: {reason}")]
     SshForward { host: String, port: u16, reason: String },
 }
