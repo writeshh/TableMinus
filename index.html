@@ -70,6 +70,22 @@
           <label>Password <input name="password" type="password" placeholder="Stored in the keychain" /></label>
           <label>Database <input name="database" placeholder="database name" /></label>
           <label>SSL mode <select name="ssl"></select></label>
+          <label>Connect
+            <select name="via">
+              <option value="">Directly</option>
+              <option value="ssh">Over SSH</option>
+            </select>
+          </label>
+        </fieldset>
+        <fieldset class="ssh" hidden>
+          <div class="pair">
+            <label>SSH host <input name="ssh_host" placeholder="server, or a ~/.ssh/config alias" /></label>
+            <label class="port">Port <input name="ssh_port" inputmode="numeric" placeholder="22" /></label>
+          </div>
+          <label>SSH user <input name="ssh_user" placeholder="From ~/.ssh/config, or your login name" /></label>
+          <label>Private key <input name="ssh_key" placeholder="Optional, e.g. ~/.ssh/id_ed25519" /></label>
+          <label>SSH password <input name="ssh_password" type="password" /></label>
+          <p class="hint">With a private key, the password is the key's passphrase. With neither, DB Manager uses ~/.ssh/config, the SSH agent, then your default keys.</p>
         </fieldset>
         <fieldset class="file" hidden>
           <label>File <input name="path" placeholder="/path/to/database.sqlite" /></label>

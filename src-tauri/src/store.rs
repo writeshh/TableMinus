@@ -2,11 +2,27 @@
 
 use crate::db::Engine;
 use crate::error::{Error, Result};
+use crate::ssh::Ssh;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-const SERVICE: &str = "dev.ritesh.dbmanager";
+/// The two secrets a connection can have, each kept in the keychain under the connection's name.
+#[derive(Debug, Clone, Copy)]
+pub enum Secret {
+    Database,
+    /// The SSH password, or the private key's passphrase.
+    Ssh,
+}
+
+impl Secret {
+    fn service(self) -> &'static str {
+        match self {
+            Secret::Database => "dev.ritesh.dbmanager",
+            Secret::Ssh => "dev.ritesh.dbmanager.ssh",
+        }
+    }
+}
 
 /// A saved connection. `url` never holds the password; that lives in the OS keychain under `name`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -19,6 +35,8 @@ pub struct Saved {
     pub tag: String, // "" | local | development | staging | production
     #[serde(default = "yes")]
     pub confirm_writes: bool, // safe mode
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<Ssh>,
 }
 
 fn yes() -> bool {
@@ -49,45 +67,65 @@ fn write(dir: &Path, all: &[Saved]) -> Result<()> {
     Ok(())
 }
 
-fn entry(name: &str) -> Result<keyring::Entry> {
-    Ok(keyring::Entry::new(SERVICE, name)?)
+fn entry(which: Secret, name: &str) -> Result<keyring::Entry> {
+    Ok(keyring::Entry::new(which.service(), name)?)
 }
 
-/// The stored password, or None when there isn't one.
-fn stored_password(name: &str) -> Result<Option<SecretString>> {
-    match entry(name)?.get_password() {
+/// The stored secret, or None when there isn't one.
+pub fn stored(which: Secret, name: &str) -> Result<Option<SecretString>> {
+    match entry(which, name)?.get_password() {
         Ok(pw) => Ok(Some(pw.into())),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(e.into()),
     }
 }
 
-fn forget_password(name: &str) -> Result<()> {
-    match entry(name)?.delete_credential() {
+fn forget(which: Secret, name: &str) -> Result<()> {
+    match entry(which, name)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.into()),
     }
 }
 
-/// Saves or replaces by name. `password: None` keeps the stored one; an empty password removes it.
-/// `previous` is the old name when renaming; its record goes and its keychain password moves over.
-pub fn save(dir: &Path, mut c: Saved, password: Option<&SecretString>, previous: Option<&str>) -> Result<()> {
+/// `None` keeps the stored secret; an empty one removes it.
+fn update(which: Secret, name: &str, secret: Option<&SecretString>) -> Result<()> {
+    match secret.map(ExposeSecret::expose_secret) {
+        Some("") => forget(which, name),
+        Some(s) => Ok(entry(which, name)?.set_password(s)?),
+        None => Ok(()),
+    }
+}
+
+/// Saves or replaces by name. For each secret, `None` keeps the stored one and an empty one removes it.
+/// `previous` is the old name when renaming; its record goes and its keychain secrets move over.
+pub fn save(
+    dir: &Path,
+    mut c: Saved,
+    password: Option<&SecretString>,
+    ssh_password: Option<&SecretString>,
+    previous: Option<&str>,
+) -> Result<()> {
     let mut all = load(dir)?; // first, so an unreadable file stops the save before the keychain changes
     if let Ok(mut u) = url::Url::parse(&c.url) {
         let _ = u.set_password(None); // never persist a password typed into the URL; Err means it had none
         c.url = u.to_string();
     }
+    let old_name = previous.unwrap_or(&c.name);
+    let had_ssh = all.iter().any(|x| x.name == old_name && x.ssh.is_some());
     if let Some(old) = previous.filter(|old| *old != c.name) {
-        if let Some(pw) = stored_password(old)? {
-            entry(&c.name)?.set_password(pw.expose_secret())?;
+        for which in [Secret::Database, Secret::Ssh] {
+            if let Some(s) = stored(which, old)? {
+                entry(which, &c.name)?.set_password(s.expose_secret())?;
+            }
+            forget(which, old)?;
         }
-        forget_password(old)?;
         all.retain(|x| x.name != old);
     }
-    match password.map(ExposeSecret::expose_secret) {
-        Some("") => forget_password(&c.name)?,
-        Some(pw) => entry(&c.name)?.set_password(pw)?,
-        None => {}
+    update(Secret::Database, &c.name, password)?;
+    if c.ssh.is_some() {
+        update(Secret::Ssh, &c.name, ssh_password)?;
+    } else if had_ssh {
+        forget(Secret::Ssh, &c.name)?; // SSH turned off: don't leave its password behind
     }
     all.retain(|x| x.name != c.name);
     all.push(c);
@@ -97,14 +135,15 @@ pub fn save(dir: &Path, mut c: Saved, password: Option<&SecretString>, previous:
 
 pub fn delete(dir: &Path, name: &str) -> Result<()> {
     let mut all = load(dir)?;
-    forget_password(name)?;
+    forget(Secret::Database, name)?;
+    forget(Secret::Ssh, name)?;
     all.retain(|x| x.name != name);
     write(dir, &all)
 }
 
 /// The URL to connect with: the saved URL plus the keychain password, if any.
 pub fn connect_url(c: &Saved) -> Result<SecretString> {
-    match stored_password(&c.name)? {
+    match stored(Secret::Database, &c.name)? {
         Some(pw) => with_password(&c.url, &pw),
         None => Ok(c.url.clone().into()),
     }
@@ -134,7 +173,14 @@ mod tests {
     }
 
     fn conn(name: &str, url: &str) -> Saved {
-        Saved { name: name.into(), kind: Engine::Postgres, url: url.into(), tag: String::new(), confirm_writes: true }
+        Saved {
+            name: name.into(),
+            kind: Engine::Postgres,
+            url: url.into(),
+            tag: String::new(),
+            confirm_writes: true,
+            ssh: None,
+        }
     }
 
     #[test]
@@ -149,14 +195,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("connections.json"), "{ not json").unwrap();
         assert!(load(&dir).is_err());
-        assert!(save(&dir, conn("a", "postgres://u@h/db"), None, None).is_err());
+        assert!(save(&dir, conn("a", "postgres://u@h/db"), None, None, None).is_err());
         assert_eq!(std::fs::read_to_string(dir.join("connections.json")).unwrap(), "{ not json");
     }
 
     #[test]
     fn save_strips_a_password_typed_into_the_url() {
         let dir = temp_dir("strip");
-        save(&dir, conn("a", "postgres://u:hunter2@h/db"), None, None).unwrap();
+        save(&dir, conn("a", "postgres://u:hunter2@h/db"), None, None, None).unwrap();
         let saved = load(&dir).unwrap();
         assert_eq!(saved[0].url, "postgres://u@h/db");
         assert!(!std::fs::read_to_string(dir.join("connections.json")).unwrap().contains("hunter2"));
@@ -165,9 +211,9 @@ mod tests {
     #[test]
     fn save_replaces_by_name_and_keeps_order() {
         let dir = temp_dir("replace");
-        save(&dir, conn("b", "postgres://u@h/one"), None, None).unwrap();
-        save(&dir, conn("a", "postgres://u@h/two"), None, None).unwrap();
-        save(&dir, conn("b", "postgres://u@h/three"), None, None).unwrap();
+        save(&dir, conn("b", "postgres://u@h/one"), None, None, None).unwrap();
+        save(&dir, conn("a", "postgres://u@h/two"), None, None, None).unwrap();
+        save(&dir, conn("b", "postgres://u@h/three"), None, None, None).unwrap();
         let names: Vec<_> = load(&dir).unwrap().into_iter().map(|c| (c.name, c.url)).collect();
         assert_eq!(names, [("a".into(), "postgres://u@h/two".into()), ("b".into(), "postgres://u@h/three".into())]);
     }

@@ -32,6 +32,21 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
+    #[error("SSH: {0}")]
+    Ssh(#[from] russh::Error),
+    #[error("SSH key: {0}")]
+    SshKey(#[from] russh::keys::Error),
+    #[error("~/.ssh/config: {0}")]
+    SshConfig(#[from] russh_config::Error),
+    #[error("SSH sign-in failed: {0}")]
+    SshAuth(&'static str),
+    #[error(
+        "the SSH host key for {host} has changed (~/.ssh/known_hosts line {line}). If the server was reinstalled, \
+         remove that line; otherwise someone may be intercepting the connection"
+    )]
+    SshHostKeyChanged { host: String, line: usize },
+    #[error("the SSH server could not reach {host}:{port}: {reason}")]
+    SshForward { host: String, port: u16, reason: String },
 }
 
 impl serde::Serialize for Error {

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// How long opening a connection may take before giving up, so a dead host can't hang the app.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

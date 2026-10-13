@@ -3,7 +3,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { EditorState } from "@codemirror/state";
 import { createEditor } from "./editor";
 
-type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean };
+type Ssh = { host: string; port: number | null; user: string; key: string };
+type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean; ssh?: Ssh };
 type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number };
 type Engine = {
   kind: string;
@@ -71,11 +72,12 @@ function tagPill(tag: string) {
 
 function hostOf(c: Saved) {
   if (c.kind === "sqlite") return c.url;
+  const via = c.ssh ? ` via ${c.ssh.host}` : "";
   try {
     const u = new URL(c.url);
-    return u.hostname + (u.pathname.length > 1 ? decodeURIComponent(u.pathname) : "");
+    return u.hostname + (u.pathname.length > 1 ? decodeURIComponent(u.pathname) : "") + via;
   } catch {
-    return c.url;
+    return c.url + via;
   }
 }
 
@@ -178,6 +180,8 @@ function openEditor(kind: string, existing?: Saved) {
   form.querySelector<HTMLElement>(".net")!.hidden = kind === "sqlite";
   form.querySelector<HTMLElement>(".file")!.hidden = kind !== "sqlite";
   setStatus("form-status", "");
+  field("via").value = existing?.ssh ? "ssh" : "";
+  showSsh();
 
   const d = e.defaults;
   if (d) {
@@ -188,12 +192,19 @@ function openEditor(kind: string, existing?: Saved) {
   }
   field("name").placeholder = d ? `${e.label} · ${d.host}` : e.label;
   field("password").placeholder = existing ? "Unchanged (in keychain)" : "None";
+  field("ssh_password").placeholder = existing?.ssh ? "Unchanged (in keychain)" : "None";
   field("confirm").value = settings.safeDefault ? "1" : "0"; // overwritten below when editing
 
   if (existing) {
     field("name").value = existing.name;
     field("tag").value = existing.tag;
     field("confirm").value = existing.confirm_writes ? "1" : "0";
+    if (existing.ssh) {
+      field("ssh_host").value = existing.ssh.host;
+      field("ssh_port").value = existing.ssh.port?.toString() ?? "";
+      field("ssh_user").value = existing.ssh.user;
+      field("ssh_key").value = existing.ssh.key;
+    }
     if (kind === "sqlite") field("path").value = existing.url;
     else {
       // Only fill fields that differ from the default, so placeholders keep meaning "default".
@@ -211,6 +222,22 @@ function openEditor(kind: string, existing?: Saved) {
 }
 
 const val = (k: string) => field(k).value.trim() || field(k).placeholder;
+
+const overSsh = () => editingKind !== "sqlite" && field("via").value === "ssh";
+function showSsh() {
+  form.querySelector<HTMLElement>(".ssh")!.hidden = !overSsh();
+}
+field("via").addEventListener("change", () => (showSsh(), overSsh() && field("ssh_host").focus()));
+
+function formSsh(): Ssh | undefined {
+  if (!overSsh()) return undefined;
+  const host = field("ssh_host").value.trim();
+  if (!host) throw "Enter the SSH host, or choose Connect: Directly.";
+  const portText = field("ssh_port").value.trim();
+  const port = portText ? Number(portText) : null;
+  if (port !== null && !(Number.isInteger(port) && port > 0 && port < 65536)) throw "The SSH port must be a number from 1 to 65535.";
+  return { host, port, user: field("ssh_user").value.trim(), key: field("ssh_key").value.trim() };
+}
 
 function formToSaved(): Saved {
   const e = engine(editingKind);
@@ -230,12 +257,20 @@ function formToSaved(): Saved {
   }
   const name = val("name");
   if (name !== editing?.name && saved.some((c) => c.name === name)) throw `A connection named "${name}" already exists.`;
-  return { name, kind: editingKind, url, tag: field("tag").value, confirm_writes: field("confirm").value === "1" };
+  const conn: Saved = { name, kind: editingKind, url, tag: field("tag").value, confirm_writes: field("confirm").value === "1" };
+  const ssh = formSsh();
+  if (ssh) conn.ssh = ssh; // omitted, not null: the backend refuses unknown or malformed fields
+  return conn;
 }
 
 async function saveForm() {
   const conn = formToSaved();
-  await invoke("save_connection", { conn, password: field("password").value || null, previous: editing?.name ?? null });
+  await invoke("save_connection", {
+    conn,
+    password: field("password").value || null,
+    sshPassword: field("ssh_password").value || null,
+    previous: editing?.name ?? null,
+  });
   return conn;
 }
 
@@ -252,7 +287,7 @@ $("test").onclick = () =>
     const conn = formToSaved();
     setStatus("form-status", "Testing…", "busy");
     const msg = await invoke<string>("test_connection", {
-      kind: conn.kind, url: conn.url, password: field("password").value, savedName: editing?.name ?? null,
+      conn, password: field("password").value, sshPassword: field("ssh_password").value, savedName: editing?.name ?? null,
     });
     setStatus("form-status", msg, "done");
   });

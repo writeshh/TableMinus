@@ -34,6 +34,8 @@ thiserror = "2"
 bytes = "1"
 secrecy = { version = "0.10", features = ["serde"] }
 tokio = { version = "1", features = ["time"] }
+russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-config = "0.58.0"
 
 
 [lints.rust]

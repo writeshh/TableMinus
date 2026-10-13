@@ -3,6 +3,7 @@
 mod db;
 mod error;
 mod readonly;
+mod ssh;
 mod store;
 
 use db::Engine;
@@ -16,6 +17,24 @@ struct Live {
     confirm_writes: bool,
     url: SecretString, // with password; kept in memory only, to reconnect when Postgres switches database
     conn: db::Conn,
+    _tunnel: Option<ssh::Tunnel>, // held so the tunnel lives exactly as long as the connection
+}
+
+/// Opens the database, through an SSH tunnel when the connection has one. Returns the URL actually used.
+async fn open_db(
+    saved: &store::Saved,
+    url: SecretString,
+    ssh_secret: Option<SecretString>,
+) -> Result<(db::Conn, SecretString, Option<ssh::Tunnel>)> {
+    let (url, tunnel) = match &saved.ssh {
+        Some(ssh) => {
+            let (url, tunnel) = ssh::open_for(saved.kind, &url, ssh, ssh_secret.as_ref()).await?;
+            (url, Some(tunnel))
+        }
+        None => (url, None),
+    };
+    let conn = db::Conn::open(saved.kind, &url).await?;
+    Ok((conn, url, tunnel))
 }
 
 /// What the workspace header and sidebar show for an open connection.
@@ -56,6 +75,7 @@ async fn save_connection(
     open: State<'_, Open>,
     conn: store::Saved,
     password: Option<SecretString>,
+    ssh_password: Option<SecretString>,
     previous: Option<String>,
 ) -> Result<()> {
     let mut open = open.0.lock().await; // drop live connections so the next connect uses the new settings
@@ -63,7 +83,7 @@ async fn save_connection(
     if let Some(old) = &previous {
         open.remove(old);
     }
-    store::save(&dir(&app)?, conn, password.as_ref(), previous.as_deref())
+    store::save(&dir(&app)?, conn, password.as_ref(), ssh_password.as_ref(), previous.as_deref())
 }
 
 #[tauri::command]
@@ -76,17 +96,24 @@ async fn delete_connection(app: AppHandle, open: State<'_, Open>, name: String) 
 /// stored for `saved_name` (editing an existing connection); nothing is written.
 #[tauri::command]
 async fn test_connection(
-    kind: Engine,
-    url: String,
+    conn: store::Saved,
     password: SecretString,
+    ssh_password: SecretString,
     saved_name: Option<String>,
 ) -> Result<String> {
-    let url = match saved_name.filter(|_| password.expose_secret().is_empty()) {
-        Some(name) => store::connect_url(&store::Saved { name, kind, url, tag: String::new(), confirm_writes: true })?,
-        None => store::with_password(&url, &password)?,
+    let fallback = |given: SecretString, which| -> Result<Option<SecretString>> {
+        if !given.expose_secret().is_empty() {
+            return Ok(Some(given));
+        }
+        Ok(saved_name.as_deref().map(|name| store::stored(which, name)).transpose()?.flatten())
     };
-    let mut conn = db::Conn::open(kind, &url).await?;
-    let n = conn.tables().await?.len();
+    let url = match fallback(password, store::Secret::Database)? {
+        Some(pw) => store::with_password(&conn.url, &pw)?,
+        None => conn.url.clone().into(),
+    };
+    let ssh_secret = if conn.ssh.is_some() { fallback(ssh_password, store::Secret::Ssh)? } else { None };
+    let (mut db, _, _tunnel) = open_db(&conn, url, ssh_secret).await?;
+    let n = db.tables().await?.len();
     Ok(format!("Connected · {n} tables"))
 }
 
@@ -102,8 +129,9 @@ async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<
                 .find(|c| c.name == *e.key())
                 .ok_or_else(|| Error::NoSuchConnection(e.key().clone()))?;
             let url = store::connect_url(&saved)?;
-            let conn = db::Conn::open(saved.kind, &url).await?;
-            e.insert(Live { engine: saved.kind, confirm_writes: saved.confirm_writes, url, conn })
+            let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
+            let (conn, url, tunnel) = open_db(&saved, url, ssh_secret).await?;
+            e.insert(Live { engine: saved.kind, confirm_writes: saved.confirm_writes, url, conn, _tunnel: tunnel })
         }
     };
     info(live).await
