@@ -6,6 +6,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor } from "./editor";
 import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
+import { csv, inserts, markdown, plain, type Dialect } from "./copy";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -824,7 +825,16 @@ function renderMain() {
   m.className = `foot-msg ${kind}`;
   if (tab.error) $("out").replaceChildren(el("p", { className: "hint empty error-text", textContent: tab.error }));
   else if (tab.view === "structure") renderStructure(columnsCache.get(tab.table) ?? []);
-  else if (tab.result) (render(tab.result, from, { sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add) }), decorateEditable(tab));
+  else if (tab.result) {
+    const quickFilter = (ri: number, ci: number): MenuItem[] => {
+      const column = tab.result!.columns[ci];
+      const value = tab.result!.rows[ri][ci];
+      const shown = value === null ? "NULL" : value.length > 24 ? value.slice(0, 24) + "…" : value;
+      return ["-", [`Filter rows where ${column} = ${shown}`, () => filterByCell(tab, column, value)]];
+    };
+    render(tab.result, from, { sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add), table: tab.table, menu: quickFilter });
+    decorateEditable(tab);
+  }
   else $("out").replaceChildren();
 }
 
@@ -868,11 +878,6 @@ function decorateEditable(tab: TableTab) {
       const staged = tab.edits.get(ri);
       if (staged?.has(ci)) (fillCell(td, staged.get(ci)!), td.classList.add("changed"));
       if (editable) td.ondblclick = () => editCell(tab, ri, ci);
-      td.oncontextmenu = (e) => {
-        const column = tab.result!.columns[ci];
-        const value = tab.result!.rows[ri][ci];
-        contextMenu(e, [[`Filter rows where ${column} = ${value === null ? "NULL" : value.length > 24 ? value.slice(0, 24) + "…" : value}`, () => filterByCell(tab, column, value)]]);
-      };
     });
   });
 }
@@ -1033,9 +1038,10 @@ function filterByCell(tab: TableTab, column: string, value: string | null) {
 }
 
 let menuClose: (() => void) | null = null;
+type MenuItem = [string, () => void] | "-";
 
 /** A small context menu at the pointer; any click or Esc closes it. */
-function contextMenu(e: MouseEvent, items: ([string, () => void] | "-")[]) {
+function contextMenu(e: MouseEvent, items: MenuItem[]) {
   e.preventDefault();
   menuClose?.();
   const menu = el("div", { className: "menu" });
@@ -1115,8 +1121,17 @@ async function run(sql: string, confirmed = false) {
 
 const numeric = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i;
 
-/** Result grid with row numbers starting after `offset`. With `onSort`, headers sort the rows when clicked. */
-function render(r: QueryResult, offset: number, sorting?: { sort: Sort[]; onSort: (column: string, add: boolean) => void }) {
+type RenderOptions = {
+  sort: Sort[];
+  onSort: (column: string, add: boolean) => void;
+  /** The table the rows come from, for "Copy as INSERT". */
+  table: string;
+  /** Extra context-menu items for a cell. */
+  menu?: (row: number, col: number) => MenuItem[];
+};
+
+/** Result grid with row numbers starting after `offset`. With options, headers sort the rows when clicked. */
+function render(r: QueryResult, offset: number, sorting?: RenderOptions) {
   if (!r.columns.length) return $("out").replaceChildren(el("p", { className: "hint empty", textContent: `${r.affected} rows affected.` }));
   const table = el("table");
   const head = table.createTHead().insertRow();
@@ -1148,7 +1163,143 @@ function render(r: QueryResult, offset: number, sorting?: { sort: Sort[]; onSort
     tr.append(el("td", { className: "hint", colSpan: r.columns.length + 1, textContent: "No rows." }));
   }
   $("out").replaceChildren(table);
+  selection = null;
+  if (r.rows.length) wireSelection(table, r, sorting);
 }
+
+// ---------- Selection and copying ----------
+
+/** A block of cells, from the anchor (first click) to the focus (Shift-click or drag end), inclusive. */
+type Selection = { r: QueryResult; anchor: [number, number]; focus: [number, number]; table?: string };
+let selection: Selection | null = null;
+
+function selectedBlock(sel: Selection) {
+  const [r0, r1] = [Math.min(sel.anchor[0], sel.focus[0]), Math.max(sel.anchor[0], sel.focus[0])];
+  const [c0, c1] = [Math.min(sel.anchor[1], sel.focus[1]), Math.max(sel.anchor[1], sel.focus[1])];
+  return { r0, r1, c0, c1 };
+}
+
+function paintSelection() {
+  const block = selection && selectedBlock(selection);
+  $("out").querySelectorAll("tbody tr").forEach((tr, ri) => {
+    [...tr.children].forEach((td, i) => {
+      const ci = i - 1; // the row number comes first
+      td.classList.toggle("sel", !!block && ci >= 0 && ri >= block.r0 && ri <= block.r1 && ci >= block.c0 && ci <= block.c1);
+    });
+  });
+}
+
+/** The selected cells (or, with `wholeRows`, every column of the selected rows) with their column names. */
+function selectedCells(wholeRows = false) {
+  if (!selection) return null;
+  const { r0, r1, c0, c1 } = selectedBlock(selection);
+  const [from, to] = wholeRows ? [0, selection.r.columns.length - 1] : [c0, c1];
+  return {
+    columns: selection.r.columns.slice(from, to + 1),
+    rows: selection.r.rows.slice(r0, r1 + 1).map((row) => row.slice(from, to + 1)),
+  };
+}
+
+/** A short note where the current tab shows messages: the run bar for SQL tabs, the footer for table tabs. */
+function note(text: string, kind: StatusKind) {
+  if (current()?.kind !== "table") return status(text, kind);
+  // Written directly: a full re-render would also redraw the grid and drop the selection.
+  const m = $("foot-msg");
+  m.textContent = text;
+  m.className = `foot-msg ${kind}`;
+}
+
+async function copyText(text: string, what: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    note(`Copied ${what}`, "done");
+  } catch (e) {
+    note(`Couldn't copy: ${e}`, "error");
+  }
+}
+
+function copySelection(format: "plain" | "csv" | "markdown" | "insert") {
+  const cells = selectedCells(format === "insert");
+  if (!cells || !active) return;
+  const n = cells.rows.length;
+  const rows = `${n} row${n === 1 ? "" : "s"}`;
+  if (format === "plain") return copyText(plain(cells), n === 1 && cells.columns.length === 1 ? "cell" : rows);
+  if (format === "csv") return copyText(csv(cells), `${rows} as CSV`);
+  if (format === "markdown") return copyText(markdown(cells), `${rows} as Markdown`);
+  copyText(inserts(cells, selection!.table ?? "table_name", active.kind as Dialect), `${rows} as INSERT statements`);
+}
+
+function wireSelection(table: HTMLTableElement, r: QueryResult, options?: RenderOptions) {
+  const cellOf = (target: EventTarget | null): [number, number] | null => {
+    const td = (target as HTMLElement | null)?.closest?.("td");
+    const tr = td?.parentElement as HTMLTableRowElement | null;
+    if (!td || !tr || td.querySelector("input")) return null; // an open cell editor keeps its own clicks
+    const ri = tr.sectionRowIndex;
+    const ci = td.cellIndex - 1;
+    return ci < 0 ? [ri, -1] : [ri, ci]; // -1: the row number
+  };
+  const last = r.columns.length - 1;
+  let dragging = false;
+  table.tBodies[0].onpointerdown = (e) => {
+    const at = cellOf(e.target);
+    if (!at || e.button !== 0) return;
+    const [ri, ci] = at;
+    const wholeRow = ci < 0;
+    if (e.shiftKey && selection) selection.focus = [ri, wholeRow ? last : ci];
+    else selection = { r, anchor: [ri, wholeRow ? 0 : ci], focus: [ri, wholeRow ? last : ci], table: options?.table };
+    if (wholeRow) (selection.anchor[1] = 0), (selection.focus[1] = last);
+    dragging = !e.shiftKey;
+    paintSelection();
+  };
+  table.tBodies[0].onpointerover = (e) => {
+    if (!dragging || !selection || !(e.buttons & 1)) return;
+    const at = cellOf(e.target);
+    if (!at) return;
+    selection.focus = [at[0], at[1] < 0 ? last : at[1]];
+    paintSelection();
+  };
+  table.onpointerup = () => (dragging = false);
+  table.tBodies[0].oncontextmenu = (e) => {
+    const at = cellOf(e.target);
+    if (!at) return;
+    const [ri, ci] = [at[0], Math.max(0, at[1])];
+    const block = selection && selectedBlock(selection);
+    const inside = block && ri >= block.r0 && ri <= block.r1 && ci >= block.c0 && ci <= block.c1;
+    if (!inside) (selection = { r, anchor: [ri, ci], focus: [ri, ci], table: options?.table }), paintSelection();
+    const column = r.columns[ci];
+    const values = () => copyText(r.rows.map((row) => row[ci] ?? "NULL").join("\n"), `${r.rows.length} values of ${column}`);
+    contextMenu(e, [
+      [isMac ? "Copy  ⌘C" : "Copy  Ctrl+C", () => copySelection("plain")],
+      ["Copy rows as CSV with header", () => copySelection("csv")],
+      ["Copy rows as Markdown table", () => copySelection("markdown")],
+      ...(options ? [["Copy rows as INSERT statements", () => copySelection("insert")] as MenuItem] : []),
+      "-",
+      [`Copy column name "${column}"`, () => copyText(column, "column name")],
+      [`Copy all values of ${column} on this page`, values],
+      ...(options?.menu?.(ri, ci) ?? []),
+    ]);
+  };
+}
+
+/** Whether keyboard focus is somewhere that has its own copy and select-all (inputs, the SQL editor). */
+const typingSomewhere = () => {
+  const a = document.activeElement as HTMLElement | null;
+  return !!a && (a.isContentEditable || a.matches("input, textarea, select") || !!a.closest(".cm-editor"));
+};
+
+document.addEventListener("keydown", (e) => {
+  if (!(e.metaKey || e.ctrlKey) || $("workspace").hidden || typingSomewhere() || document.querySelector("dialog[open]")) return;
+  const key = e.key.toLowerCase();
+  if (key === "c" && selection) (e.preventDefault(), copySelection("plain"));
+  else if (key === "a" && $("out").querySelector("tbody td:not(.hint)")) {
+    const r = selection?.r ?? (current() as { result?: QueryResult } | undefined)?.result;
+    if (!r?.rows.length) return;
+    e.preventDefault();
+    const table = current()?.kind === "table" ? (current() as TableTab).table : undefined;
+    selection = { r, anchor: [0, 0], focus: [r.rows.length - 1, r.columns.length - 1], table };
+    paintSelection();
+  }
+});
 
 function renderStructure(cols: Column[]) {
   render(

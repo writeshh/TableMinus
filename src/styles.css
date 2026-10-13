@@ -277,3 +277,5 @@ th .sort { margin-left: 4px; color: var(--accent); font-size: 10px; }
 .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 5px; }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+#out td.sel { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+#out tbody { user-select: none; } /* the grid has its own selection and copy */
