@@ -1,5 +1,5 @@
 import { EditorView, basicSetup } from "codemirror";
-import { Compartment, EditorState, Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
 import { Decoration, ViewPlugin, highlightWhitespace, keymap, placeholder, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
@@ -53,7 +53,7 @@ export type Editor = ReturnType<typeof createEditor>;
 /** The SQL editor. Each tab keeps its own EditorState (text + undo history); `setState` swaps them in. */
 export function createEditor(
   parent: HTMLElement,
-  on: { change: (doc: string) => void; cursor: () => void; runCurrent: () => void; runAll: () => void; format: () => void },
+  on: { change: (doc: string) => void; cursor: () => void },
 ) {
   const language = new Compartment();
   const indent = new Compartment();
@@ -93,13 +93,6 @@ export function createEditor(
   );
 
   const extensions = () => [
-    Prec.highest(
-      keymap.of([
-        { key: "Mod-Enter", run: () => (on.runCurrent(), true) },
-        { key: "Shift-Mod-Enter", run: () => (on.runAll(), true) },
-        { key: "Mod-i", run: () => (on.format(), true) },
-      ]),
-    ),
     currentStatement,
     basicSetup,
     keymap.of([indentWithTab]), // Tab indents; Esc then Tab leaves the editor (CodeMirror's escape hatch)

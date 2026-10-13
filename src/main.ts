@@ -14,6 +14,9 @@ import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
 import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
+import { addCommands, bindings, isMac, onBindingsChanged } from "./commands";
+import { label } from "./keys";
+import "./workspace.css";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -65,9 +68,6 @@ const editor = createEditor($("sql"), {
     saveSqlTabsSoon();
   },
   cursor: () => updateCursor(),
-  runCurrent: () => runCurrent(),
-  runAll: () => runAll(),
-  format: () => formatSql(),
 });
 
 function formatSql() {
@@ -408,9 +408,8 @@ function show(view: "home" | "workspace") {
 
 type Info = { server: string; database: string | null; can_switch: boolean; tables: string[] };
 let info: Info | null = null;
-const isMac = navigator.userAgent.includes("Mac");
-const shortcut = isMac ? "⌘K" : "Ctrl+K";
-$("reconnect-key").textContent = isMac ? "⌘⇧R" : "Ctrl+Shift+R";
+/** The first shortcut of a command, as it reads on screen; "" when it has none. */
+const keyLabel = (id: string) => label(bindings(id)[0] ?? "", isMac);
 
 /** invoke for workspace commands: a dropped connection shows the reconnect banner before the error moves on. */
 async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
@@ -515,7 +514,7 @@ function applyInfo(i: Info) {
   const btn = $("db-button");
   btn.hidden = !i.can_switch;
   btn.textContent = i.database ? `${i.database} ▾` : "Choose database ▾";
-  btn.title = `Open a database (${shortcut})`;
+  btn.title = `Open a database (${keyLabel("open-database")})`;
   $<HTMLInputElement>("filter").value = "";
   $<HTMLInputElement>("filter").hidden = !tables.length;
   editor.setDialect(active!.kind, new Map(tables.map((t) => [t, []]))); // before the new tab's state is created
@@ -675,12 +674,6 @@ $("db-search").addEventListener("keydown", (e) => {
 $("db-open").onclick = () => openDb();
 $("db-cancel").onclick = () => $<HTMLDialogElement>("dbpicker").close();
 $("db-button").onclick = openDbPicker;
-document.addEventListener("keydown", (e) => {
-  if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey) && !$("workspace").hidden) {
-    e.preventDefault();
-    openDbPicker();
-  }
-});
 
 // ---------- Sidebar: tables (expandable to columns) and history ----------
 
@@ -737,7 +730,7 @@ function renderTables() {
   const hint = $("no-tables");
   hint.hidden = shown.length > 0;
   hint.textContent =
-    info?.can_switch && !info.database ? `No database selected. Press ${shortcut} to choose one.`
+    info?.can_switch && !info.database ? `No database selected. Press ${keyLabel("open-database")} to choose one.`
     : tables.length ? "No tables match."
     : "This database has no tables.";
 }
@@ -832,6 +825,13 @@ let nextId = 1;
 let shownId = 0; // the SQL tab whose state is in the editor right now
 const current = () => tabs.find((t) => t.id === currentId);
 
+/** The tabs of one pane (the window splits into two side by side). While a pane has focus its tabs and current
+ *  tab live in `tabs` and `currentId`; the rest is its history for Back/Forward and Reopen Closed Tab. */
+type Pane = { tabs: Tab[]; currentId: number; back: number[]; forward: number[]; closed: { tab: Tab; index: number }[] };
+const newPane = (): Pane => ({ tabs: [], currentId: 0, back: [], forward: [], closed: [] });
+let pane: Pane = newPane();
+let navigating = false; // Back/Forward selects without recording the move
+
 function openSqlTab(): SqlTab {
   // Lowest free number, so closing tabs doesn't make the names climb forever.
   const used = new Set(tabs.map((t) => t.title));
@@ -859,22 +859,124 @@ function openTable(table: string, view: TableTab["view"] = "data", create = fals
   if (view === "data") loadTable(tab);
 }
 
+/** Keeps the editor's text and undo history with the SQL tab that's showing. */
+function stashEditor() {
+  const t = current();
+  if (t?.kind === "sql" && shownId === t.id) t.state = editor.view.state;
+}
+
 function select(id: number) {
-  const prev = current();
-  if (prev?.kind === "sql" && shownId === prev.id) prev.state = editor.view.state; // text + undo stay with the tab
+  stashEditor();
+  if (!navigating && currentId && id !== currentId && tabs.some((t) => t.id === currentId)) {
+    pane.back = [...pane.back, currentId].slice(-50);
+    pane.forward = [];
+  }
   currentId = id;
   renderMain();
   renderTables();
 }
 
-async function closeTab(id: number) {
+/** Closes a tab; `remember` keeps it for Reopen Closed Tab (not for a table that was just dropped). */
+async function closeTab(id: number, remember = true) {
   const i = tabs.findIndex((t) => t.id === id);
   if (i < 0 || !(await okToDiscard(tabs[i]))) return;
+  if (id === currentId) stashEditor();
+  if (remember) pane.closed = [...pane.closed, { tab: tabs[i], index: i }].slice(-20);
   tabs.splice(i, 1);
   saveSqlTabs();
   if (!tabs.length) return void closeWorkspace(); // last tab gone: leave the connection, like TablePlus
   if (id === currentId) select(tabs[Math.max(0, i - 1)].id);
   else renderMain();
+}
+
+/** Every other tab closed, each asking first if it has unsaved changes. */
+async function closeOtherTabs(id: number) {
+  for (const t of tabs.filter((t) => t.id !== id)) if (!(await okToDiscard(t))) return;
+  pane.closed = [...pane.closed, ...tabs.filter((t) => t.id !== id).map((tab) => ({ tab, index: 0 }))].slice(-20);
+  tabs = tabs.filter((t) => t.id === id);
+  saveSqlTabs();
+  select(id);
+}
+
+function reopenClosedTab() {
+  const last = pane.closed.at(-1);
+  if (!last) return;
+  pane.closed = pane.closed.slice(0, -1);
+  tabs.splice(Math.min(last.index, tabs.length), 0, last.tab);
+  saveSqlTabs();
+  select(last.tab.id);
+  if (last.tab.kind === "table" && last.tab.view === "data") loadTable(last.tab);
+}
+
+/** Tab n (1-based); 9 is the last tab, as in browsers. */
+function selectTabAt(n: number) {
+  const t = n === 9 ? tabs.at(-1) : tabs[n - 1];
+  if (t) select(t.id);
+}
+
+function cycleTab(step: number) {
+  const i = tabs.findIndex((t) => t.id === currentId);
+  if (tabs.length > 1) select(tabs[(i + step + tabs.length) % tabs.length].id);
+}
+
+/** Back and Forward through the tabs opened in this pane; closed ones are skipped. */
+function goBack(forward: boolean) {
+  const [from, to] = forward ? [pane.forward, pane.back] : [pane.back, pane.forward];
+  while (from.length) {
+    const id = from.pop()!;
+    if (!tabs.some((t) => t.id === id) || id === currentId) continue;
+    to.push(currentId);
+    navigating = true;
+    select(id);
+    navigating = false;
+    return;
+  }
+}
+
+/** Swaps the tab's label for a text field; Enter keeps the new name, Esc or an empty name keeps the old one. */
+function renameTab(id: number) {
+  const t = tabs.find((t) => t.id === id);
+  const label = $("tabs").querySelector(`[data-tab="${id}"] .label`);
+  if (!t || !label) return;
+  const input = el("input", { className: "tab-rename", value: t.title, ariaLabel: "Tab name" });
+  label.replaceWith(input);
+  input.select();
+  let done = false;
+  const finish = (keep: boolean) => {
+    if (done) return;
+    done = true;
+    if (keep && input.value.trim()) t.title = input.value.trim();
+    saveSqlTabs();
+    renderMain();
+  };
+  input.onkeydown = (e) => {
+    e.stopPropagation(); // Space and Enter belong to the field, not the tab button
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  };
+  input.onclick = (e) => e.stopPropagation();
+  input.onblur = () => finish(true);
+}
+
+function tabMenu(id: number): MenuItem[] {
+  return [
+    ["Rename…", () => renameTab(id)],
+    "-",
+    ["Close Tab", () => closeTab(id)],
+    ["Close Other Tabs", () => closeOtherTabs(id)],
+    ...(pane.closed.length ? [["Reopen Closed Tab", reopenClosedTab] as MenuItem] : []),
+  ];
+}
+
+/** Reload Current Tab: a table's rows (and count) or structure again; on a SQL tab, the sidebar's items. */
+async function reloadTab() {
+  const tab = current();
+  if (tab?.kind !== "table") return reloadItems();
+  if (!(await okToDiscard(tab))) return;
+  columnsCache.delete(tab.table);
+  tab.total = undefined;
+  if (tab.view === "data") loadTable(tab);
+  else (dropDraft(tab.id), renderMain());
 }
 
 function renderMain() {
@@ -891,8 +993,11 @@ function renderMain() {
       );
       b.setAttribute("role", "tab");
       b.setAttribute("aria-selected", String(t.id === currentId));
+      b.dataset.tab = String(t.id);
       b.onclick = () => select(t.id);
       b.onauxclick = (e) => e.button === 1 && closeTab(t.id); // middle-click closes
+      b.ondblclick = () => renameTab(t.id);
+      b.oncontextmenu = (e) => contextMenu(e, tabMenu(t.id));
       return b;
     }),
   );
@@ -1223,6 +1328,16 @@ function ask(text: string, detail: string, okLabel: string): Promise<boolean> {
     $("ask-ok").onclick = () => done(true);
     $("ask-cancel").onclick = () => done(false);
   });
+}
+
+/** The sidebar's items again (new or dropped tables), with columns and autocomplete reloaded. */
+async function reloadItems() {
+  const i = await call<Info>("connect", { name: active!.name }); // reuses the open connection
+  info = i;
+  tables = i.tables;
+  columnsCache.clear();
+  renderTables();
+  loadSchema();
 }
 
 /** Columns for every table, for autocomplete. Runs in the background; the editor works without it meanwhile. */
@@ -1665,21 +1780,14 @@ initStructure({
   call,
   conn: () => active,
   tables: () => tables,
-  async refreshTables() {
-    const i = await call<Info>("connect", { name: active!.name }); // reuses the open connection
-    info = i;
-    tables = i.tables;
-    columnsCache.clear();
-    renderTables();
-    loadSchema();
-  },
+  refreshTables: reloadItems,
   openStructure: (table, create) => openTable(table, "structure", create),
   forgetTable(table) {
     for (const t of tabs.filter((t): t is TableTab => t.kind === "table" && t.table === table)) {
       t.edits.clear();
       dropDraft(t.id);
       if (tabs.length === 1) openSqlTab(); // closing the last tab would leave the workspace
-      closeTab(t.id);
+      closeTab(t.id, false);
     }
   },
   retarget(id, table) {
@@ -1757,24 +1865,6 @@ async function closeWorkspace() {
   delete document.body.dataset.env;
   show("home");
 }
-
-// Cmd/Ctrl+W: close the tab; on the last tab close the workspace; on the launcher close the window.
-document.addEventListener("keydown", (e) => {
-  if (!(e.metaKey || e.ctrlKey) || document.querySelector("dialog[open]")) return;
-  const key = e.key.toLowerCase();
-  if (key === "w") {
-    e.preventDefault();
-    if ($("workspace").hidden) getCurrentWindow().close();
-    else closeTab(currentId);
-  } else if (key === "t" && !$("workspace").hidden) (e.preventDefault(), openSqlTab(), editor.focus());
-  else if (key === "s" && !$("workspace").hidden) {
-    e.preventDefault();
-    if (current()?.kind === "sql") saveSqlFile(e.shiftKey);
-    else saveEdits();
-  } else if (key === "o" && !$("workspace").hidden) (e.preventDefault(), openSqlFile());
-  else if (key === "r" && e.shiftKey && !$("workspace").hidden) (e.preventDefault(), reconnect());
-  else if (key === "f" && current()?.kind === "table" && !$("workspace").hidden) (e.preventDefault(), toggleFilters(true));
-});
 
 // ---------- Settings (⌘,) ----------
 
@@ -1866,16 +1956,6 @@ $("settings-reset").onclick = () => {
   setSetting("theme", settings.theme); // persists and re-applies everything
 };
 $("settings-done").onclick = () => $<HTMLDialogElement>("settings").close();
-$("font-keys").textContent = navigator.userAgent.includes("Mac") ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0";
-
-document.addEventListener("keydown", (e) => {
-  if (!(e.metaKey || e.ctrlKey)) return;
-  if (e.key === ",") return e.preventDefault(), openSettings();
-  if ($("workspace").hidden) return;
-  // Editor font size; also stops the webview from zooming the whole page.
-  const size = e.key === "=" || e.key === "+" ? settings.fontSize + 1 : e.key === "-" ? settings.fontSize - 1 : e.key === "0" ? DEFAULT_SETTINGS.fontSize : 0;
-  if (size) (e.preventDefault(), setSetting("fontSize", clamp(size, 9, 28)));
-});
 
 showTab("general");
 applySettings();
@@ -1898,7 +1978,6 @@ $("editor-cancel").onclick = () => $<HTMLDialogElement>("editor").close();
 $("back").onclick = closeWorkspace;
 $("filter").addEventListener("input", renderTables);
 
-$("keys").textContent = navigator.userAgent.includes("Mac") ? "⌘↵" : "Ctrl+↵";
 $("run").onclick = runCurrent;
 $("run-all").onclick = runAll;
 $("explain").onclick = async () => {
@@ -1909,14 +1988,71 @@ $("explain").onclick = async () => {
   if (filled) run(filled[0]);
 };
 $("format-sql").onclick = () => (formatSql(), editor.focus());
-$("keys-format").textContent = navigator.userAgent.includes("Mac") ? "⌘I" : "Ctrl+I";
 $<HTMLInputElement>("wrap-lines").onchange = (e) => setSetting("wrapLines", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("show-invisibles").onchange = (e) => setSetting("showInvisibles", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("keep-tabs").onchange = (e) => setSetting("keepTabs", (e.target as HTMLInputElement).checked);
 $<HTMLSelectElement>("param-format").onchange = (e) => setSetting("paramFormat", (e.target as HTMLSelectElement).value as Settings["paramFormat"]);
 $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
-$("keys-all").textContent = navigator.userAgent.includes("Mac") ? "⌘⇧↵" : "Ctrl+Shift+↵";
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));
+
+// ---------- Commands (commands.ts): shortcuts, and later the menu bar and Open Anything ----------
+
+const inWorkspace = () => !$("workspace").hidden;
+const onSqlTab = () => inWorkspace() && current()?.kind === "sql";
+const fontBy = (size: number) => setSetting("fontSize", clamp(size, 9, 28));
+
+addCommands([
+  { id: "new-tab", label: "New Tab", menu: "File", keys: ["Mod+KeyT"], when: inWorkspace, run: () => (openSqlTab(), editor.focus()) },
+  { id: "reopen-tab", label: "Reopen Closed Tab", menu: "File", keys: ["Mod+Shift+KeyT"], when: () => inWorkspace() && !!pane.closed.length,
+    run: reopenClosedTab },
+  { id: "open-file", label: "Open…", menu: "File", keys: ["Mod+KeyO"], when: inWorkspace, run: openSqlFile },
+  { id: "save", label: "Save", menu: "File", keys: ["Mod+KeyS"], when: inWorkspace, sep: true,
+    run: () => (current()?.kind === "sql" ? saveSqlFile(false) : saveEdits()) },
+  { id: "save-as", label: "Save As…", menu: "File", keys: ["Mod+Shift+KeyS"], when: inWorkspace,
+    run: () => (current()?.kind === "sql" ? saveSqlFile(true) : saveEdits()) },
+  // On the launcher there's no tab: close the window, like other apps.
+  { id: "close-tab", label: "Close Tab", menu: "File", keys: ["Mod+KeyW"], sep: true,
+    run: () => (inWorkspace() ? closeTab(currentId) : getCurrentWindow().close()) },
+  { id: "close-other-tabs", label: "Close Other Tabs", menu: "File", when: () => inWorkspace() && tabs.length > 1,
+    run: () => closeOtherTabs(currentId) },
+  { id: "rename-tab", label: "Rename Tab…", menu: "File", when: inWorkspace, run: () => renameTab(currentId) },
+  { id: "settings", label: "Settings…", menu: "File", keys: ["Mod+Comma"], overDialogs: true, sep: true, run: openSettings },
+  { id: "run-current", label: "Run Current Query", menu: "Edit", keys: ["Mod+Enter"], when: onSqlTab, sep: true, run: runCurrent },
+  { id: "run-all", label: "Run All Queries", menu: "Edit", keys: ["Mod+Shift+Enter"], when: onSqlTab, run: runAll },
+  { id: "format", label: "Format SQL", menu: "Edit", keys: ["Mod+KeyI"], when: onSqlTab, run: formatSql },
+  { id: "filter", label: "Filter Rows", menu: "Edit", keys: ["Mod+KeyF"], when: () => inWorkspace() && current()?.kind === "table",
+    run: () => toggleFilters(true) },
+  { id: "font-bigger", label: "Increase Font Size", menu: "View", keys: ["Mod+Equal", "Mod+Shift+Equal"], when: inWorkspace,
+    run: () => fontBy(settings.fontSize + 1) },
+  { id: "font-smaller", label: "Decrease Font Size", menu: "View", keys: ["Mod+Minus"], when: inWorkspace, run: () => fontBy(settings.fontSize - 1) },
+  { id: "font-reset", label: "Actual Font Size", menu: "View", keys: ["Mod+Digit0"], when: inWorkspace, run: () => fontBy(DEFAULT_SETTINGS.fontSize) },
+  { id: "reload-tab", label: "Reload Current Tab", menu: "View", keys: ["Mod+KeyR"], when: inWorkspace, sep: true, run: reloadTab },
+  { id: "go-back", label: "Go Back", menu: "Navigate", keys: ["Ctrl+Mod+ArrowLeft"], when: inWorkspace, run: () => goBack(false) },
+  { id: "go-forward", label: "Go Forward", menu: "Navigate", keys: ["Ctrl+Mod+ArrowRight"], when: inWorkspace, run: () => goBack(true) },
+  { id: "next-tab", label: "Select Next Tab", menu: "Window", keys: ["Mod+Shift+BracketRight", "Ctrl+Tab"], when: inWorkspace,
+    run: () => cycleTab(1) },
+  { id: "previous-tab", label: "Select Previous Tab", menu: "Window", keys: ["Mod+Shift+BracketLeft", "Ctrl+Shift+Tab"],
+    when: inWorkspace, run: () => cycleTab(-1) },
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+    id: `tab-${n}`, label: n === 9 ? "Last Tab" : `Tab ${n}`, menu: "Window" as const, keys: [`Mod+Digit${n}`],
+    when: inWorkspace, run: () => selectTabAt(n), sep: n === 1,
+  })),
+  { id: "open-database", label: "Open a Database…", menu: "Connection", keys: ["Mod+KeyK"], when: inWorkspace, run: openDbPicker },
+  { id: "reconnect", label: "Reconnect", menu: "Connection", keys: ["Mod+Shift+KeyR"], when: inWorkspace, run: reconnect },
+]);
+
+/** Shortcut hints next to buttons, kept in step with Settings › Shortcuts. */
+function showKeys() {
+  $("keys").textContent = keyLabel("run-current");
+  $("keys-all").textContent = keyLabel("run-all");
+  $("keys-format").textContent = keyLabel("format");
+  $("reconnect-key").textContent = keyLabel("reconnect");
+  $("font-keys").textContent = ["font-bigger", "font-smaller", "font-reset"].map(keyLabel).filter(Boolean).join(" / ");
+  $("toggle-filters").title = `Filter rows (${keyLabel("filter")})`;
+  $("save-edits").title = `Save changes (${keyLabel("save")})`;
+}
+onBindingsChanged(showKeys);
+showKeys();
 
 show("home");
 refresh();
