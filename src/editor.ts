@@ -1,6 +1,6 @@
 import { EditorView, basicSetup } from "codemirror";
 import { Compartment, EditorState, Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
-import { Decoration, ViewPlugin, keymap, placeholder, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { Decoration, ViewPlugin, highlightWhitespace, keymap, placeholder, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { MariaSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
@@ -57,8 +57,10 @@ export function createEditor(
 ) {
   const language = new Compartment();
   const indent = new Compartment();
+  const display = new Compartment();
   let lang: Extension = sql({ dialect: StandardSQL });
   let unit = "  ";
+  let looks: Extension[] = [];
   let dialect: Dialect = "postgres";
 
   /** The statement under the cursor, shaded so it's clear what ⌘↩ will run. Off while text is selected. */
@@ -103,6 +105,7 @@ export function createEditor(
     keymap.of([indentWithTab]), // Tab indents; Esc then Tab leaves the editor (CodeMirror's escape hatch)
     language.of(lang),
     indent.of(indentUnit.of(unit)),
+    display.of(looks),
     syntaxHighlighting(highlight),
     placeholder("Write SQL here. Run runs the statement under the cursor (or the selection); Run all runs every statement."),
     theme,
@@ -114,7 +117,10 @@ export function createEditor(
 
   const view = new EditorView({ parent, state: EditorState.create({ extensions: extensions() }) });
   // A stored state may carry an older dialect or indent; bring it up to date.
-  const refresh = () => view.dispatch({ effects: [language.reconfigure(lang), indent.reconfigure(indentUnit.of(unit))] });
+  const refresh = () =>
+    view.dispatch({
+      effects: [language.reconfigure(lang), indent.reconfigure(indentUnit.of(unit)), display.reconfigure(looks)],
+    });
 
   return {
     view,
@@ -165,6 +171,13 @@ export function createEditor(
       const { from, to } = view.state.selection.main;
       return splitStatements(from === to ? view.state.doc.toString() : view.state.sliceDoc(from, to), dialect);
     },
+    /** Soft-wraps long lines; shows spaces and tabs. */
+    setDisplay(wrap: boolean, invisibles: boolean) {
+      looks = [...(wrap ? [EditorView.lineWrapping] : []), ...(invisibles ? [highlightWhitespace()] : [])];
+      refresh();
+    },
+    /** The dialect statements are split in. */
+    dialect: () => dialect,
     setIndent(text: string) {
       unit = text;
       refresh();

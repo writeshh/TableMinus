@@ -220,6 +220,17 @@
           <select id="format-style"><option value="standard">Standard</option><option value="tabularLeft">Tabular, left</option><option value="tabularRight">Tabular, right</option></select>
         </div>
         <div class="row">
+          <span class="k">Display</span>
+          <span class="checks">
+            <label class="check"><input type="checkbox" id="wrap-lines" /> Wrap long lines</label>
+            <label class="check"><input type="checkbox" id="show-invisibles" /> Show spaces and tabs</label>
+          </span>
+        </div>
+        <div class="row">
+          <span class="k">SQL tabs</span>
+          <label class="check"><input type="checkbox" id="keep-tabs" /> Reopen each connection's SQL tabs</label>
+        </div>
+        <div class="row">
           <span class="k">Indent with</span>
           <select id="indent"><option value="tab">Tab</option><option value="2">2 spaces</option><option value="4">4 spaces</option></select>
         </div>
@@ -301,6 +312,7 @@
             <button id="run" class="primary" title="Run the statement under the cursor, or the selection">Run <kbd id="keys"></kbd></button>
             <button id="run-all" title="Run every statement, one after another">Run all <kbd id="keys-all"></kbd></button>
             <button id="format-sql" class="ghost" title="Format the selection, or everything">Format <kbd id="keys-format"></kbd></button>
+            <button id="explain" class="ghost" title="Show the plan for the statement under the cursor">Explain</button>
             <select id="row-limit" title="Most rows to show from a query">
               <option value="100">100 rows</option><option value="500">500 rows</option><option value="1000">1,000 rows</option>
               <option value="5000">5,000 rows</option><option value="10000">10,000 rows</option><option value="50000">50,000 rows</option>

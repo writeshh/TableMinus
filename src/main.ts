@@ -57,6 +57,7 @@ const editor = createEditor($("sql"), {
   change: (doc) => {
     const tab = current();
     if (tab?.kind === "sql") tab.sql = doc;
+    saveSqlTabsSoon();
   },
   cursor: () => updateCursor(),
   runCurrent: () => runCurrent(),
@@ -515,8 +516,40 @@ function applyInfo(i: Info) {
   loadSchema();
   tabs = [];
   shownId = 0;
-  openSqlTab();
+  const kept = settings.keepTabs ? loadSqlTabs() : [];
+  if (!kept.length) openSqlTab();
+  for (const k of kept) tabs.push({ id: nextId++, kind: "sql", title: k.title, sql: k.sql });
+  if (kept.length) select(tabs[0].id);
   renderTables();
+}
+
+// ---------- SQL tabs kept per connection ----------
+
+type KeptTab = { title: string; sql: string };
+const keptKey = () => `sql-tabs:${active?.name}`;
+
+function loadSqlTabs(): KeptTab[] {
+  try {
+    const kept = JSON.parse(localStorage.getItem(keptKey()) ?? "[]");
+    return Array.isArray(kept) ? kept.filter((k) => typeof k?.title === "string" && typeof k?.sql === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSqlTabs() {
+  if (!active || !settings.keepTabs) return;
+  const kept: KeptTab[] = tabs.flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql }] : []));
+  try {
+    if (kept.length) localStorage.setItem(keptKey(), JSON.stringify(kept));
+    else localStorage.removeItem(keptKey());
+  } catch {} // unavailable storage: the tabs just aren't reopened next time
+}
+
+let saveTimer = 0;
+function saveSqlTabsSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(saveSqlTabs, 400);
 }
 
 // ---------- Open database (⌘K) ----------
@@ -777,6 +810,7 @@ async function closeTab(id: number) {
   const i = tabs.findIndex((t) => t.id === id);
   if (i < 0 || !(await okToDiscard(tabs[i]))) return;
   tabs.splice(i, 1);
+  saveSqlTabs();
   if (!tabs.length) return void closeWorkspace(); // last tab gone: leave the connection, like TablePlus
   if (id === currentId) select(tabs[Math.max(0, i - 1)].id);
   else renderMain();
@@ -1594,10 +1628,14 @@ type Settings = {
   sqlLimit: number;
   formatStyle: FormatStyle;
   paramFormat: ParamFormat | "off";
+  wrapLines: boolean;
+  showInvisibles: boolean;
+  /** Save each connection's SQL tabs and reopen them on connect. */
+  keepTabs: boolean;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeDefault: true, queryTimeout: 300, keepAlive: true,
-  sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon",
+  sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
 };
 let settings: Settings = loadSettings();
 
@@ -1637,6 +1675,10 @@ function applySettings() {
   $<HTMLSelectElement>("row-limit").value = String(settings.sqlLimit);
   $<HTMLSelectElement>("format-style").value = settings.formatStyle;
   $<HTMLSelectElement>("param-format").value = settings.paramFormat;
+  $<HTMLInputElement>("wrap-lines").checked = settings.wrapLines;
+  $<HTMLInputElement>("show-invisibles").checked = settings.showInvisibles;
+  $<HTMLInputElement>("keep-tabs").checked = settings.keepTabs;
+  editor.setDisplay(settings.wrapLines, settings.showInvisibles);
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
   invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout }).catch(() => {});
 }
@@ -1702,8 +1744,18 @@ $("filter").addEventListener("input", renderTables);
 $("keys").textContent = navigator.userAgent.includes("Mac") ? "⌘↵" : "Ctrl+↵";
 $("run").onclick = runCurrent;
 $("run-all").onclick = runAll;
+$("explain").onclick = async () => {
+  const sql = editor.current();
+  if (!sql.trim() || !active) return;
+  const prefix = active.kind === "sqlite" ? "explain query plan " : "explain ";
+  const filled = await withParams([prefix + sql]);
+  if (filled) run(filled[0]);
+};
 $("format-sql").onclick = () => (formatSql(), editor.focus());
 $("keys-format").textContent = navigator.userAgent.includes("Mac") ? "⌘I" : "Ctrl+I";
+$<HTMLInputElement>("wrap-lines").onchange = (e) => setSetting("wrapLines", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("show-invisibles").onchange = (e) => setSetting("showInvisibles", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("keep-tabs").onchange = (e) => setSetting("keepTabs", (e.target as HTMLInputElement).checked);
 $<HTMLSelectElement>("param-format").onchange = (e) => setSetting("paramFormat", (e.target as HTMLSelectElement).value as Settings["paramFormat"]);
 $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
 $("keys-all").textContent = navigator.userAgent.includes("Mac") ? "⌘⇧↵" : "Ctrl+Shift+↵";

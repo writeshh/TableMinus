@@ -19,7 +19,9 @@ pub fn is_read_only(engine: Engine, sql: &str) -> bool {
     let Ok(stmts) = Parser::parse_sql(dialect, sql) else { return false };
     !stmts.is_empty()
         && visit_statements(&stmts, |s| match s {
-            Statement::Query(_) => ControlFlow::Continue(()),
+            // EXPLAIN is as safe as what it explains: the visit goes on into the inner statement, which must be
+            // a query too (so EXPLAIN ANALYZE of a write, which runs it, still asks).
+            Statement::Query(_) | Statement::Explain { .. } => ControlFlow::Continue(()),
             _ => ControlFlow::Break(()),
         })
         .is_continue()
@@ -34,6 +36,14 @@ mod tests {
     fn plain_queries_are_read_only() {
         assert!(is_read_only(Postgres, "select 1; select * from t where id = 2"));
         assert!(is_read_only(Mysql, "with x as (select 1) select * from x"));
+    }
+
+    #[test]
+    fn explaining_a_query_is_read_only() {
+        assert!(is_read_only(Postgres, "explain select * from t"));
+        assert!(is_read_only(Mysql, "explain select * from t"));
+        assert!(is_read_only(Sqlite, "explain query plan select * from t"));
+        assert!(!is_read_only(Postgres, "explain analyze delete from t"), "ANALYZE runs the delete");
     }
 
     #[test]
