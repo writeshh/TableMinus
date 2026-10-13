@@ -144,6 +144,10 @@
     <!-- Settings (⌘,): every change applies immediately -->
     <dialog id="settings" class="prefs">
       <nav class="prefs-tabs" role="tablist">
+        <button role="tab" data-tab="general">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" /></svg>
+          General
+        </button>
         <button role="tab" data-tab="appearance">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" /></svg>
           Appearance
@@ -157,7 +161,18 @@
           Security
         </button>
       </nav>
-      <section data-pane="appearance">
+      <section data-pane="general">
+        <div class="row">
+          <span class="k">Query timeout</span>
+          <span><input id="query-timeout" type="number" min="0" max="86400" step="1" class="num-input" /> seconds <span class="hint inline">0 = no limit</span></span>
+        </div>
+        <div class="row">
+          <span class="k">Connections</span>
+          <label class="check"><input type="checkbox" id="keep-alive" /> Keep connections alive</label>
+        </div>
+        <p class="hint note">A query that runs past the timeout is stopped on the server. Keep-alive pings every open connection every 30 seconds, so idle ones aren't closed and a lost one shows up straight away.</p>
+      </section>
+      <section data-pane="appearance" hidden>
         <div class="row">
           <span class="k">Theme</span>
           <div class="seg" id="theme" role="radiogroup">
@@ -236,10 +251,18 @@
         <header id="where">
           <span id="where-conn" class="where-conn"></span>
           <span class="spacer"></span>
-          <span id="pill" class="pill"></span>
+          <span id="pill" class="pill" role="button" tabindex="0" title="Connection info"></span>
           <button id="db-button" class="ghost" title="Open a database"></button>
           <button id="new-sql" class="ghost sql-btn" title="New SQL query">SQL</button>
         </header>
+        <div id="conn-info" class="popover" hidden>
+          <dl id="conn-info-list"></dl>
+          <footer>
+            <button id="info-disconnect">Disconnect</button>
+            <span class="spacer"></span>
+            <button id="info-reconnect">Reconnect</button>
+          </footer>
+        </div>
         <div id="lost" class="lost" role="alert" hidden>
           <span>The database connection was lost.</span>
           <button id="reconnect" class="primary">Reconnect</button>

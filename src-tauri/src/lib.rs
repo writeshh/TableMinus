@@ -11,7 +11,53 @@ use db::Engine;
 use error::{Error, Result};
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
-use tauri::{AppHandle, Manager, State, async_runtime::Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager, State, async_runtime::Mutex};
+
+/// Settings the UI keeps and hands over at startup and on every change.
+struct Prefs {
+    keep_alive: AtomicBool,
+    /// 0 means no limit.
+    query_timeout_secs: AtomicU64,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs { keep_alive: AtomicBool::new(true), query_timeout_secs: AtomicU64::new(300) }
+    }
+}
+
+#[tauri::command]
+#[expect(clippy::needless_pass_by_value, reason = "Tauri hands command arguments over by value")]
+fn set_preferences(prefs: State<'_, Prefs>, keep_alive: bool, query_timeout_secs: u64) {
+    prefs.keep_alive.store(keep_alive, Ordering::Relaxed);
+    prefs.query_timeout_secs.store(query_timeout_secs, Ordering::Relaxed);
+}
+
+/// Every 30 s, pings each open connection when keep-alive is on. A connection that doesn't answer is reported
+/// to the UI as `connection-lost`, so the reconnect banner shows before the next query fails.
+// ponytail: pings hold the global lock, so a dead connection's 10 s ping delays other commands; ping outside the
+// lock once connections get their own locks.
+async fn keep_alive(app: AppHandle) {
+    let mut tick = tokio::time::interval(Duration::from_secs(30));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        if !app.state::<Prefs>().keep_alive.load(Ordering::Relaxed) {
+            continue;
+        }
+        let open = app.state::<Open>();
+        let mut open = open.0.lock().await;
+        for (name, live) in open.iter_mut() {
+            let answered = matches!(tokio::time::timeout(Duration::from_secs(10), live.conn.ping()).await, Ok(Ok(())));
+            if !answered {
+                // The UI only listens while a workspace is open; nobody listening is fine.
+                let _ = app.emit("connection-lost", name);
+            }
+        }
+    }
+}
 
 struct Live {
     saved: store::Saved,
@@ -241,16 +287,101 @@ async fn switch_database(live: &mut Live, database: &str) -> Result<()> {
     }
 }
 
+/// Runs `sql`, stopping it on the server if it outlasts `limit`.
+async fn query_with_limit(live: &mut Live, sql: &str, limit: Option<Duration>) -> Result<db::QueryResult> {
+    let Some(limit) = limit else { return live.conn.query(sql).await };
+    let timed_out = || Error::QueryTimeout(limit.as_secs());
+    let Live { saved, url, conn, tunnel } = live;
+    match conn.stopper() {
+        db::Stopper::Lite(handle) => {
+            // The query blocks this thread, so a timer thread interrupts it; finishing first drops `done`.
+            let (done, finished) = std::sync::mpsc::channel::<()>();
+            std::thread::spawn(move || {
+                if finished.recv_timeout(limit) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                    handle.interrupt();
+                }
+            });
+            let r = conn.query(sql).await;
+            drop(done);
+            r.map_err(|e| if db::Conn::interrupted_by(&e) { timed_out() } else { e })
+        }
+        stopper => {
+            let query = conn.query(sql);
+            tokio::pin!(query);
+            if let Ok(r) = tokio::time::timeout(limit, &mut query).await {
+                return r;
+            }
+            // Best effort: if the stop request fails, the wait below still ends things.
+            let _ = stop_query(stopper, saved, url, tunnel.as_ref().map(|t| t.port)).await;
+            // The server answers the stopped query with an error; wait for it so the connection stays in step.
+            let _ = tokio::time::timeout(Duration::from_secs(10), query).await;
+            Err(timed_out())
+        }
+    }
+}
+
+async fn stop_query(stopper: db::Stopper, saved: &store::Saved, url: &SecretString, port: Option<u16>) -> Result<()> {
+    match stopper {
+        db::Stopper::Pg(token) => Ok(token.cancel_query(saved.tls.postgres()?.1).await?),
+        db::Stopper::My(id) => {
+            // A side connection with the same settings, minus startup SQL, which isn't wanted here.
+            let options = db::Options { startup_sql: String::new(), ..saved.options.clone() };
+            let mut side = db::Conn::open(saved.kind, url, &saved.tls, &options, port).await?;
+            side.query(&format!("kill query {id}")).await.map(|_| ())
+        }
+        db::Stopper::Lite(handle) => {
+            handle.interrupt();
+            Ok(())
+        }
+    }
+}
+
+/// How the active connection is set up, for the connection info popover.
+#[derive(Debug, serde::Serialize)]
+struct ConnectionInfo {
+    server: String,
+    driver: &'static str,
+    cipher: Option<String>,
+    ssh: Option<String>,
+}
+
+#[tauri::command]
+async fn connection_info(open: State<'_, Open>, name: String) -> Result<ConnectionInfo> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = async {
+        Ok(ConnectionInfo {
+            server: live.conn.server_version().await?,
+            driver: match live.saved.kind {
+                Engine::Postgres => "tokio-postgres",
+                Engine::Mysql | Engine::Mariadb => "mysql_async",
+                Engine::Sqlite => "rusqlite (bundled SQLite)",
+            },
+            cipher: live.conn.tls_cipher().await?,
+            ssh: live.saved.ssh.as_ref().map(|s| s.host.clone()),
+        })
+    }
+    .await;
+    live.check(r)
+}
+
 /// Safe mode: with `confirm_writes` on, anything not provably read-only fails with
 /// [`Error::ConfirmRequired`] until it is resent with `confirmed: true`.
 #[tauri::command]
-async fn run_query(open: State<'_, Open>, name: String, sql: String, confirmed: bool) -> Result<db::QueryResult> {
+async fn run_query(
+    open: State<'_, Open>,
+    prefs: State<'_, Prefs>,
+    name: String,
+    sql: String,
+    confirmed: bool,
+) -> Result<db::QueryResult> {
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
     if live.saved.confirm_writes && !confirmed && !readonly::is_read_only(live.saved.kind, &sql) {
         return Err(Error::ConfirmRequired);
     }
-    let r = live.conn.query(&sql).await;
+    let secs = prefs.query_timeout_secs.load(Ordering::Relaxed);
+    let r = query_with_limit(live, &sql, (secs > 0).then(|| Duration::from_secs(secs))).await;
     live.check(r)
 }
 
@@ -264,6 +395,11 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Open::default())
+        .manage(Prefs::default())
+        .setup(|app| {
+            tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_connections,
             save_connection,
@@ -271,6 +407,8 @@ pub fn run() -> tauri::Result<()> {
             test_connection,
             connect,
             reconnect,
+            connection_info,
+            set_preferences,
             list_databases,
             use_database,
             columns,
@@ -279,4 +417,65 @@ pub fn run() -> tauri::Result<()> {
             run_query
         ])
         .run(tauri::generate_context!())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Live, query_with_limit};
+    use crate::db::{Conn, Engine, Options};
+    use crate::error::Error;
+    use crate::{store, tls::Tls};
+    use secrecy::SecretString;
+    use std::time::{Duration, Instant};
+
+    async fn live(engine: Engine, url: &str) -> Live {
+        let url = SecretString::from(url);
+        let saved = store::Saved {
+            name: "t".into(),
+            kind: engine,
+            url: String::new(),
+            tag: String::new(),
+            confirm_writes: false,
+            ssh: None,
+            tls: Tls::default(),
+            options: Options::default(),
+        };
+        let conn = Conn::open(engine, &url, &saved.tls, &saved.options, None).await.unwrap();
+        Live { saved, url, conn, tunnel: None }
+    }
+
+    #[test]
+    fn query_with_limit_should_interrupt_a_runaway_sqlite_query() {
+        tauri::async_runtime::block_on(async {
+            let mut live = live(Engine::Sqlite, ":memory:").await;
+            let endless = "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c";
+            let started = Instant::now();
+            let err = query_with_limit(&mut live, endless, Some(Duration::from_millis(200))).await.unwrap_err();
+            assert!(matches!(err, Error::QueryTimeout(0)), "{err}");
+            assert!(started.elapsed() < Duration::from_secs(5));
+            assert_eq!(live.conn.query("select 1").await.unwrap().rows[0][0].as_deref(), Some("1"));
+        });
+    }
+
+    #[test]
+    fn query_with_limit_should_leave_fast_queries_alone() {
+        tauri::async_runtime::block_on(async {
+            let mut live = live(Engine::Sqlite, ":memory:").await;
+            let r = query_with_limit(&mut live, "select 2", Some(Duration::from_secs(5))).await.unwrap();
+            assert_eq!(r.rows[0][0].as_deref(), Some("2"));
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local MySQL"]
+    fn query_with_limit_should_kill_a_slow_mysql_query_and_keep_the_connection() {
+        tauri::async_runtime::block_on(async {
+            let mut live = live(Engine::Mysql, "mysql://root@127.0.0.1:3306").await;
+            let started = Instant::now();
+            let err = query_with_limit(&mut live, "select sleep(30)", Some(Duration::from_secs(1))).await.unwrap_err();
+            assert!(matches!(err, Error::QueryTimeout(1)), "{err}");
+            assert!(started.elapsed() < Duration::from_secs(10), "killed, not waited out");
+            assert_eq!(live.conn.query("select 1").await.unwrap().rows[0][0].as_deref(), Some("1"));
+        });
+    }
 }

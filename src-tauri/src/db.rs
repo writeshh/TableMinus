@@ -91,6 +91,16 @@ pub struct QueryResult {
     pub affected: u64,
 }
 
+/// A way to stop a running query from outside its connection.
+pub enum Stopper {
+    /// Sends Postgres's cancel request on a separate socket.
+    Pg(tokio_postgres::CancelToken),
+    /// The MySQL session id, for `KILL QUERY` from a second connection.
+    My(u32),
+    /// SQLite runs on the calling thread, so it is interrupted from another one.
+    Lite(rusqlite::InterruptHandle),
+}
+
 // ponytail: an enum over three engines, not a Driver trait; extract a trait when a 4th engine needs it.
 pub enum Conn {
     Pg(tokio_postgres::Client),
@@ -240,6 +250,44 @@ impl Conn {
             Conn::Lite(c) => c.execute_batch(sql)?,
         }
         Ok(())
+    }
+
+    pub fn stopper(&self) -> Stopper {
+        match self {
+            Conn::Pg(c) => Stopper::Pg(c.cancel_token()),
+            Conn::My(c) => Stopper::My(c.id()),
+            Conn::Lite(c) => Stopper::Lite(c.get_interrupt_handle()),
+        }
+    }
+
+    /// Whether `err` came from SQLite being interrupted by its [`Stopper`].
+    pub fn interrupted_by(err: &Error) -> bool {
+        matches!(err, Error::Sqlite(rusqlite::Error::SqliteFailure(f, _)) if f.code == rusqlite::ErrorCode::OperationInterrupted)
+    }
+
+    /// A round trip that does nothing, to keep idle connections from being closed by the server or the network.
+    pub async fn ping(&mut self) -> Result<()> {
+        match self {
+            Conn::Pg(c) => {
+                c.simple_query("").await?;
+            }
+            Conn::My(c) => mysql_async::prelude::Queryable::ping(c).await?,
+            Conn::Lite(_) => {}
+        }
+        Ok(())
+    }
+
+    /// The TLS cipher the session uses; None when it's unencrypted (or SQLite).
+    pub async fn tls_cipher(&mut self) -> Result<Option<String>> {
+        let cipher = match self {
+            Conn::Pg(_) => self.scalar("select cipher from pg_stat_ssl where pid = pg_backend_pid()").await?,
+            Conn::My(_) => {
+                let r = self.query("show status like 'Ssl_cipher'").await?;
+                r.rows.into_iter().next().and_then(|mut row| row.pop().flatten())
+            }
+            Conn::Lite(_) => None,
+        };
+        Ok(cipher.filter(|c| !c.is_empty()))
     }
 
     /// Whether `err` (from this connection) means the connection itself is gone, not just that a statement failed.

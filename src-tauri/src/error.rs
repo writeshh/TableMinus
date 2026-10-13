@@ -7,6 +7,8 @@ pub enum Error {
     ConfirmRequired,
     #[error("not connected")]
     NotConnected,
+    #[error("the query was stopped after the {0}-second query timeout (Settings › General)")]
+    QueryTimeout(u64),
     /// The server or network dropped the connection. The UI matches this exact text and offers to reconnect.
     #[error("DISCONNECTED")]
     Disconnected,

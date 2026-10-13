@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor } from "./editor";
@@ -422,6 +423,46 @@ async function reconnect() {
   }
 }
 $("reconnect").onclick = reconnect;
+
+// Keep-alive found the active connection dead: show the banner now rather than on the next query.
+listen<string>("connection-lost", (e) => {
+  if (e.payload === active?.name) $("lost").hidden = false;
+}).catch(() => {}); // no event bridge outside the app
+
+// ---------- Connection info (click the status pill) ----------
+
+async function showConnectionInfo() {
+  if (!active) return;
+  const pop = $("conn-info");
+  if (!pop.hidden) return void (pop.hidden = true);
+  const row = (k: string, v: string) => [el("dt", { textContent: k }), el("dd", { textContent: v })];
+  const list = $("conn-info-list");
+  list.replaceChildren(...row("Connection", active.name), ...row("Server", "Checking…"));
+  const r = $("pill").getBoundingClientRect();
+  Object.assign(pop.style, { top: `${r.bottom + 6}px`, left: `${Math.max(8, r.right - 340)}px` });
+  pop.hidden = false;
+  try {
+    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>("connection_info", { name: active.name });
+    list.replaceChildren(
+      ...row("Connection", active.name),
+      ...row("Server", i.server),
+      ...row("Driver", i.driver),
+      ...row("Encryption", i.cipher ? i.cipher : active.kind === "sqlite" ? "Local file" : "Not encrypted"),
+      ...(i.ssh ? row("Via SSH", i.ssh) : []),
+    );
+  } catch (e) {
+    list.replaceChildren(...row("Connection", active.name), ...row("Error", String(e)));
+  }
+}
+$("pill").onclick = showConnectionInfo;
+$("pill").onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), showConnectionInfo());
+$("info-reconnect").onclick = () => (($("conn-info").hidden = true), reconnect());
+$("info-disconnect").onclick = () => (($("conn-info").hidden = true), $("back").click());
+document.addEventListener("pointerdown", (e) => {
+  const pop = $("conn-info");
+  if (!pop.hidden && !pop.contains(e.target as Node) && e.target !== $("pill")) pop.hidden = true;
+});
+document.addEventListener("keydown", (e) => e.key === "Escape" && ($("conn-info").hidden = true));
 
 async function connect(c: Saved) {
   setStatus("home-status", `Connecting to ${c.name}…`, "busy");
@@ -1061,8 +1102,13 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- Settings (⌘,) ----------
 
-type Settings = { theme: "auto" | "light" | "dark"; zebra: boolean; fontSize: number; lineHeight: number; indent: "tab" | "2" | "4"; safeDefault: boolean };
-const DEFAULT_SETTINGS: Settings = { theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeDefault: true };
+type Settings = {
+  theme: "auto" | "light" | "dark"; zebra: boolean; fontSize: number; lineHeight: number; indent: "tab" | "2" | "4";
+  safeDefault: boolean; queryTimeout: number; keepAlive: boolean;
+};
+const DEFAULT_SETTINGS: Settings = {
+  theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeDefault: true, queryTimeout: 300, keepAlive: true,
+};
 let settings: Settings = loadSettings();
 
 // ponytail: settings live in the webview's localStorage (per machine); move to a file if they need syncing.
@@ -1096,6 +1142,10 @@ function applySettings() {
   $<HTMLSelectElement>("indent").value = settings.indent;
   editor.setIndent(settings.indent === "tab" ? "\t" : " ".repeat(Number(settings.indent)));
   $<HTMLSelectElement>("safe-default").value = settings.safeDefault ? "1" : "0";
+  $<HTMLInputElement>("query-timeout").value = String(settings.queryTimeout);
+  $<HTMLInputElement>("keep-alive").checked = settings.keepAlive;
+  // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
+  invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout }).catch(() => {});
 }
 
 function showTab(tab: string) {
@@ -1116,6 +1166,8 @@ $<HTMLInputElement>("zebra").onchange = (e) => setSetting("zebra", (e.target as 
 $<HTMLInputElement>("font-size").onchange = (e) => setSetting("fontSize", clamp(Number((e.target as HTMLInputElement).value) || 13, 9, 28));
 $<HTMLInputElement>("line-height").onchange = (e) => setSetting("lineHeight", clamp(Number((e.target as HTMLInputElement).value) || 1.5, 1.1, 2.2));
 $<HTMLSelectElement>("indent").onchange = (e) => setSetting("indent", (e.target as HTMLSelectElement).value as Settings["indent"]);
+$<HTMLInputElement>("query-timeout").onchange = (e) => setSetting("queryTimeout", clamp(Math.round(Number((e.target as HTMLInputElement).value) || 0), 0, 86400));
+$<HTMLInputElement>("keep-alive").onchange = (e) => setSetting("keepAlive", (e.target as HTMLInputElement).checked);
 $<HTMLSelectElement>("safe-default").onchange = (e) => setSetting("safeDefault", (e.target as HTMLSelectElement).value === "1");
 $("settings-reset").onclick = () => {
   settings = { ...DEFAULT_SETTINGS };
@@ -1133,7 +1185,7 @@ document.addEventListener("keydown", (e) => {
   if (size) (e.preventDefault(), setSetting("fontSize", clamp(size, 9, 28)));
 });
 
-showTab("appearance");
+showTab("general");
 applySettings();
 
 // ---------- Wiring ----------
