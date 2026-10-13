@@ -1,6 +1,7 @@
 //! One connection type over the supported engines: open, run SQL (results as text cells), browse the catalog.
 
 use crate::error::{Error, Result};
+use crate::tls::{Tls, TlsMode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -99,20 +100,53 @@ fn lite_cell(v: rusqlite::types::ValueRef) -> Option<String> {
     }
 }
 
+async fn open_postgres(url: &str, tls: &Tls, tunnel_port: Option<u16>) -> Result<tokio_postgres::Client> {
+    let mut cfg: tokio_postgres::Config = match tunnel_port {
+        Some(port) => {
+            // The URL's port would be dialled alongside the tunnel's, so drop it before adding the tunnel's.
+            let mut u = url::Url::parse(url)?;
+            let _ = u.set_port(None); // Err only for URLs that can't have a port, which parse() then reports
+            let mut cfg: tokio_postgres::Config = u.as_str().parse()?;
+            cfg.hostaddr(std::net::Ipv4Addr::LOCALHOST.into()).port(port);
+            cfg
+        }
+        None => url.parse()?,
+    };
+    let (mode, connector) = tls.postgres()?;
+    cfg.ssl_mode(mode);
+    let (client, connection) = cfg.connect(connector).await?;
+    tauri::async_runtime::spawn(connection); // drives the socket; ends when the client is dropped
+    Ok(client)
+}
+
+async fn open_mysql(url: &str, tls: &Tls, tunnel_port: Option<u16>) -> Result<mysql_async::Conn> {
+    let opts = mysql_async::Opts::from_url(url).map_err(mysql_async::Error::from)?;
+    let host = opts.ip_or_hostname().to_string();
+    let mut builder = mysql_async::OptsBuilder::from_opts(opts);
+    if let Some(port) = tunnel_port {
+        builder = builder.ip_or_hostname("127.0.0.1").tcp_port(port);
+    }
+    let ssl = tls.mysql(tunnel_port.map(|_| host.as_str()))?;
+    match mysql_async::Conn::new(builder.clone().ssl_opts(ssl)).await {
+        // Prefer: a server without TLS gets a plain connection, as libmysqlclient's PREFERRED does.
+        Err(mysql_async::Error::Driver(mysql_async::DriverError::NoClientSslFlagFromServer))
+            if tls.mode == TlsMode::Prefer =>
+        {
+            Ok(mysql_async::Conn::new(builder.ssl_opts(None)).await?)
+        }
+        other => Ok(other?),
+    }
+}
+
 impl Conn {
-    /// Opens a connection; `url` is a connection URL, or a file path for SQLite.
-    pub async fn open(engine: Engine, url: &SecretString) -> Result<Conn> {
+    /// Opens a connection; `url` is a connection URL, or a file path for SQLite. With `tunnel_port`, the driver
+    /// dials that port on 127.0.0.1 instead of the URL's host, but still checks TLS against the URL's host.
+    pub async fn open(engine: Engine, url: &SecretString, tls: &Tls, tunnel_port: Option<u16>) -> Result<Conn> {
         let url = url.expose_secret();
         let open = async {
             Ok(match engine {
-                Engine::Postgres => {
-                    // sslmode in the URL decides; tokio-postgres defaults to `prefer`.
-                    let tls = postgres_native_tls::MakeTlsConnector::new(native_tls::TlsConnector::new()?);
-                    let (client, connection) = tokio_postgres::connect(url, tls).await?;
-                    tauri::async_runtime::spawn(connection); // drives the socket; ends when the client is dropped
-                    Conn::Pg(client)
-                }
-                Engine::Mysql | Engine::Mariadb => Conn::My(mysql_async::Conn::from_url(url).await?),
+                Engine::Postgres => Conn::Pg(open_postgres(url, tls, tunnel_port).await?),
+                Engine::Mysql | Engine::Mariadb => Conn::My(open_mysql(url, tls, tunnel_port).await?),
                 Engine::Sqlite => Conn::Lite(rusqlite::Connection::open(url)?),
             })
         };
@@ -404,10 +438,11 @@ impl Conn {
 #[cfg(test)]
 mod tests {
     use super::{Conn, Engine, RowEdit};
+    use crate::tls::Tls;
     use secrecy::SecretString;
 
     async fn open(engine: Engine, url: &str) -> Conn {
-        Conn::open(engine, &SecretString::from(url)).await.unwrap()
+        Conn::open(engine, &SecretString::from(url), &Tls::default(), None).await.unwrap()
     }
 
     #[test]
@@ -486,8 +521,30 @@ mod tests {
     #[test]
     fn open_reports_bad_sqlite_path() {
         tauri::async_runtime::block_on(async {
-            let r = Conn::open(Engine::Sqlite, &SecretString::from("/no/such/dir/x.db")).await;
+            let r = Conn::open(Engine::Sqlite, &SecretString::from("/no/such/dir/x.db"), &Tls::default(), None).await;
             assert!(r.is_err());
+        });
+    }
+
+    /// The session's TLS cipher on the local MySQL in `mode`; empty when the session is plain.
+    async fn local_mysql_cipher(mode: crate::tls::TlsMode) -> crate::error::Result<String> {
+        let tls = Tls { mode, ..Tls::default() };
+        let mut c = Conn::open(Engine::Mysql, &SecretString::from("mysql://root@127.0.0.1:3306"), &tls, None).await?;
+        let r = c.query("show status like 'Ssl_cipher'").await?;
+        Ok(r.rows[0][1].clone().unwrap_or_default())
+    }
+
+    /// TLS modes against a local MySQL with its auto-generated (self-signed) certificate.
+    #[test]
+    #[ignore = "needs a local MySQL with TLS on"]
+    fn local_mysql_tls_modes() {
+        use crate::tls::TlsMode;
+        tauri::async_runtime::block_on(async {
+            assert_eq!(local_mysql_cipher(TlsMode::Disable).await.unwrap(), "", "Disable: plain");
+            assert_ne!(local_mysql_cipher(TlsMode::Prefer).await.unwrap(), "", "Prefer: encrypted");
+            assert_ne!(local_mysql_cipher(TlsMode::Require).await.unwrap(), "", "Require: no certificate check");
+            let err = local_mysql_cipher(TlsMode::VerifyCa).await.unwrap_err();
+            println!("VerifyCa refused as expected: {err}");
         });
     }
 

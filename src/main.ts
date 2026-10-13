@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { EditorState } from "@codemirror/state";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor } from "./editor";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
-type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean; ssh?: Ssh };
+type Tls = { mode: string; ca: string; cert: string; key: string };
+type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean; ssh?: Ssh; tls?: Tls };
 type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number };
 type Engine = {
   kind: string;
@@ -12,19 +14,23 @@ type Engine = {
   mono: string;
   color: string;
   // Every field is optional: a blank input uses the default, shown as its placeholder.
-  defaults?: { host: string; port: string; user: string; database: string; ssl: string };
-  ssl?: [string, string][];
+  defaults?: { host: string; port: string; user: string; database: string };
 };
 
-const PG_SSL: [string, string][] = [["prefer", "Prefer"], ["require", "Require"], ["disable", "Disable"]];
-const MY_SSL: [string, string][] = [["off", "Off"], ["required", "Required"]];
+// libpq's sslmode values; MySQL's ssl-mode means the same. Prefer and Require encrypt without checking the
+// certificate, as libpq does.
+const TLS_MODES: [string, string][] = [
+  ["disable", "Disable"], ["prefer", "Prefer"], ["require", "Require"],
+  ["verify-ca", "Verify CA"], ["verify-full", "Verify CA and host name"],
+];
+const TLS_DEFAULT: Tls = { mode: "prefer", ca: "", cert: "", key: "" };
 const ENGINES: Engine[] = [
-  { kind: "postgres", label: "PostgreSQL", mono: "Pg", color: "#2f6fd0", ssl: PG_SSL,
-    defaults: { host: "127.0.0.1", port: "5432", user: "postgres", database: "", ssl: "prefer" } },
-  { kind: "mysql", label: "MySQL", mono: "Ms", color: "#e8891c", ssl: MY_SSL,
-    defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "", ssl: "off" } },
-  { kind: "mariadb", label: "MariaDB", mono: "Ma", color: "#1f9d8f", ssl: MY_SSL,
-    defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "", ssl: "off" } },
+  { kind: "postgres", label: "PostgreSQL", mono: "Pg", color: "#2f6fd0",
+    defaults: { host: "127.0.0.1", port: "5432", user: "postgres", database: "" } },
+  { kind: "mysql", label: "MySQL", mono: "Ms", color: "#e8891c",
+    defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
+  { kind: "mariadb", label: "MariaDB", mono: "Ma", color: "#1f9d8f",
+    defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
   { kind: "sqlite", label: "SQLite", mono: "Sl", color: "#7b4fd6" },
 ];
 const engine = (kind: string) => ENGINES.find((e) => e.kind === kind) ?? ENGINES[0];
@@ -86,6 +92,7 @@ function hostOf(c: Saved) {
 async function refresh() {
   try {
     saved = await invoke<Saved[]>("list_connections");
+    setStatus("home-status", "");
   } catch (e) {
     setStatus("home-status", String(e), "error"); // e.g. an unreadable connections file, which is left untouched
   }
@@ -182,13 +189,17 @@ function openEditor(kind: string, existing?: Saved) {
   setStatus("form-status", "");
   field("via").value = existing?.ssh ? "ssh" : "";
   showSsh();
+  const tls = existing?.tls ?? TLS_DEFAULT;
+  field("ssl").value = tls.mode;
+  field("ssl_ca").value = tls.ca;
+  field("ssl_cert").value = tls.cert;
+  field("ssl_key").value = tls.key;
+  showTlsFiles();
 
   const d = e.defaults;
   if (d) {
     for (const k of ["host", "port", "user"] as const) field(k).placeholder = d[k];
     field("database").placeholder = "Optional, choose one after connecting";
-    field("ssl").replaceChildren(...e.ssl!.map(([v, label]) => el("option", { value: v, textContent: label })));
-    field("ssl").value = d.ssl;
   }
   field("name").placeholder = d ? `${e.label} · ${d.host}` : e.label;
   field("password").placeholder = existing ? "Unchanged (in keychain)" : "None";
@@ -214,7 +225,7 @@ function openEditor(kind: string, existing?: Saved) {
       set("port", u.port);
       set("user", decodeURIComponent(u.username));
       set("database", decodeURIComponent(u.pathname.slice(1)));
-      field("ssl").value = kind === "postgres" ? u.searchParams.get("sslmode") ?? d!.ssl : u.searchParams.get("require_ssl") === "true" ? "required" : "off";
+
     }
   }
   $<HTMLDialogElement>("editor").showModal();
@@ -222,6 +233,31 @@ function openEditor(kind: string, existing?: Saved) {
 }
 
 const val = (k: string) => field(k).value.trim() || field(k).placeholder;
+
+field("ssl").replaceChildren(...TLS_MODES.map(([v, label]) => el("option", { value: v, textContent: label })));
+
+function showTlsFiles() {
+  form.querySelector<HTMLElement>(".tls-files")!.hidden = field("ssl").value === "disable";
+}
+field("ssl").addEventListener("change", showTlsFiles);
+
+function formTls(): Tls | undefined {
+  if (editingKind === "sqlite") return undefined;
+  const tls = { mode: field("ssl").value, ca: field("ssl_ca").value.trim(), cert: field("ssl_cert").value.trim(), key: field("ssl_key").value.trim() };
+  if (tls.mode === "disable") Object.assign(tls, { ca: "", cert: "", key: "" });
+  if (!tls.cert !== !tls.key) throw "A client certificate needs both the certificate file and its key file.";
+  const isDefault = (Object.keys(TLS_DEFAULT) as (keyof Tls)[]).every((k) => tls[k] === TLS_DEFAULT[k]);
+  return isDefault ? undefined : tls;
+}
+
+// "Choose…" buttons fill the input named by their data-pick attribute from the native file dialog.
+for (const b of form.querySelectorAll<HTMLButtonElement>("button[data-pick]")) {
+  b.onclick = async () => {
+    const input = field(b.dataset.pick!);
+    const path = await openFileDialog({ multiple: false, directory: false, defaultPath: input.value || undefined });
+    if (typeof path === "string") input.value = path;
+  };
+}
 
 const overSsh = () => editingKind !== "sqlite" && field("via").value === "ssh";
 function showSsh() {
@@ -252,14 +288,15 @@ function formToSaved(): Saved {
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
     const scheme = editingKind === "postgres" ? "postgres" : "mysql";
-    const params = editingKind === "postgres" ? `?sslmode=${field("ssl").value}` : field("ssl").value === "required" ? "?require_ssl=true" : "";
-    url = `${scheme}://${encodeURIComponent(user)}@${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}${params}`;
+    url = `${scheme}://${encodeURIComponent(user)}@${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
   }
   const name = val("name");
   if (name !== editing?.name && saved.some((c) => c.name === name)) throw `A connection named "${name}" already exists.`;
   const conn: Saved = { name, kind: editingKind, url, tag: field("tag").value, confirm_writes: field("confirm").value === "1" };
   const ssh = formSsh();
   if (ssh) conn.ssh = ssh; // omitted, not null: the backend refuses unknown or malformed fields
+  const tls = formTls();
+  if (tls) conn.tls = tls;
   return conn;
 }
 

@@ -25,7 +25,7 @@ serde_json = "1"
 tokio-postgres = "0.7.18"
 postgres-native-tls = "0.5.3"
 native-tls = "0.2.18"
-mysql_async = { version = "0.37.1", features = ["native-tls-tls"] }
+mysql_async = { version = "0.37.1", default-features = false, features = ["default-rustls-ring"] }
 url = "2.5.8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sqlparser = { version = "0.63.0", features = ["visitor"] }
@@ -36,6 +36,7 @@ secrecy = { version = "0.10", features = ["serde"] }
 tokio = { version = "1", features = ["time"] }
 russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-config = "0.58.0"
+tauri-plugin-dialog = "2"
 
 
 [lints.rust]

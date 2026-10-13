@@ -24,8 +24,10 @@ pub enum Error {
     Tls(#[from] native_tls::Error),
     #[error("keychain: {0}")]
     Keychain(#[from] keyring::Error),
-    #[error("connections file: {0}")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("can't read {path}: {source}")]
+    File { path: String, source: std::io::Error },
     #[error("connections file is not valid ({0}); fix or move it, then reopen the app")]
     Json(#[from] serde_json::Error),
     #[error("invalid connection URL: {0}")]

@@ -74,34 +74,28 @@ fn home() -> Result<PathBuf> {
     std::env::home_dir().ok_or(Error::Invalid("no home folder"))
 }
 
-fn expand_home(path: &str) -> Result<PathBuf> {
+/// `~/x` becomes a path in the home folder; anything else is used as given.
+pub fn expand_home(path: &str) -> Result<PathBuf> {
     Ok(match path.strip_prefix("~/") {
         Some(rest) => home()?.join(rest),
         None => PathBuf::from(path),
     })
 }
 
-/// Opens a tunnel for `url` and returns the URL rewritten to go through it.
-pub async fn open_for(
-    engine: Engine,
-    url: &SecretString,
-    ssh: &Ssh,
-    secret: Option<&SecretString>,
-) -> Result<(SecretString, Tunnel)> {
+/// Opens a tunnel to the host and port in `url`. The driver then dials `127.0.0.1:<tunnel.port>` but keeps
+/// the real host name for TLS checks.
+pub async fn open_for(engine: Engine, url: &SecretString, ssh: &Ssh, secret: Option<&SecretString>) -> Result<Tunnel> {
     let default_port = match engine {
         Engine::Postgres => 5432,
         Engine::Mysql | Engine::Mariadb => 3306,
         Engine::Sqlite => return Err(Error::Invalid("SQLite files can't be opened over SSH")),
     };
-    let mut u = url::Url::parse(url.expose_secret())?;
+    let u = url::Url::parse(url.expose_secret())?;
     let target_host = u.host_str().unwrap_or("127.0.0.1").to_string();
     let target_port = u.port().unwrap_or(default_port);
-    let tunnel = tokio::time::timeout(CONNECT_TIMEOUT, open(ssh, secret, target_host, target_port))
+    tokio::time::timeout(CONNECT_TIMEOUT, open(ssh, secret, target_host, target_port))
         .await
-        .map_err(|_| Error::ConnectTimeout(CONNECT_TIMEOUT.as_secs()))??;
-    u.set_host(Some("127.0.0.1"))?;
-    u.set_port(Some(tunnel.port)).map_err(|()| Error::Invalid("this URL cannot hold a port"))?;
-    Ok((u.to_string().into(), tunnel))
+        .map_err(|_| Error::ConnectTimeout(CONNECT_TIMEOUT.as_secs()))?
 }
 
 async fn open(ssh: &Ssh, secret: Option<&SecretString>, target_host: String, target_port: u16) -> Result<Tunnel> {
@@ -245,6 +239,7 @@ mod tests {
     use super::{HostKeyCheck, Ssh, open_for};
     use crate::db::{Conn, Engine};
     use crate::error::Error;
+    use crate::tls::Tls;
     use russh::keys::PublicKey;
     use secrecy::SecretString;
 
@@ -288,8 +283,8 @@ mod tests {
             let mut ssh = Ssh { host: "127.0.0.1".into(), port: Some(2222), user: String::new(), key: String::new() };
             // No key given: falls back to the default key file.
             let url_local = SecretString::from("mysql://root@127.0.0.1:3306");
-            let (via, tunnel) = open_for(Engine::Mysql, &url_local, &ssh, None).await.unwrap();
-            let mut conn = Conn::open(Engine::Mysql, &via).await.unwrap();
+            let tunnel = open_for(Engine::Mysql, &url_local, &ssh, None).await.unwrap();
+            let mut conn = Conn::open(Engine::Mysql, &url_local, &Tls::default(), Some(tunnel.port)).await.unwrap();
             assert_eq!(conn.query("select 40 + 2").await.unwrap().rows[0][0].as_deref(), Some("42"));
             drop(conn);
             drop(tunnel);

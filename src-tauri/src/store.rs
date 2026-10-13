@@ -3,6 +3,7 @@
 use crate::db::Engine;
 use crate::error::{Error, Result};
 use crate::ssh::Ssh;
+use crate::tls::Tls;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -37,6 +38,35 @@ pub struct Saved {
     pub confirm_writes: bool, // safe mode
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<Ssh>,
+    #[serde(default, skip_serializing_if = "Tls::is_default")]
+    pub tls: Tls,
+}
+
+impl Saved {
+    /// Moves a TLS mode kept in the URL (how connections were saved before `tls` existed) into `tls`.
+    fn migrate_legacy_tls(&mut self) {
+        let Ok(mut u) = url::Url::parse(&self.url) else { return };
+        let mut mode = None;
+        let kept: Vec<(String, String)> = u
+            .query_pairs()
+            .filter(|(k, v)| match Tls::from_legacy_param(k, v) {
+                Some(m) => {
+                    mode = Some(m);
+                    false
+                }
+                None => true,
+            })
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        let Some(mode) = mode else { return };
+        self.tls.mode = mode;
+        if kept.is_empty() {
+            u.set_query(None);
+        } else {
+            u.query_pairs_mut().clear().extend_pairs(kept);
+        }
+        self.url = u.to_string();
+    }
 }
 
 fn yes() -> bool {
@@ -50,20 +80,27 @@ fn file(dir: &Path) -> PathBuf {
 /// All saved connections. A missing file means none yet; a file that can't be read or parsed is an error,
 /// so a later save can't overwrite connections the user still has.
 pub fn load(dir: &Path) -> Result<Vec<Saved>> {
-    match std::fs::read(file(dir)) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+    let path = file(dir);
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let mut all: Vec<Saved> = serde_json::from_slice(&bytes)?;
+            all.iter_mut().for_each(Saved::migrate_legacy_tls);
+            Ok(all)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
-        Err(e) => Err(e.into()),
+        Err(source) => Err(Error::File { path: path.display().to_string(), source }),
     }
 }
 
 /// Writes to a temporary file first, then renames it over the old one, so a crash mid-write
 /// leaves the previous file intact.
 fn write(dir: &Path, all: &[Saved]) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
+    let path = file(dir);
+    let failed = |source| Error::File { path: path.display().to_string(), source };
+    std::fs::create_dir_all(dir).map_err(failed)?;
     let tmp = dir.join("connections.json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(all)?)?;
-    std::fs::rename(tmp, file(dir))?;
+    std::fs::write(&tmp, serde_json::to_vec_pretty(all)?).map_err(failed)?;
+    std::fs::rename(tmp, &path).map_err(failed)?;
     Ok(())
 }
 
@@ -162,6 +199,7 @@ pub fn with_password(url: &str, pw: &SecretString) -> Result<SecretString> {
 mod tests {
     use super::{Saved, load, save, with_password};
     use crate::db::Engine;
+    use crate::tls::{Tls, TlsMode};
     use secrecy::{ExposeSecret, SecretString};
     use std::path::PathBuf;
 
@@ -180,6 +218,7 @@ mod tests {
             tag: String::new(),
             confirm_writes: true,
             ssh: None,
+            tls: Tls::default(),
         }
     }
 
@@ -216,6 +255,21 @@ mod tests {
         save(&dir, conn("b", "postgres://u@h/three"), None, None, None).unwrap();
         let names: Vec<_> = load(&dir).unwrap().into_iter().map(|c| (c.name, c.url)).collect();
         assert_eq!(names, [("a".into(), "postgres://u@h/two".into()), ("b".into(), "postgres://u@h/three".into())]);
+    }
+
+    #[test]
+    fn load_moves_a_legacy_url_tls_mode_into_tls() {
+        let dir = temp_dir("legacy");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = r#"[{"name":"a","kind":"postgres","url":"postgres://u@h:5432/db?sslmode=require&application_name=x"},
+                       {"name":"b","kind":"mysql","url":"mysql://root@h:3306?require_ssl=true"}]"#;
+        std::fs::write(dir.join("connections.json"), file).unwrap();
+        let all = load(&dir).unwrap();
+        assert_eq!(
+            (all[0].tls.mode, all[0].url.as_str()),
+            (TlsMode::Require, "postgres://u@h:5432/db?application_name=x")
+        );
+        assert_eq!((all[1].tls.mode, all[1].url.as_str()), (TlsMode::Require, "mysql://root@h:3306"));
     }
 
     #[test]

@@ -108,6 +108,9 @@ label { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap
 label > input, label > select { color: CanvasText; }
 .pair { display: grid; grid-template-columns: 1fr 150px; gap: 12px; }
 .pair .port { grid-template-columns: auto 1fr; }
+.pick { display: flex; gap: 6px; min-width: 0; }
+.pick > input { flex: 1; min-width: 0; color: CanvasText; }
+.tls-files { display: grid; gap: 9px; }
 
 /* ---------- Workspace: sidebar tree, history, tabs, table footer ---------- */
 aside { display: flex; flex-direction: column; }
