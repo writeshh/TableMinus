@@ -111,6 +111,12 @@ label > input, label > select { color: CanvasText; }
 .pick { display: flex; gap: 6px; min-width: 0; }
 .pick > input { flex: 1; min-width: 0; color: CanvasText; }
 .tls-files { display: grid; gap: 9px; }
+label > textarea { color: CanvasText; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: Canvas; min-width: 0; resize: vertical; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+details.more { margin: 0 0 12px; }
+details.more > summary { color: var(--muted); padding: 2px 4px 8px; cursor: default; }
+.opt-row { display: grid; grid-template-columns: 96px 1fr; gap: 10px; color: var(--muted); }
+.checks { display: grid; gap: 6px; }
+label.check { display: flex; align-items: center; gap: 8px; color: CanvasText; }
 
 /* ---------- Workspace: sidebar tree, history, tabs, table footer ---------- */
 aside { display: flex; flex-direction: column; }

@@ -33,7 +33,7 @@ keyring = { version = "3", features = ["apple-native", "sync-secret-service", "c
 thiserror = "2"
 bytes = "1"
 secrecy = { version = "0.10", features = ["serde"] }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "process"] }
 russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-config = "0.58.0"
 tauri-plugin-dialog = "2"

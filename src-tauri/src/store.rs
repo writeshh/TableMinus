@@ -1,6 +1,6 @@
 //! Saved connections: `connections.json` in the app config folder, passwords in the OS keychain.
 
-use crate::db::Engine;
+use crate::db::{Engine, Options};
 use crate::error::{Error, Result};
 use crate::ssh::Ssh;
 use crate::tls::Tls;
@@ -40,6 +40,8 @@ pub struct Saved {
     pub ssh: Option<Ssh>,
     #[serde(default, skip_serializing_if = "Tls::is_default")]
     pub tls: Tls,
+    #[serde(default, skip_serializing_if = "Options::is_default")]
+    pub options: Options,
 }
 
 impl Saved {
@@ -198,7 +200,7 @@ pub fn with_password(url: &str, pw: &SecretString) -> Result<SecretString> {
 #[cfg(test)]
 mod tests {
     use super::{Saved, load, save, with_password};
-    use crate::db::Engine;
+    use crate::db::{Engine, Options};
     use crate::tls::{Tls, TlsMode};
     use secrecy::{ExposeSecret, SecretString};
     use std::path::PathBuf;
@@ -219,6 +221,7 @@ mod tests {
             confirm_writes: true,
             ssh: None,
             tls: Tls::default(),
+            options: Options::default(),
         }
     }
 

@@ -47,6 +47,10 @@ pub enum Error {
          remove that line; otherwise someone may be intercepting the connection"
     )]
     SshHostKeyChanged { host: String, line: usize },
+    #[error("startup script {0}")]
+    StartupScript(String),
+    #[error("startup SQL: {0}")]
+    StartupSql(Box<Error>),
     #[error("the SSH server could not reach {host}:{port}: {reason}")]
     SshForward { host: String, port: u16, reason: String },
 }

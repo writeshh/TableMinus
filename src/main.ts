@@ -6,7 +6,16 @@ import { createEditor } from "./editor";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
-type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean; ssh?: Ssh; tls?: Tls };
+type Options = {
+  startup_sql: string; startup_script: string;
+  direct_tls: boolean; no_channel_binding: boolean; system_schemas: boolean;
+  socket: string; sni: string; cleartext_auth: boolean;
+};
+const OPTIONS_DEFAULT: Options = {
+  startup_sql: "", startup_script: "", direct_tls: false, no_channel_binding: false, system_schemas: false,
+  socket: "", sni: "", cleartext_auth: false,
+};
+type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean; ssh?: Ssh; tls?: Tls; options?: Options };
 type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number };
 type Engine = {
   kind: string;
@@ -195,6 +204,15 @@ function openEditor(kind: string, existing?: Saved) {
   field("ssl_cert").value = tls.cert;
   field("ssl_key").value = tls.key;
   showTlsFiles();
+  const options = { ...OPTIONS_DEFAULT, ...existing?.options };
+  for (const [k, v] of Object.entries(options)) {
+    const input = field(`opt_${k}`);
+    if (typeof v === "boolean") input.checked = v;
+    else input.value = v;
+  }
+  for (const node of form.querySelectorAll<HTMLElement>("[data-engines]")) node.hidden = !node.dataset.engines!.split(" ").includes(kind);
+  // Open the section when something in it is set, so saved options are never out of sight.
+  form.querySelector<HTMLDetailsElement>("details.more")!.open = !!existing?.options;
 
   const d = e.defaults;
   if (d) {
@@ -240,6 +258,18 @@ function showTlsFiles() {
   form.querySelector<HTMLElement>(".tls-files")!.hidden = field("ssl").value === "disable";
 }
 field("ssl").addEventListener("change", showTlsFiles);
+
+/** The form's options, or undefined when all are defaults. Options for other engines are dropped. */
+function formOptions(): Options | undefined {
+  const o: Options = { ...OPTIONS_DEFAULT };
+  for (const k of Object.keys(OPTIONS_DEFAULT) as (keyof Options)[]) {
+    const input = field(`opt_${k}`);
+    if (input.closest<HTMLElement>("[data-engines]")?.hidden) continue;
+    (o as Record<string, string | boolean>)[k] = typeof OPTIONS_DEFAULT[k] === "boolean" ? input.checked : input.value.trim();
+  }
+  const isDefault = (Object.keys(o) as (keyof Options)[]).every((k) => o[k] === OPTIONS_DEFAULT[k]);
+  return isDefault ? undefined : o;
+}
 
 function formTls(): Tls | undefined {
   if (editingKind === "sqlite") return undefined;
@@ -297,6 +327,8 @@ function formToSaved(): Saved {
   if (ssh) conn.ssh = ssh; // omitted, not null: the backend refuses unknown or malformed fields
   const tls = formTls();
   if (tls) conn.tls = tls;
+  const options = formOptions();
+  if (options) conn.options = options;
   return conn;
 }
 

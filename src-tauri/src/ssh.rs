@@ -284,7 +284,15 @@ mod tests {
             // No key given: falls back to the default key file.
             let url_local = SecretString::from("mysql://root@127.0.0.1:3306");
             let tunnel = open_for(Engine::Mysql, &url_local, &ssh, None).await.unwrap();
-            let mut conn = Conn::open(Engine::Mysql, &url_local, &Tls::default(), Some(tunnel.port)).await.unwrap();
+            let mut conn = Conn::open(
+                Engine::Mysql,
+                &url_local,
+                &Tls::default(),
+                &crate::db::Options::default(),
+                Some(tunnel.port),
+            )
+            .await
+            .unwrap();
             assert_eq!(conn.query("select 40 + 2").await.unwrap().rows[0][0].as_deref(), Some("42"));
             drop(conn);
             drop(tunnel);

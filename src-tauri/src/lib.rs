@@ -14,26 +14,39 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Manager, State, async_runtime::Mutex};
 
 struct Live {
-    engine: Engine,
-    confirm_writes: bool,
+    saved: store::Saved,
     url: SecretString, // with password; kept in memory only, to reconnect when Postgres switches database
-    tls: tls::Tls,
     conn: db::Conn,
     tunnel: Option<ssh::Tunnel>, // lives exactly as long as the connection
 }
 
-/// Opens the database, through an SSH tunnel when the connection has one.
+/// Runs the startup script, opens the SSH tunnel if there is one, then opens the database.
 async fn open_db(
     saved: &store::Saved,
     url: &SecretString,
     ssh_secret: Option<SecretString>,
 ) -> Result<(db::Conn, Option<ssh::Tunnel>)> {
+    if !saved.options.startup_script.trim().is_empty() {
+        db::run_startup_script(&saved.options.startup_script).await?;
+    }
     let tunnel = match &saved.ssh {
         Some(ssh) => Some(ssh::open_for(saved.kind, url, ssh, ssh_secret.as_ref()).await?),
         None => None,
     };
-    let conn = db::Conn::open(saved.kind, url, &saved.tls, tunnel.as_ref().map(|t| t.port)).await?;
+    let conn = db::Conn::open(saved.kind, url, &saved.tls, &saved.options, tunnel.as_ref().map(|t| t.port)).await?;
     Ok((conn, tunnel))
+}
+
+/// Opens a saved connection by name, with its keychain secrets.
+async fn open_saved(app: &AppHandle, name: &str) -> Result<Live> {
+    let saved = store::load(&dir(app)?)?
+        .into_iter()
+        .find(|c| c.name == name)
+        .ok_or_else(|| Error::NoSuchConnection(name.to_string()))?;
+    let url = store::connect_url(&saved)?;
+    let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
+    let (conn, tunnel) = open_db(&saved, &url, ssh_secret).await?;
+    Ok(Live { saved, url, conn, tunnel })
 }
 
 /// What the workspace header and sidebar show for an open connection.
@@ -47,9 +60,13 @@ struct Info {
 
 async fn info(live: &mut Live) -> Result<Info> {
     let database = live.conn.current_database().await?;
-    let file_based = live.engine == Engine::Sqlite;
+    let file_based = live.saved.kind == Engine::Sqlite;
     // No database selected yet (MySQL connected without one): nothing to list.
-    let tables = if database.is_none() && !file_based { vec![] } else { live.conn.tables().await? };
+    let tables = if database.is_none() && !file_based {
+        vec![]
+    } else {
+        live.conn.tables(live.saved.options.system_schemas).await?
+    };
     Ok(Info { server: live.conn.server_version().await?, database, can_switch: !file_based, tables })
 }
 
@@ -112,7 +129,7 @@ async fn test_connection(
     };
     let ssh_secret = if conn.ssh.is_some() { fallback(ssh_password, store::Secret::Ssh)? } else { None };
     let (mut db, _tunnel) = open_db(&conn, &url, ssh_secret).await?;
-    let n = db.tables().await?.len();
+    let n = db.tables(conn.options.system_schemas).await?.len();
     Ok(format!("Connected · {n} tables"))
 }
 
@@ -123,24 +140,28 @@ async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<
     let live = match open.entry(name) {
         std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
         std::collections::hash_map::Entry::Vacant(e) => {
-            let saved = store::load(&dir(&app)?)?
-                .into_iter()
-                .find(|c| c.name == *e.key())
-                .ok_or_else(|| Error::NoSuchConnection(e.key().clone()))?;
-            let url = store::connect_url(&saved)?;
-            let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
-            let (conn, tunnel) = open_db(&saved, &url, ssh_secret).await?;
-            e.insert(Live {
-                engine: saved.kind,
-                confirm_writes: saved.confirm_writes,
-                url,
-                tls: saved.tls,
-                conn,
-                tunnel,
-            })
+            let live = open_saved(&app, e.key()).await?;
+            e.insert(live)
         }
     };
     info(live).await
+}
+
+/// Closes the connection (and its tunnel) and opens it again from its saved settings. The database chosen
+/// after connecting is chosen again.
+#[tauri::command]
+async fn reconnect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<Info> {
+    let mut open = open.0.lock().await;
+    let database = match open.remove(&name) {
+        Some(mut old) => old.conn.current_database().await.ok().flatten(), // a dead connection can't say
+        None => None,
+    };
+    let mut live = open_saved(&app, &name).await?;
+    if let Some(db) = database {
+        // A database dropped meanwhile isn't worth failing the reconnect over; the default one stays.
+        let _ = switch_database(&mut live, &db).await;
+    }
+    info(open.entry(name).or_insert(live)).await
 }
 
 /// Saves inline grid edits. Safe mode applies: [`Error::ConfirmRequired`] until resent with `confirmed: true`.
@@ -154,7 +175,7 @@ async fn update_rows(
 ) -> Result<u64> {
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    if live.confirm_writes && !confirmed {
+    if live.saved.confirm_writes && !confirmed {
         return Err(Error::ConfirmRequired);
     }
     live.conn.update_rows(&table, &edits).await
@@ -181,17 +202,23 @@ async fn list_databases(open: State<'_, Open>, name: String) -> Result<Vec<Strin
 async fn use_database(open: State<'_, Open>, name: String, database: String) -> Result<Info> {
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    if live.engine == Engine::Postgres {
+    switch_database(live, &database).await?;
+    info(live).await
+}
+
+async fn switch_database(live: &mut Live, database: &str) -> Result<()> {
+    if live.saved.kind == Engine::Postgres {
         let mut u = url::Url::parse(live.url.expose_secret())?;
         u.set_path(&format!("/{database}")); // set_path percent-encodes
         let url = SecretString::from(u.to_string());
-        let tunnel_port = live.tunnel.as_ref().map(|t| t.port);
-        let conn = db::Conn::open(live.engine, &url, &live.tls, tunnel_port).await?; // swap only once it works
+        // Borrow only the settings across the await: `Live` holds a SQLite handle, which isn't Sync.
+        let (s, port) = (&live.saved, live.tunnel.as_ref().map(|t| t.port));
+        let conn = db::Conn::open(s.kind, &url, &s.tls, &s.options, port).await?; // swap only once it works
         (live.url, live.conn) = (url, conn);
+        Ok(())
     } else {
-        live.conn.use_database(&database).await?;
+        live.conn.use_database(database).await
     }
-    info(live).await
 }
 
 /// Safe mode: with `confirm_writes` on, anything not provably read-only fails with
@@ -200,7 +227,7 @@ async fn use_database(open: State<'_, Open>, name: String, database: String) -> 
 async fn run_query(open: State<'_, Open>, name: String, sql: String, confirmed: bool) -> Result<db::QueryResult> {
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    if live.confirm_writes && !confirmed && !readonly::is_read_only(live.engine, &sql) {
+    if live.saved.confirm_writes && !confirmed && !readonly::is_read_only(live.saved.kind, &sql) {
         return Err(Error::ConfirmRequired);
     }
     live.conn.query(&sql).await
@@ -222,6 +249,7 @@ pub fn run() -> tauri::Result<()> {
             delete_connection,
             test_connection,
             connect,
+            reconnect,
             list_databases,
             use_database,
             columns,

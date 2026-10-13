@@ -18,6 +18,55 @@ pub enum Engine {
     Sqlite,
 }
 
+/// Per-connection options beyond host, user and TLS. Engine-specific ones are ignored by other engines.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+#[expect(clippy::struct_excessive_bools, reason = "independent on/off settings, one per checkbox in the form")]
+pub struct Options {
+    /// SQL run right after connecting, and again whenever the connection is reopened.
+    pub startup_sql: String,
+    /// Shell script run before connecting (and before any SSH tunnel), e.g. to bring up a VPN. It must finish
+    /// within the connect timeout; a non-zero exit stops the connect.
+    pub startup_script: String,
+    /// Postgres 17+: start TLS straight away instead of asking the server first (`sslnegotiation=direct`).
+    pub direct_tls: bool,
+    /// Postgres: never use SCRAM channel binding, for poolers and proxies that break it.
+    pub no_channel_binding: bool,
+    /// Postgres: also list tables in `pg_catalog` and `information_schema`.
+    pub system_schemas: bool,
+    /// MySQL: connect through this Unix socket instead of host and port.
+    pub socket: String,
+    /// MySQL: the TLS server name to send and check, for proxies that route by SNI.
+    pub sni: String,
+    /// MySQL: allow the cleartext password plugin (PAM/LDAP accounts). Sends the password as is: use with TLS.
+    pub cleartext_auth: bool,
+}
+
+impl Options {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Runs the connection's startup script with `/bin/sh -c`. The script is the user's own shell code, so a
+/// shell is exactly what it needs; nothing from elsewhere is interpolated into it.
+pub async fn run_startup_script(script: &str) -> Result<()> {
+    let run = tokio::process::Command::new("/bin/sh").arg("-c").arg(script).kill_on_drop(true).output();
+    let out = tokio::time::timeout(CONNECT_TIMEOUT, run)
+        .await
+        .map_err(|_| Error::StartupScript(format!("still running after {} seconds", CONNECT_TIMEOUT.as_secs())))??;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let last: String = stderr.trim().lines().last().unwrap_or_default().chars().take(300).collect();
+    Err(Error::StartupScript(match out.status.code() {
+        Some(code) if last.is_empty() => format!("exited with status {code}"),
+        Some(code) => format!("exited with status {code}: {last}"),
+        None => "was stopped by a signal".into(),
+    }))
+}
+
 /// One row's edits: the primary-key values that find it, and the new values (None = NULL).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,7 +149,12 @@ fn lite_cell(v: rusqlite::types::ValueRef) -> Option<String> {
     }
 }
 
-async fn open_postgres(url: &str, tls: &Tls, tunnel_port: Option<u16>) -> Result<tokio_postgres::Client> {
+async fn open_postgres(
+    url: &str,
+    tls: &Tls,
+    options: &Options,
+    tunnel_port: Option<u16>,
+) -> Result<tokio_postgres::Client> {
     let mut cfg: tokio_postgres::Config = match tunnel_port {
         Some(port) => {
             // The URL's port would be dialled alongside the tunnel's, so drop it before adding the tunnel's.
@@ -114,19 +168,31 @@ async fn open_postgres(url: &str, tls: &Tls, tunnel_port: Option<u16>) -> Result
     };
     let (mode, connector) = tls.postgres()?;
     cfg.ssl_mode(mode);
+    if options.direct_tls {
+        cfg.ssl_negotiation(tokio_postgres::config::SslNegotiation::Direct);
+    }
+    if options.no_channel_binding {
+        cfg.channel_binding(tokio_postgres::config::ChannelBinding::Disable);
+    }
     let (client, connection) = cfg.connect(connector).await?;
     tauri::async_runtime::spawn(connection); // drives the socket; ends when the client is dropped
     Ok(client)
 }
 
-async fn open_mysql(url: &str, tls: &Tls, tunnel_port: Option<u16>) -> Result<mysql_async::Conn> {
+async fn open_mysql(url: &str, tls: &Tls, options: &Options, tunnel_port: Option<u16>) -> Result<mysql_async::Conn> {
     let opts = mysql_async::Opts::from_url(url).map_err(mysql_async::Error::from)?;
     let host = opts.ip_or_hostname().to_string();
-    let mut builder = mysql_async::OptsBuilder::from_opts(opts);
+    let mut builder =
+        mysql_async::OptsBuilder::from_opts(opts).enable_cleartext_plugin(options.cleartext_auth).prefer_socket(false);
     if let Some(port) = tunnel_port {
         builder = builder.ip_or_hostname("127.0.0.1").tcp_port(port);
+    } else if !options.socket.is_empty() {
+        builder = builder.socket(Some(options.socket.as_str()));
     }
-    let ssl = tls.mysql(tunnel_port.map(|_| host.as_str()))?;
+    // The name TLS checks: an explicit SNI, else the real host when the address dialled is a tunnel's.
+    let verify_as =
+        if options.sni.is_empty() { tunnel_port.map(|_| host.as_str()) } else { Some(options.sni.as_str()) };
+    let ssl = tls.mysql(verify_as)?;
     match mysql_async::Conn::new(builder.clone().ssl_opts(ssl)).await {
         // Prefer: a server without TLS gets a plain connection, as libmysqlclient's PREFERRED does.
         Err(mysql_async::Error::Driver(mysql_async::DriverError::NoClientSslFlagFromServer))
@@ -139,20 +205,41 @@ async fn open_mysql(url: &str, tls: &Tls, tunnel_port: Option<u16>) -> Result<my
 }
 
 impl Conn {
-    /// Opens a connection; `url` is a connection URL, or a file path for SQLite. With `tunnel_port`, the driver
-    /// dials that port on 127.0.0.1 instead of the URL's host, but still checks TLS against the URL's host.
-    pub async fn open(engine: Engine, url: &SecretString, tls: &Tls, tunnel_port: Option<u16>) -> Result<Conn> {
+    /// Opens a connection and runs its startup SQL; `url` is a connection URL, or a file path for SQLite.
+    /// With `tunnel_port`, the driver dials that port on 127.0.0.1 instead of the URL's host, but still checks
+    /// TLS against the URL's host.
+    pub async fn open(
+        engine: Engine,
+        url: &SecretString,
+        tls: &Tls,
+        options: &Options,
+        tunnel_port: Option<u16>,
+    ) -> Result<Conn> {
         let url = url.expose_secret();
         let open = async {
-            Ok(match engine {
-                Engine::Postgres => Conn::Pg(open_postgres(url, tls, tunnel_port).await?),
-                Engine::Mysql | Engine::Mariadb => Conn::My(open_mysql(url, tls, tunnel_port).await?),
+            Ok::<_, Error>(match engine {
+                Engine::Postgres => Conn::Pg(open_postgres(url, tls, options, tunnel_port).await?),
+                Engine::Mysql | Engine::Mariadb => Conn::My(open_mysql(url, tls, options, tunnel_port).await?),
                 Engine::Sqlite => Conn::Lite(rusqlite::Connection::open(url)?),
             })
         };
-        tokio::time::timeout(CONNECT_TIMEOUT, open)
+        let mut conn: Conn = tokio::time::timeout(CONNECT_TIMEOUT, open)
             .await
-            .map_err(|_| Error::ConnectTimeout(CONNECT_TIMEOUT.as_secs()))?
+            .map_err(|_| Error::ConnectTimeout(CONNECT_TIMEOUT.as_secs()))??;
+        if !options.startup_sql.trim().is_empty() {
+            conn.batch(&options.startup_sql).await.map_err(|e| Error::StartupSql(Box::new(e)))?;
+        }
+        Ok(conn)
+    }
+
+    /// Runs one or more statements, discarding any results.
+    async fn batch(&mut self, sql: &str) -> Result<()> {
+        match self {
+            Conn::Pg(c) => c.batch_execute(sql).await?,
+            Conn::My(c) => mysql_async::prelude::Queryable::query_drop(c, sql).await?,
+            Conn::Lite(c) => c.execute_batch(sql)?,
+        }
+        Ok(())
     }
 
     /// Runs SQL typed by the user and returns the last result set as text cells (None = NULL).
@@ -419,8 +506,12 @@ impl Conn {
     }
 
     /// Tables and views in the current database (`schema.table` for Postgres).
-    pub async fn tables(&mut self) -> Result<Vec<String>> {
+    /// `system` adds Postgres's `pg_catalog` and `information_schema` tables.
+    pub async fn tables(&mut self, system: bool) -> Result<Vec<String>> {
         let sql = match self {
+            Conn::Pg(_) if system => {
+                "select table_schema || '.' || table_name from information_schema.tables order by 1"
+            }
             Conn::Pg(_) => {
                 "select table_schema || '.' || table_name from information_schema.tables \
                  where table_schema not in ('pg_catalog', 'information_schema') order by 1"
@@ -442,7 +533,7 @@ mod tests {
     use secrecy::SecretString;
 
     async fn open(engine: Engine, url: &str) -> Conn {
-        Conn::open(engine, &SecretString::from(url), &Tls::default(), None).await.unwrap()
+        Conn::open(engine, &SecretString::from(url), &Tls::default(), &super::Options::default(), None).await.unwrap()
     }
 
     #[test]
@@ -454,7 +545,7 @@ mod tests {
             let r = c.query("select id, name from t order by id").await.unwrap();
             assert_eq!(r.columns, ["id", "name"]);
             assert_eq!(r.rows, [vec![Some("1".into()), Some("a".into())], vec![Some("2".into()), None]]);
-            assert_eq!(c.tables().await.unwrap(), ["t"]);
+            assert_eq!(c.tables(false).await.unwrap(), ["t"]);
             assert_eq!(c.databases().await.unwrap(), Vec::<String>::new());
             assert!(c.server_version().await.unwrap().starts_with("SQLite 3."));
         });
@@ -519,9 +610,53 @@ mod tests {
     }
 
     #[test]
+    fn open_runs_the_startup_sql() {
+        tauri::async_runtime::block_on(async {
+            let options = super::Options {
+                startup_sql: "create table t(x); insert into t values (7);".into(),
+                ..Default::default()
+            };
+            let mut c = Conn::open(Engine::Sqlite, &SecretString::from(":memory:"), &Tls::default(), &options, None)
+                .await
+                .unwrap();
+            assert_eq!(c.query("select x from t").await.unwrap().rows[0][0].as_deref(), Some("7"));
+        });
+    }
+
+    #[test]
+    fn open_reports_failing_startup_sql() {
+        tauri::async_runtime::block_on(async {
+            let options = super::Options { startup_sql: "not sql".into(), ..Default::default() };
+            let r = Conn::open(Engine::Sqlite, &SecretString::from(":memory:"), &Tls::default(), &options, None).await;
+            let err = r.err().unwrap().to_string();
+            assert!(err.starts_with("startup SQL: "), "{err}");
+        });
+    }
+
+    #[test]
+    fn startup_script_should_pass_when_it_exits_zero() {
+        tauri::async_runtime::block_on(async { super::run_startup_script("true").await.unwrap() });
+    }
+
+    #[test]
+    fn startup_script_should_report_its_status_and_last_error_line() {
+        tauri::async_runtime::block_on(async {
+            let err = super::run_startup_script("echo first >&2; echo vpn down >&2; exit 3").await.unwrap_err();
+            assert_eq!(err.to_string(), "startup script exited with status 3: vpn down");
+        });
+    }
+
+    #[test]
     fn open_reports_bad_sqlite_path() {
         tauri::async_runtime::block_on(async {
-            let r = Conn::open(Engine::Sqlite, &SecretString::from("/no/such/dir/x.db"), &Tls::default(), None).await;
+            let r = Conn::open(
+                Engine::Sqlite,
+                &SecretString::from("/no/such/dir/x.db"),
+                &Tls::default(),
+                &super::Options::default(),
+                None,
+            )
+            .await;
             assert!(r.is_err());
         });
     }
@@ -529,7 +664,9 @@ mod tests {
     /// The session's TLS cipher on the local MySQL in `mode`; empty when the session is plain.
     async fn local_mysql_cipher(mode: crate::tls::TlsMode) -> crate::error::Result<String> {
         let tls = Tls { mode, ..Tls::default() };
-        let mut c = Conn::open(Engine::Mysql, &SecretString::from("mysql://root@127.0.0.1:3306"), &tls, None).await?;
+        let options = super::Options::default();
+        let mut c =
+            Conn::open(Engine::Mysql, &SecretString::from("mysql://root@127.0.0.1:3306"), &tls, &options, None).await?;
         let r = c.query("show status like 'Ssl_cipher'").await?;
         Ok(r.rows[0][1].clone().unwrap_or_default())
     }
@@ -558,7 +695,7 @@ mod tests {
             assert!(my.databases().await.unwrap().contains(&"mysql".to_string()));
             my.use_database("mysql").await.unwrap();
             assert_eq!(my.current_database().await.unwrap().as_deref(), Some("mysql"));
-            assert!(my.tables().await.unwrap().contains(&"user".to_string()));
+            assert!(my.tables(false).await.unwrap().contains(&"user".to_string()));
             assert!(my.columns("user").await.unwrap().iter().any(|c| c.name == "Host" && c.primary));
             my.query("create temporary table dbm_edit(id int primary key, note text)").await.unwrap();
             my.query("insert into dbm_edit values (1, 'x')").await.unwrap();

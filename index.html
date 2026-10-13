@@ -92,6 +92,29 @@
           <label>SSH password <input name="ssh_password" type="password" /></label>
           <p class="hint">With a private key, the password is the key's passphrase. With neither, DB Manager uses ~/.ssh/config, the SSH agent, then your default keys.</p>
         </fieldset>
+        <details class="more">
+          <summary>More options</summary>
+          <fieldset>
+            <label>Startup SQL <textarea name="opt_startup_sql" rows="2" placeholder="Runs after connecting, e.g. SET search_path TO app"></textarea></label>
+            <label>Startup script <textarea name="opt_startup_script" rows="2" placeholder="Shell script run before connecting, e.g. to start a VPN"></textarea></label>
+            <div class="opt-row" data-engines="postgres">
+              <span>Postgres</span>
+              <div class="checks">
+                <label class="check"><input type="checkbox" name="opt_direct_tls" /> Direct TLS negotiation (PostgreSQL 17+)</label>
+                <label class="check"><input type="checkbox" name="opt_no_channel_binding" /> Disable channel binding</label>
+                <label class="check"><input type="checkbox" name="opt_system_schemas" /> Show system schemas</label>
+              </div>
+            </div>
+            <label data-engines="mysql mariadb">Socket <input name="opt_socket" placeholder="Optional, e.g. /tmp/mysql.sock; replaces host and port" /></label>
+            <label data-engines="mysql mariadb">SNI name <input name="opt_sni" placeholder="Optional TLS server name, for proxies that route by it" /></label>
+            <div class="opt-row" data-engines="mysql mariadb">
+              <span>Auth</span>
+              <div class="checks">
+                <label class="check"><input type="checkbox" name="opt_cleartext_auth" /> Allow cleartext passwords (PAM, LDAP; use with SSL)</label>
+              </div>
+            </div>
+          </fieldset>
+        </details>
         <fieldset class="file" hidden>
           <label>File <span class="pick"><input name="path" placeholder="/path/to/database.sqlite" /><button type="button" data-pick="path">Choose…</button></span></label>
         </fieldset>
