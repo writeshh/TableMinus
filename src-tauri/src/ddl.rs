@@ -963,6 +963,25 @@ mod tests {
     }
 
     #[test]
+    fn change_should_accept_what_the_structure_view_sends() {
+        let sent = r#"[{"op":"add_column","column":{"name":"id","data_type":"bigint","nullable":false,"default":null,
+            "comment":null,"auto_increment":true,"primary":true}},
+            {"op":"modify_column","from":"a","column":{"name":"b","data_type":"text","nullable":true,"default":"'x'",
+            "comment":"c","auto_increment":false,"primary":false}},
+            {"op":"drop_column","name":"c"},{"op":"add_index","name":"i","columns":["id"],"unique":false},
+            {"op":"drop_index","name":"j"},{"op":"add_foreign_key","name":"f","columns":["a"],"ref_table":"public.o",
+            "ref_columns":["id"],"on_update":"NO ACTION","on_delete":"SET NULL"},{"op":"drop_foreign_key","name":"g"},
+            {"op":"rename","to":"u"},{"op":"comment","comment":null}]"#;
+        assert_eq!(serde_json::from_str::<Vec<Change>>(sent).unwrap().len(), 9);
+        let ops = r#"[{"op":"truncate","table":"t","cascade":false,"restart_identity":true,"ignore_fk":false},
+            {"op":"drop","table":"t","cascade":true,"ignore_fk":false},{"op":"clone","table":"t","to":"u","data":true},
+            {"op":"rename","table":"t","to":"u"},{"op":"reset_auto_increment","table":"t"},
+            {"op":"create_schema","name":"s"},{"op":"rename_schema","name":"s","to":"r"},
+            {"op":"drop_schema","name":"s","cascade":false}]"#;
+        assert_eq!(serde_json::from_str::<Vec<TableOp>>(ops).unwrap().len(), 8);
+    }
+
+    #[test]
     fn sqlite_renamed_create_should_replace_bare_and_quoted_names() {
         let renamed = |sql: &str| sqlite_renamed_create(sql, "copy").unwrap();
         assert_eq!(renamed("CREATE TABLE pets(id integer)"), r#"CREATE TABLE "copy"(id integer)"#);
