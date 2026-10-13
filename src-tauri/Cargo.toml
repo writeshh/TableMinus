@@ -38,6 +38,7 @@ russh = { version = "0.64", default-features = false, features = ["ring", "flate
 russh-config = "0.58.0"
 tauri-plugin-dialog = "2"
 futures-util = { version = "0.3", default-features = false }
+flate2 = "1"
 
 
 [lints.rust]

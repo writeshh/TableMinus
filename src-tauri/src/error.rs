@@ -56,6 +56,15 @@ pub enum Error {
     StartupScript(String),
     #[error("startup SQL: {0}")]
     StartupSql(Box<Error>),
+    #[error("can't write {path}: {source}")]
+    Write { path: String, source: std::io::Error },
+    /// The user stopped an import or export.
+    #[error("cancelled")]
+    Cancelled,
+    #[error("statement {n}: {source}")]
+    Statement { n: u64, source: Box<Error> },
+    #[error("not a JSON array of objects: {0}")]
+    JsonImport(serde_json::Error),
     #[error("the SSH server could not reach {host}:{port}: {reason}")]
     SshForward { host: String, port: u16, reason: String },
 }

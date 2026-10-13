@@ -3,6 +3,9 @@
 mod browse;
 mod db;
 mod error;
+mod export;
+mod import;
+mod jobs;
 mod readonly;
 mod ssh;
 mod store;
@@ -466,6 +469,7 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .manage(Open::default())
         .manage(Prefs::default())
+        .manage(jobs::Jobs::default())
         .setup(|app| {
             tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
             Ok(())
@@ -488,7 +492,12 @@ pub fn run() -> tauri::Result<()> {
             browse,
             schema,
             read_text_file,
-            write_text_file
+            write_text_file,
+            jobs::start_export,
+            jobs::start_import,
+            jobs::start_sql_import,
+            jobs::preview_import,
+            jobs::cancel_job
         ])
         .run(tauri::generate_context!())
 }
