@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor } from "./editor";
+import { $, el } from "./dom";
+import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -46,12 +48,6 @@ const ENGINES: Engine[] = [
 const engine = (kind: string) => ENGINES.find((e) => e.kind === kind) ?? ENGINES[0];
 const TAGS: Record<string, string> = { local: "Local", development: "Development", staging: "Staging", production: "Production" };
 
-const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}, ...kids: (Node | string)[]) => {
-  const n = Object.assign(document.createElement(tag), props);
-  n.append(...kids);
-  return n;
-};
 const form = $<HTMLFormElement>("form");
 const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement & HTMLSelectElement;
 const editor = createEditor($("sql"), {
@@ -713,9 +709,11 @@ function renderHistory() {
 // ---------- Tabs: SQL editors and table browsers ----------
 
 type SqlTab = { id: number; kind: "sql"; title: string; sql: string; state?: EditorState; result?: QueryResult; status?: [string, StatusKind] };
+type Sort = { column: string; desc: boolean };
 type TableTab = {
   id: number; kind: "table"; title: string; table: string; view: "data" | "structure"; page: number;
   total?: number; result?: QueryResult; error?: string; loading?: boolean;
+  sort: Sort[]; filters: FilterRow[]; combine: "and" | "or"; filtersShown: boolean;
   edits: Map<number, Map<number, string | null>>; // row on this page -> column -> new value (null = NULL)
   message?: [string, StatusKind];
 };
@@ -743,7 +741,10 @@ function openSqlTab(): SqlTab {
 function openTable(table: string) {
   const existing = tabs.find((t) => t.kind === "table" && t.table === table);
   if (existing) return select(existing.id);
-  const tab: TableTab = { id: nextId++, kind: "table", title: table, table, view: "data", page: 0, edits: new Map() };
+  const tab: TableTab = {
+    id: nextId++, kind: "table", title: table, table, view: "data", page: 0, edits: new Map(),
+    sort: [], filters: [blankFilter()], combine: "and", filtersShown: false,
+  };
   tabs.push(tab);
   select(tab.id);
   loadTable(tab);
@@ -793,6 +794,7 @@ function renderMain() {
 
   $("sql-pane").hidden = tab.kind !== "sql";
   $("table-foot").hidden = tab.kind !== "table";
+  showFilters(tab);
   if (tab.kind === "sql") {
     if (shownId !== tab.id) {
       editor.setState((tab.state ??= editor.newState(tab.sql)));
@@ -822,7 +824,7 @@ function renderMain() {
   m.className = `foot-msg ${kind}`;
   if (tab.error) $("out").replaceChildren(el("p", { className: "hint empty error-text", textContent: tab.error }));
   else if (tab.view === "structure") renderStructure(columnsCache.get(tab.table) ?? []);
-  else if (tab.result) (render(tab.result, from), decorateEditable(tab));
+  else if (tab.result) (render(tab.result, from, { sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add) }), decorateEditable(tab));
   else $("out").replaceChildren();
 }
 
@@ -866,6 +868,11 @@ function decorateEditable(tab: TableTab) {
       const staged = tab.edits.get(ri);
       if (staged?.has(ci)) (fillCell(td, staged.get(ci)!), td.classList.add("changed"));
       if (editable) td.ondblclick = () => editCell(tab, ri, ci);
+      td.oncontextmenu = (e) => {
+        const column = tab.result!.columns[ci];
+        const value = tab.result!.rows[ri][ci];
+        contextMenu(e, [[`Filter rows where ${column} = ${value === null ? "NULL" : value.length > 24 ? value.slice(0, 24) + "…" : value}`, () => filterByCell(tab, column, value)]]);
+      };
     });
   });
 }
@@ -946,15 +953,16 @@ async function loadTable(tab: TableTab) {
   tab.error = undefined;
   if (tab.id === currentId) renderMain();
   try {
-    await loadColumns(tab.table); // structure view, and the primary key for editing
+    await loadColumns(tab.table); // structure view, the filter bar's columns, and the primary key for editing
     if (tab.view === "data") {
-      const q = quote(tab.table);
-      tab.result = await call<QueryResult>("run_query", { name: active!.name, sql: `select * from ${q} limit ${PAGE} offset ${tab.page * PAGE}`, confirmed: false });
       // ponytail: exact count(*) can be slow on huge tables; estimate from catalog stats when that hurts.
-      if (tab.total === undefined) {
-        const c = await call<QueryResult>("run_query", { name: active!.name, sql: `select count(*) from ${q}`, confirmed: false });
-        tab.total = Number(c.rows[0]?.[0] ?? 0);
-      }
+      const request = {
+        table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort,
+        limit: PAGE, offset: tab.page * PAGE, count: tab.total === undefined,
+      };
+      const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null }>("browse", { name: active!.name, request });
+      tab.result = { columns: page.columns, rows: page.rows, affected: 0 };
+      if (page.total !== null) tab.total = page.total;
     }
   } catch (e) {
     tab.error = String(e);
@@ -963,10 +971,100 @@ async function loadTable(tab: TableTab) {
   if (tab.id === currentId) renderMain(); // the user may have moved to another tab meanwhile
 }
 
-function quote(table: string) {
-  const q = active!.kind === "postgres" || active!.kind === "sqlite" ? '"' : "`";
-  const parts = active!.kind === "postgres" ? table.split(".") : [table]; // postgres names are schema.table
-  return parts.map((p) => q + p.split(q).join(q + q) + q).join(".");
+// ---------- Filters and sorting (table tabs) ----------
+
+let filtersDrawnFor = 0; // the tab whose filter bar is in the DOM; redrawing on every render would steal focus
+
+function showFilters(tab: Tab) {
+  const bar = $("filters");
+  const shown = tab.kind === "table" && tab.view === "data" && tab.filtersShown;
+  bar.hidden = !shown;
+  const toggle = $("toggle-filters");
+  if (tab.kind === "table") {
+    const n = activeFilters(tab).length;
+    toggle.textContent = n ? `Filters (${n})` : "Filters";
+    toggle.setAttribute("aria-pressed", String(tab.filtersShown));
+  }
+  if (!shown) return void (filtersDrawnFor = 0);
+  const columns = columnsCache.get(tab.table)?.map((c) => c.name);
+  if (filtersDrawnFor === tab.id || !columns) return;
+  filtersDrawnFor = tab.id;
+  renderFilters(bar, tab, columns, () => applyFilters(tab));
+}
+
+async function applyFilters(tab: TableTab) {
+  if (!(await okToDiscard(tab))) return;
+  tab.page = 0;
+  tab.total = undefined; // a different filter matches a different number of rows
+  loadTable(tab);
+}
+
+function toggleFilters(open?: boolean) {
+  const tab = current();
+  if (tab?.kind !== "table" || tab.view !== "data") return;
+  tab.filtersShown = open ?? !tab.filtersShown;
+  filtersDrawnFor = 0;
+  renderMain();
+  if (tab.filtersShown) $("filters").querySelector<HTMLInputElement>("input[type=text]:not([hidden])")?.focus();
+}
+
+/** Header click: ascending, then descending, then off. With Shift, the column joins the existing sort. */
+async function sortBy(tab: TableTab, column: string, add: boolean) {
+  if (!(await okToDiscard(tab))) return;
+  const i = tab.sort.findIndex((s) => s.column === column);
+  const cur = tab.sort[i];
+  const next = !cur ? { column, desc: false } : !cur.desc ? { column, desc: true } : null;
+  if (!add) tab.sort = next ? [next] : [];
+  else if (i < 0) tab.sort.push(next!);
+  else if (next) tab.sort[i] = next;
+  else tab.sort.splice(i, 1);
+  tab.page = 0;
+  loadTable(tab);
+}
+
+/** Right-click on a cell: filter the table to rows with this value. */
+function filterByCell(tab: TableTab, column: string, value: string | null) {
+  const row: FilterRow = value === null ? { ...blankFilter(), column, op: "is_null" } : { ...blankFilter(), column, op: "eq", value };
+  const blank = tab.filters.length === 1 && !activeFilters(tab).length;
+  tab.filters = blank ? [row] : [...tab.filters, row];
+  tab.filtersShown = true;
+  filtersDrawnFor = 0;
+  applyFilters(tab);
+}
+
+let menuClose: (() => void) | null = null;
+
+/** A small context menu at the pointer; any click or Esc closes it. */
+function contextMenu(e: MouseEvent, items: ([string, () => void] | "-")[]) {
+  e.preventDefault();
+  menuClose?.();
+  const menu = el("div", { className: "menu" });
+  menu.setAttribute("role", "menu");
+  for (const item of items) {
+    if (item === "-") menu.append(el("hr"));
+    else {
+      const b = el("button", { type: "button", textContent: item[0] });
+      b.setAttribute("role", "menuitem");
+      b.onclick = () => (close(), item[1]());
+      menu.append(b);
+    }
+  }
+  document.body.append(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`;
+  menu.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  menu.querySelector("button")?.focus();
+  const onDown = (ev: Event) => !menu.contains(ev.target as Node) && close();
+  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && close();
+  function close() {
+    menu.remove();
+    removeEventListener("pointerdown", onDown, true);
+    removeEventListener("keydown", onKey, true);
+    menuClose = null;
+  }
+  addEventListener("pointerdown", onDown, true);
+  addEventListener("keydown", onKey, true);
+  menuClose = close;
 }
 
 /** Inline confirmation under the run bar. Cancel is focused, so Enter or Esc never confirms by accident. */
@@ -1017,13 +1115,27 @@ async function run(sql: string, confirmed = false) {
 
 const numeric = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i;
 
-/** Result grid with row numbers starting after `offset`. */
-function render(r: QueryResult, offset: number) {
+/** Result grid with row numbers starting after `offset`. With `onSort`, headers sort the rows when clicked. */
+function render(r: QueryResult, offset: number, sorting?: { sort: Sort[]; onSort: (column: string, add: boolean) => void }) {
   if (!r.columns.length) return $("out").replaceChildren(el("p", { className: "hint empty", textContent: `${r.affected} rows affected.` }));
   const table = el("table");
   const head = table.createTHead().insertRow();
   head.append(el("th", { className: "rownum" }));
-  for (const c of r.columns) head.append(el("th", { textContent: c }));
+  for (const c of r.columns) {
+    const th = el("th", { textContent: c });
+    if (sorting) {
+      th.className = "sortable";
+      th.title = "Sort by this column; Shift-click to add it to the sort";
+      const i = sorting.sort.findIndex((s) => s.column === c);
+      if (i >= 0) {
+        const s = sorting.sort[i];
+        th.append(el("span", { className: "sort", textContent: `${s.desc ? "▼" : "▲"}${sorting.sort.length > 1 ? i + 1 : ""}` }));
+        th.setAttribute("aria-sort", s.desc ? "descending" : "ascending");
+      }
+      th.onclick = (e) => sorting.onSort(c, e.shiftKey);
+    }
+    head.append(th);
+  }
   const body = table.createTBody();
   // ponytail: plain table; switch to a virtualized grid when pages get much larger than 300 rows.
   r.rows.forEach((row, i) => {
@@ -1076,6 +1188,7 @@ $("discard-edits").onclick = () => {
   const tab = current();
   if (tab?.kind === "table") (tab.edits.clear(), renderMain());
 };
+$("toggle-filters").onclick = () => toggleFilters();
 $("page-prev").onclick = () => turnPage(-1);
 $("page-next").onclick = () => turnPage(1);
 /** Leaves the workspace and closes the server connection; the launcher comes back. */
@@ -1101,6 +1214,7 @@ document.addEventListener("keydown", (e) => {
   } else if (key === "t" && !$("workspace").hidden) (e.preventDefault(), openSqlTab(), editor.focus());
   else if (key === "s" && !$("workspace").hidden) (e.preventDefault(), saveEdits());
   else if (key === "r" && e.shiftKey && !$("workspace").hidden) (e.preventDefault(), reconnect());
+  else if (key === "f" && current()?.kind === "table" && !$("workspace").hidden) (e.preventDefault(), toggleFilters(true));
 });
 
 // ---------- Settings (⌘,) ----------

@@ -1,5 +1,6 @@
 //! DB Manager's Tauri commands: the only surface the UI can call.
 
+mod browse;
 mod db;
 mod error;
 mod readonly;
@@ -288,9 +289,16 @@ async fn switch_database(live: &mut Live, database: &str) -> Result<()> {
     }
 }
 
-/// Runs `sql`, stopping it on the server if it outlasts `limit`.
-async fn query_with_limit(live: &mut Live, sql: &str, limit: Option<Duration>) -> Result<db::QueryResult> {
-    let Some(limit) = limit else { return live.conn.query(sql).await };
+/// A database call borrowing the connection, as [`with_limit`] runs it.
+type ConnCall<'c, T> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'c>>;
+
+/// Runs `call` on the connection, stopping it on the server if it outlasts `limit`.
+async fn with_limit<T>(
+    live: &mut Live,
+    limit: Option<Duration>,
+    call: impl for<'c> FnOnce(&'c mut db::Conn) -> ConnCall<'c, T>,
+) -> Result<T> {
+    let Some(limit) = limit else { return call(&mut live.conn).await };
     let timed_out = || Error::QueryTimeout(limit.as_secs());
     let Live { saved, url, password, conn, tunnel } = live;
     match conn.stopper() {
@@ -302,23 +310,28 @@ async fn query_with_limit(live: &mut Live, sql: &str, limit: Option<Duration>) -
                     handle.interrupt();
                 }
             });
-            let r = conn.query(sql).await;
+            let r = call(conn).await;
             drop(done);
             r.map_err(|e| if db::Conn::interrupted_by(&e) { timed_out() } else { e })
         }
         stopper => {
-            let query = conn.query(sql);
-            tokio::pin!(query);
-            if let Ok(r) = tokio::time::timeout(limit, &mut query).await {
+            let running = call(conn);
+            tokio::pin!(running);
+            if let Ok(r) = tokio::time::timeout(limit, &mut running).await {
                 return r;
             }
             // Best effort: if the stop request fails, the wait below still ends things.
             let _ = stop_query(stopper, saved, url, password.as_ref(), tunnel.as_ref().map(|t| t.port)).await;
             // The server answers the stopped query with an error; wait for it so the connection stays in step.
-            let _ = tokio::time::timeout(Duration::from_secs(10), query).await;
+            let _ = tokio::time::timeout(Duration::from_secs(10), running).await;
             Err(timed_out())
         }
     }
+}
+
+fn query_limit(prefs: &Prefs) -> Option<Duration> {
+    let secs = prefs.query_timeout_secs.load(Ordering::Relaxed);
+    (secs > 0).then(|| Duration::from_secs(secs))
 }
 
 async fn stop_query(
@@ -387,8 +400,21 @@ async fn run_query(
     if live.saved.confirm_writes && !confirmed && !readonly::is_read_only(live.saved.kind, &sql) {
         return Err(Error::ConfirmRequired);
     }
-    let secs = prefs.query_timeout_secs.load(Ordering::Relaxed);
-    let r = query_with_limit(live, &sql, (secs > 0).then(|| Duration::from_secs(secs))).await;
+    let r = with_limit(live, query_limit(&prefs), move |c| Box::pin(async move { c.query(&sql).await })).await;
+    live.check(r)
+}
+
+/// One page of a table, filtered and sorted; see [`browse::Browse`].
+#[tauri::command]
+async fn browse(
+    open: State<'_, Open>,
+    prefs: State<'_, Prefs>,
+    name: String,
+    request: browse::Browse,
+) -> Result<browse::Page> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = with_limit(live, query_limit(&prefs), move |c| Box::pin(async move { c.browse(&request).await })).await;
     live.check(r)
 }
 
@@ -421,14 +447,25 @@ pub fn run() -> tauri::Result<()> {
             columns,
             disconnect,
             update_rows,
-            run_query
+            run_query,
+            browse
         ])
         .run(tauri::generate_context!())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Live, query_with_limit};
+    use super::{Live, with_limit};
+    use std::time::Duration as D;
+
+    async fn query_with_limit(
+        live: &mut Live,
+        sql: &str,
+        limit: Option<D>,
+    ) -> crate::error::Result<crate::db::QueryResult> {
+        let sql = sql.to_string();
+        with_limit(live, limit, move |c| Box::pin(async move { c.query(&sql).await })).await
+    }
     use crate::db::{Conn, Engine, Options};
     use crate::error::Error;
     use crate::{store, tls::Tls};

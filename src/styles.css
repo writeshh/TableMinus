@@ -258,3 +258,22 @@ td.null { color: var(--muted); font-style: italic; }
 @media (prefers-contrast: more) {
   :root { --line: color-mix(in srgb, CanvasText 35%, transparent); --muted: color-mix(in srgb, CanvasText 80%, transparent); }
 }
+
+/* Filter bar above a table's rows */
+.filters { display: grid; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--raised); }
+/* Fixed columns, with the buttons placed explicitly, so a hidden value field never shifts them. */
+.filter-row { display: grid; grid-template-columns: auto minmax(110px, 180px) minmax(110px, 150px) minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+.filter-row input[hidden] { display: none; }
+.filter-row .v1 { grid-column: 4 / span 2; }
+.filter-row.two .v1 { grid-column: 4; }
+.filter-row .v2 { grid-column: 5; }
+.filter-row .rm { grid-column: 6; }
+.filter-row .add { grid-column: 7; }
+.filter-foot { display: flex; gap: 6px; align-items: center; }
+#toggle-filters[aria-pressed="true"] { color: var(--accent); }
+th.sortable { cursor: default; user-select: none; }
+th .sort { margin-left: 4px; color: var(--accent); font-size: 10px; }
+.menu { position: fixed; z-index: 30; min-width: 200px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); }
+.menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 5px; }
+.menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }

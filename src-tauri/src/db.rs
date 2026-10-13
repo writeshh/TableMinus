@@ -140,12 +140,37 @@ impl tokio_postgres::types::ToSql for PgText<'_> {
     tokio_postgres::types::to_sql_checked!();
 }
 
-fn my_cell(v: mysql_async::Value) -> Option<String> {
-    match v {
-        mysql_async::Value::NULL => None,
-        mysql_async::Value::Bytes(b) => Some(String::from_utf8_lossy(&b).into_owned()),
-        v => Some(v.as_sql(true)),
-    }
+/// A MySQL row as text cells, the way the text protocol would show them. Prepared statements return typed
+/// values, so dates and times are formatted from the column's type and fractional-second digits.
+fn my_row(row: mysql_async::Row) -> Vec<Option<String>> {
+    let columns = row.columns();
+    row.unwrap().into_iter().zip(columns.iter()).map(|(v, col)| my_cell(v, col)).collect()
+}
+
+fn my_cell(value: mysql_async::Value, col: &mysql_async::Column) -> Option<String> {
+    use mysql_async::Value as V;
+    use mysql_async::consts::ColumnType;
+    let frac = |micros: u32| match col.decimals() {
+        digits @ 1..=6 => format!(".{}", &format!("{micros:06}")[..usize::from(digits)]),
+        _ => String::new(),
+    };
+    let date_only = matches!(col.column_type(), ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE);
+    Some(match value {
+        V::NULL => return None,
+        V::Bytes(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        V::Int(n) => n.to_string(),
+        V::UInt(n) => n.to_string(),
+        V::Float(n) => n.to_string(),
+        V::Double(n) => n.to_string(),
+        V::Date(year, month, day, ..) if date_only => format!("{year:04}-{month:02}-{day:02}"),
+        V::Date(year, month, day, hour, minute, second, micros) => {
+            format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}{}", frac(micros))
+        }
+        V::Time(negative, days, hour, minute, second, micros) => {
+            let hours = days * 24 + u32::from(hour);
+            format!("{}{hours:02}:{minute:02}:{second:02}{}", if negative { "-" } else { "" }, frac(micros))
+        }
+    })
 }
 
 fn lite_cell(v: rusqlite::types::ValueRef) -> Option<String> {
@@ -361,7 +386,7 @@ impl Conn {
                 let rows: Vec<mysql_async::Row> = res.collect().await?;
                 let affected = res.affected_rows();
                 res.drop_result().await?; // ponytail: only the first result set of a multi-statement query
-                let rows = rows.into_iter().map(|row| row.unwrap().into_iter().map(my_cell).collect()).collect();
+                let rows = rows.into_iter().map(my_row).collect();
                 Ok(QueryResult { columns, rows, affected })
             }
             Conn::Lite(c) => {
@@ -384,7 +409,7 @@ impl Conn {
     }
 
     /// The placeholder for the `n`th (1-based) bound parameter.
-    fn param(&self, n: usize) -> String {
+    pub(crate) fn param(&self, n: usize) -> String {
         match self {
             Conn::My(_) => "?".into(),
             _ => format!("${n}"),
@@ -410,7 +435,7 @@ impl Conn {
     }
 
     /// Runs a catalog query with bound parameters. Every selected column must be text (cast `::text` on Postgres).
-    async fn fetch_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<Vec<Option<String>>>> {
+    pub(crate) async fn fetch_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<Vec<Option<String>>>> {
         match self {
             Conn::Pg(c) => {
                 let params: Vec<PgText> = params.iter().copied().map(PgText).collect();
@@ -427,7 +452,7 @@ impl Conn {
                 use mysql_async::prelude::Queryable;
                 let params: Vec<_> = params.iter().copied().map(mysql_async::Value::from).collect();
                 let rows: Vec<mysql_async::Row> = c.exec(sql, params).await?;
-                Ok(rows.into_iter().map(|row| row.unwrap().into_iter().map(my_cell).collect()).collect())
+                Ok(rows.into_iter().map(my_row).collect())
             }
             Conn::Lite(c) => {
                 let mut st = c.prepare(sql)?;
@@ -493,14 +518,14 @@ impl Conn {
     }
 
     /// A quoted identifier. Identifiers can't be bound as parameters, so this is the one place SQL is escaped.
-    fn ident(&self, name: &str) -> String {
+    pub(crate) fn ident(&self, name: &str) -> String {
         match self {
             Conn::My(_) => format!("`{}`", name.replace('`', "``")),
             _ => format!("\"{}\"", name.replace('"', "\"\"")),
         }
     }
 
-    fn table_ident(&self, table: &str) -> String {
+    pub(crate) fn table_ident(&self, table: &str) -> String {
         match (self, table.split_once('.')) {
             (Conn::Pg(_), Some((schema, name))) => format!("{}.{}", self.ident(schema), self.ident(name)),
             _ => self.ident(table),
