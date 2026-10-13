@@ -1,7 +1,7 @@
 // Run with `node --test 'src/**/*.test.ts'`. Part of `npm run check`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { splitStatements, statementAt } from "./statements.ts";
+import { fillParams, findParams, splitStatements, statementAt } from "./statements.ts";
 
 const texts = (sql: string, d: "postgres" | "mysql" | "sqlite" = "postgres") => splitStatements(sql, d).map((s) => s.text);
 
@@ -33,4 +33,24 @@ test("statementAt finds the statement under the cursor, or the one just before",
   assert.equal(statementAt(sql, 9, "sqlite")?.text, "select 1", "right after the semicolon");
   assert.equal(statementAt(sql, 10, "sqlite")?.text, "select 1", "on the blank line below");
   assert.equal(statementAt(sql, sql.length, "sqlite")?.text, "select 2");
+});
+
+const names = (sql: string, f: Parameters<typeof findParams>[2] = "colon") => findParams(sql, "postgres", f).map((p) => p.name);
+
+test("colon params skip ::casts, strings and comments", () => {
+  assert.deepEqual(names("select :id::int, ':no', \"x:no\" -- :no\nwhere a = :name and b = :u.id"), ["id", "name", "u.id"]);
+});
+
+test("each format finds its own placeholders", () => {
+  assert.deepEqual(names("where a = $who and b = $1", "dollar"), ["who"]);
+  assert.deepEqual(names("where a = ${who}", "dollarBraces"), ["who"]);
+  assert.deepEqual(names("where a = {{who}}", "doubleBraces"), ["who"]);
+  assert.deepEqual(names("where a = %who%", "percent"), ["who"]);
+  assert.deepEqual(names("where a = ? and b = '?' and c = ?", "question"), ["1", "2"]);
+});
+
+test("fillParams puts values in as typed, repeated names included", () => {
+  const sql = "select * from t where a = :x or b = :x and c = :name";
+  const filled = fillParams(sql, findParams(sql, "postgres", "colon"), { x: "1", name: "'Ada'" });
+  assert.equal(filled, "select * from t where a = 1 or b = 1 and c = 'Ada'");
 });

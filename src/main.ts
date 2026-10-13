@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor, type FormatStyle, type Schema } from "./editor";
+import { fillParams, findParams, type ParamFormat } from "./statements";
 import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
@@ -1153,13 +1154,62 @@ async function run(sql: string, confirmed = false) {
   }
 }
 
-const runCurrent = () => run(editor.current());
+// ---------- Query parameters ----------
+
+const paramValues = new Map<string, string>(); // last value per name, for this session
+
+/** Asks for the values of `names`; resolves to null when cancelled. */
+function askParams(names: string[]): Promise<Record<string, string> | null> {
+  const d = $<HTMLDialogElement>("params");
+  const inputs = names.map((name) => {
+    const input = el("input", { name, value: paramValues.get(name) ?? "", placeholder: "value, e.g. 42 or 'text'" });
+    const label = el("label", { textContent: /^\d+$/.test(name) ? `Parameter ${name}` : name });
+    label.append(input);
+    return { name, input, label };
+  });
+  $("params-fields").replaceChildren(...inputs.map((i) => i.label));
+  d.showModal();
+  inputs[0]?.input.select();
+  return new Promise((resolve) => {
+    const done = (values: Record<string, string> | null) => {
+      d.close();
+      resolve(values);
+    };
+    $("params-cancel").onclick = () => done(null);
+    d.oncancel = () => done(null);
+    $<HTMLFormElement>("params-form").onsubmit = (e) => {
+      e.preventDefault();
+      const values = Object.fromEntries(inputs.map((i) => [i.name, i.input.value]));
+      for (const [k, v] of Object.entries(values)) paramValues.set(k, v);
+      done(values);
+    };
+  });
+}
+
+/** `statements` with their parameters filled in (asking once for every name), or null when cancelled. */
+async function withParams(statements: string[]): Promise<string[] | null> {
+  if (settings.paramFormat === "off" || !active) return statements;
+  const format = settings.paramFormat;
+  const found = statements.map((s) => findParams(s, active!.kind as Parameters<typeof findParams>[1], format));
+  const names = [...new Set(found.flat().map((p) => p.name))];
+  if (!names.length) return statements;
+  const values = await askParams(names);
+  return values && statements.map((s, i) => fillParams(s, found[i], values));
+}
+
+const runCurrent = async () => {
+  const filled = await withParams([editor.current()]);
+  if (filled) run(filled[0]);
+};
 
 /** Runs each statement in turn, stopping at the first error; the last result is shown. Safe mode asks once. */
 async function runAll() {
   const tab = current();
-  const statements = editor.all();
-  if (!active || tab?.kind !== "sql" || !statements.length) return;
+  const texts = editor.all().map((s) => s.text);
+  if (!active || tab?.kind !== "sql" || !texts.length) return;
+  const filled = await withParams(texts);
+  if (!filled) return;
+  const statements = filled.map((text) => ({ text }));
   if (statements.length === 1) return run(statements[0].text);
   const say = (text: string, kind: StatusKind) => {
     tab.status = [text, kind];
@@ -1543,10 +1593,11 @@ type Settings = {
   /** Most rows an editor query shows; 0 = no limit. */
   sqlLimit: number;
   formatStyle: FormatStyle;
+  paramFormat: ParamFormat | "off";
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeDefault: true, queryTimeout: 300, keepAlive: true,
-  sqlLimit: 1000, formatStyle: "standard",
+  sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon",
 };
 let settings: Settings = loadSettings();
 
@@ -1585,6 +1636,7 @@ function applySettings() {
   $<HTMLInputElement>("keep-alive").checked = settings.keepAlive;
   $<HTMLSelectElement>("row-limit").value = String(settings.sqlLimit);
   $<HTMLSelectElement>("format-style").value = settings.formatStyle;
+  $<HTMLSelectElement>("param-format").value = settings.paramFormat;
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
   invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout }).catch(() => {});
 }
@@ -1652,6 +1704,7 @@ $("run").onclick = runCurrent;
 $("run-all").onclick = runAll;
 $("format-sql").onclick = () => (formatSql(), editor.focus());
 $("keys-format").textContent = navigator.userAgent.includes("Mac") ? "⌘I" : "Ctrl+I";
+$<HTMLSelectElement>("param-format").onchange = (e) => setSetting("paramFormat", (e.target as HTMLSelectElement).value as Settings["paramFormat"]);
 $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
 $("keys-all").textContent = navigator.userAgent.includes("Mac") ? "⌘⇧↵" : "Ctrl+Shift+↵";
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));

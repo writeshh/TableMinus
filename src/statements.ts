@@ -1,8 +1,33 @@
-// Splits SQL into statements at semicolons that aren't inside strings, quoted names, comments or Postgres
-// dollar quotes. Pure, so it's tested on its own (statements.test.ts).
+// Reads SQL the way the server will: splitting statements at semicolons and finding query parameters, both only
+// outside strings, quoted names, comments and Postgres dollar quotes. Pure, so it's tested on its own
+// (statements.test.ts).
 
 export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite";
 export type Statement = { from: number; to: number; text: string };
+
+/** The stretches of `sql` that are code: everything except strings, quoted names, comments and dollar quotes. */
+export function codeRanges(sql: string, dialect: Dialect): [number, number][] {
+  const mysql = dialect === "mysql" || dialect === "mariadb";
+  const ranges: [number, number][] = [];
+  let start = 0;
+  let i = 0;
+  const skip = (end: number) => {
+    if (i > start) ranges.push([start, i]);
+    start = i = end;
+  };
+  while (i < sql.length) {
+    const c = sql[i];
+    const next = sql[i + 1];
+    if (c === "-" && next === "-") skip(lineEnd(sql, i));
+    else if (c === "#" && mysql) skip(lineEnd(sql, i));
+    else if (c === "/" && next === "*") skip(blockEnd(sql, i));
+    else if (c === "'" || c === '"' || c === "`") skip(quoteEnd(sql, i, c, mysql && c !== "`"));
+    else if (c === "$" && dialect === "postgres" && dollarTag(sql, i)) skip(dollarEnd(sql, i, dollarTag(sql, i)!));
+    else i++;
+  }
+  if (i > start) ranges.push([start, i]);
+  return ranges;
+}
 
 /** Every non-empty statement, with offsets into `sql` (trailing semicolon excluded, whitespace trimmed). */
 export function splitStatements(sql: string, dialect: Dialect): Statement[] {
@@ -15,19 +40,11 @@ export function splitStatements(sql: string, dialect: Dialect): Statement[] {
     const text = raw.trim();
     if (text && !isOnlyComments(text, mysql)) out.push({ from: start + lead, to: start + lead + text.length, text });
   };
-  let i = 0;
-  while (i < sql.length) {
-    const c = sql[i];
-    const next = sql[i + 1];
-    if (c === "-" && next === "-") i = lineEnd(sql, i);
-    else if (c === "#" && mysql) i = lineEnd(sql, i);
-    else if (c === "/" && next === "*") i = blockEnd(sql, i);
-    else if (c === "'" || c === '"' || c === "`") i = quoteEnd(sql, i, c, mysql && c !== "`");
-    else if (c === "$" && dialect === "postgres" && dollarTag(sql, i)) i = dollarEnd(sql, i, dollarTag(sql, i)!);
-    else if (c === ";") {
+  for (const [from, to] of codeRanges(sql, dialect)) {
+    for (let i = sql.indexOf(";", from); i >= 0 && i < to; i = sql.indexOf(";", i + 1)) {
       push(i);
-      start = ++i;
-    } else i++;
+      start = i + 1;
+    }
   }
   push(sql.length);
   return out;
@@ -40,6 +57,44 @@ export function statementAt(sql: string, pos: number, dialect: Dialect): Stateme
   if (inside) return inside;
   const before = [...all].reverse().find((s) => s.to <= pos);
   return before ?? all.find((s) => s.from >= pos);
+}
+
+/** How query parameters are written; TablePlus's choices. */
+export type ParamFormat = "colon" | "dollar" | "dollarBraces" | "doubleBraces" | "percent" | "question";
+
+const PARAM_PATTERNS: Record<Exclude<ParamFormat, "question">, RegExp> = {
+  colon: /(?<![:\w]):([A-Za-z_][\w.]*)/g, // not ::casts, and not a:b inside a word
+  dollar: /\$([A-Za-z_][\w.]*)/g, // $1 stays a server-side placeholder
+  dollarBraces: /\$\{([\w.]+)\}/g,
+  doubleBraces: /\{\{([\w.]+)\}\}/g,
+  percent: /%([\w.]+)%/g,
+};
+
+export type Param = { name: string; from: number; to: number };
+
+/** Parameters in `sql` outside strings and comments. `?` parameters are named by position: "1", "2", … */
+export function findParams(sql: string, dialect: Dialect, format: ParamFormat): Param[] {
+  const found: Param[] = [];
+  for (const [from, to] of codeRanges(sql, dialect)) {
+    const code = sql.slice(from, to);
+    if (format === "question") {
+      for (let i = code.indexOf("?"); i >= 0; i = code.indexOf("?", i + 1)) {
+        found.push({ name: String(found.length + 1), from: from + i, to: from + i + 1 });
+      }
+      continue;
+    }
+    for (const m of code.matchAll(PARAM_PATTERNS[format])) {
+      found.push({ name: m[1], from: from + m.index, to: from + m.index + m[0].length });
+    }
+  }
+  return found;
+}
+
+/** `sql` with each parameter replaced by its value, as typed (the user adds quotes for strings, as in TablePlus). */
+export function fillParams(sql: string, params: Param[], values: Record<string, string>): string {
+  let out = sql;
+  for (const p of [...params].sort((a, b) => b.from - a.from)) out = out.slice(0, p.from) + (values[p.name] ?? "") + out.slice(p.to);
+  return out;
 }
 
 const lineEnd = (sql: string, i: number) => {
