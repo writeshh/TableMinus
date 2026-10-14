@@ -401,6 +401,7 @@ form.addEventListener("submit", (e) => {
 // ---------- Workspace ----------
 
 function show(view: "home" | "workspace") {
+  $("return-workspace").hidden = view !== "home" || !workspaces.length;
   $("home").hidden = view !== "home";
   $("workspace").hidden = view !== "workspace";
   if (view === "home") $("search").focus();
@@ -446,6 +447,8 @@ $("reconnect").onclick = reconnect;
 // Keep-alive found the active connection dead: show the banner now rather than on the next query.
 listen<string>("connection-lost", (e) => {
   if (e.payload === active?.name) $("lost").hidden = false;
+  const w = workspaces.find((w) => w.conn.name === e.payload && w !== ws);
+  if (w) (w.lost = true), renderWorkspaceButton();
 }).catch(() => {}); // no event bridge outside the app
 
 // ---------- Connection info (click the status pill) ----------
@@ -476,22 +479,30 @@ async function showConnectionInfo() {
 $("pill").onclick = showConnectionInfo;
 $("pill").onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), showConnectionInfo());
 $("info-reconnect").onclick = () => (($("conn-info").hidden = true), reconnect());
-$("info-disconnect").onclick = () => (($("conn-info").hidden = true), $("back").click());
+$("info-disconnect").onclick = () => (($("conn-info").hidden = true), closeWorkspace());
 document.addEventListener("pointerdown", (e) => {
   const pop = $("conn-info");
   if (!pop.hidden && !pop.contains(e.target as Node) && e.target !== $("pill")) pop.hidden = true;
 });
 document.addEventListener("keydown", (e) => e.key === "Escape" && ($("conn-info").hidden = true));
 
+/** Opens a connection as a new workspace; one that's already open is brought forward instead. */
 async function connect(c: Saved) {
+  const open = workspaces.find((w) => w.conn.name === c.name);
+  if (open) return showWorkspace(open);
   setStatus("home-status", `Connecting to ${c.name}…`, "busy");
   try {
     const i = await invoke<Info>("connect", { name: c.name });
+    stashWorkspace();
+    pane = newPane();
+    ws = { conn: c, info: i, tables: i.tables, panes: [pane], pane, columns: new Map(), expanded: new Set(), lost: false, filter: "" };
+    workspaces.push(ws);
     active = c;
+    columnsCache = ws.columns;
+    expanded = ws.expanded;
     $("lost").hidden = true;
     setStatus("home-status", "");
-    $("where-conn").replaceChildren(avatar(c.kind), el("span", { textContent: c.name }), el("span", { className: "host", textContent: hostOf(c) }));
-    document.body.dataset.env = c.tag; // production gets a red edge
+    showHeader();
     show("workspace");
     applyInfo(i);
     showSide("items");
@@ -511,20 +522,216 @@ function applyInfo(i: Info) {
   tables = i.tables;
   columnsCache.clear();
   expanded.clear();
-  const btn = $("db-button");
-  btn.hidden = !i.can_switch;
-  btn.textContent = i.database ? `${i.database} ▾` : "Choose database ▾";
-  btn.title = `Open a database (${keyLabel("open-database")})`;
   $<HTMLInputElement>("filter").value = "";
-  $<HTMLInputElement>("filter").hidden = !tables.length;
+  showHeader();
   editor.setDialect(active!.kind, new Map(tables.map((t) => [t, []]))); // before the new tab's state is created
   loadSchema();
+  // One pane again: a split's other tabs belonged to the previous database.
+  pane = newPane();
+  if (ws) (ws.panes = [pane]), (ws.pane = pane);
+  layoutPanes();
   tabs = [];
+  currentId = 0;
   shownId = 0;
   const kept = settings.keepTabs ? loadSqlTabs() : [];
   if (!kept.length) openSqlTab();
   for (const k of kept) tabs.push({ id: nextId++, kind: "sql", title: k.title, sql: k.sql, path: k.path });
   if (kept.length) select(tabs[0].id);
+  renderTables();
+}
+
+/** The workspace header, the database button and the sidebar filter for the active connection. */
+function showHeader() {
+  const c = active!;
+  $("where-conn").replaceChildren(avatar(c.kind), el("span", { textContent: c.name }), el("span", { className: "host", textContent: hostOf(c) }));
+  document.body.dataset.env = c.tag; // production gets a red edge
+  const btn = $("db-button");
+  btn.hidden = !info?.can_switch;
+  btn.textContent = info?.database ? `${info.database} ▾` : "Choose database ▾";
+  btn.title = `Open a database (${keyLabel("open-database")})`;
+  $<HTMLInputElement>("filter").hidden = !tables.length;
+  renderWorkspaceButton();
+}
+
+// ---------- Workspaces: several connections open in one window, each with its own panes and tabs ----------
+
+type Workspace = {
+  conn: Saved; info: Info | null; tables: string[];
+  /** Side by side; `pane` is the one with focus. */
+  panes: Pane[]; pane: Pane;
+  columns: Map<string, Column[]>; expanded: Set<string>; lost: boolean; filter: string;
+};
+let workspaces: Workspace[] = [];
+let ws: Workspace | null = null; // the one on screen (or last on screen, while the launcher shows)
+
+/** Every tab of the workspace on screen, in all its panes. */
+const allTabs = () => (ws?.panes ?? [pane]).flatMap((p) => (p === pane ? tabs : p.tabs));
+
+/** Writes the on-screen state back into its workspace before another takes the screen. */
+function stashWorkspace() {
+  if (!ws) return;
+  stashEditor();
+  Object.assign(pane, { tabs, currentId });
+  Object.assign(ws, {
+    info, tables, pane, columns: columnsCache, expanded, lost: !$("lost").hidden, filter: $<HTMLInputElement>("filter").value,
+  });
+}
+
+function showWorkspace(w: Workspace) {
+  if (w !== ws || $("workspace").hidden) stashWorkspace();
+  ws = w;
+  ({ conn: active, info, tables, pane, columns: columnsCache, expanded } = w);
+  ({ tabs, currentId } = pane);
+  shownId = 0; // the editor holds another workspace's tab
+  filtersDrawnFor = 0;
+  $("lost").hidden = !w.lost;
+  $<HTMLInputElement>("filter").value = w.filter;
+  showHeader();
+  show("workspace");
+  editor.setDialect(w.conn.kind, new Map(tables.map((t) => [t, []])));
+  loadSchema();
+  layoutPanes();
+  renderTables();
+  renderHistory();
+  renderMain();
+}
+
+function cycleWorkspace(step: number) {
+  const i = workspaces.indexOf(ws!);
+  if (workspaces.length > 1) showWorkspace(workspaces[(i + step + workspaces.length) % workspaces.length]);
+}
+
+/** The launcher, with the open workspaces kept; connecting from it adds one. */
+function newWorkspace() {
+  stashWorkspace();
+  show("home");
+}
+
+/** Reopens every workspace's connection, keeping their tabs. */
+async function reconnectAll() {
+  stashWorkspace();
+  for (const w of workspaces) {
+    if (w === ws && !$("workspace").hidden) {
+      await reconnect();
+      continue;
+    }
+    try {
+      w.info = await invoke<Info>("reconnect", { name: w.conn.name });
+      Object.assign(w, { tables: w.info.tables, columns: new Map(), lost: false });
+    } catch (e) {
+      status(`${w.conn.name}: ${e}`, "error");
+    }
+  }
+  renderWorkspaceButton();
+}
+
+/** The connection name in the header opens the switcher ("Show All Workspaces"); a count shows when there are several. */
+function renderWorkspaceButton() {
+  const head = $("where-conn");
+  head.querySelector(".ws-count")?.remove();
+  const others = workspaces.filter((w) => w !== ws);
+  if (others.length) {
+    const lost = others.some((w) => w.lost);
+    head.append(el("span", { className: `ws-count${lost ? " lost" : ""}`, textContent: `+${others.length}`,
+      title: lost ? "Another workspace lost its connection" : `${others.length} more workspace${others.length === 1 ? "" : "s"}` }));
+  }
+}
+
+function showWorkspaces() {
+  const r = $("where-conn").getBoundingClientRect();
+  const items: MenuItem[] = workspaces.map((w) => [
+    `${w === ws ? "✓ " : "    "}${w.conn.name}${w.info?.database ? ` · ${w.info.database}` : ""}${w.lost ? " (disconnected)" : ""}`,
+    () => showWorkspace(w),
+  ]);
+  contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), [
+    ...items, "-",
+    [`New Workspace…  ${keyLabel("new-workspace")}`, newWorkspace],
+    ["Reconnect All", reconnectAll],
+    ["Close Workspace", closeWorkspace],
+  ]);
+}
+$("where-conn").onclick = showWorkspaces;
+$("where-conn").onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), showWorkspaces());
+$("return-workspace").onclick = () => ws && showWorkspace(ws);
+
+// ---------- Split panes: the focused pane is live, the others show a still picture of their tab ----------
+
+// ponytail: an unfocused pane is a copy of its last frame (a query finishing there shows once it has focus);
+// render each pane live once the grid and editor can draw into more than one place.
+const live = () => $("live");
+
+/** A still copy of the live pane: same look, no ids, nothing focusable. Clicking it focuses that pane. */
+function snapshot(p: Pane): HTMLElement {
+  const shot = live().cloneNode(true) as HTMLElement;
+  for (const n of [shot, ...shot.querySelectorAll<HTMLElement>("[id]")]) (n.dataset.id = n.id), n.removeAttribute("id");
+  for (const n of shot.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex], [contenteditable]")) {
+    n.tabIndex = -1;
+    n.removeAttribute("contenteditable");
+  }
+  shot.classList.add("shot");
+  shot.onpointerdown = (e) => {
+    e.preventDefault();
+    const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-tab]")?.dataset.tab;
+    focusPane(p);
+    if (tab) select(Number(tab));
+  };
+  return shot;
+}
+
+function layoutPanes() {
+  const panes = ws?.panes ?? [pane];
+  $("panes").replaceChildren(...panes.map((p) => (p === pane ? live() : p.shot ?? snapshot(p))));
+  $("panes").classList.toggle("split", panes.length > 1);
+}
+
+function focusPane(p: Pane) {
+  if (p === pane || !ws) return;
+  stashEditor();
+  Object.assign(pane, { tabs, currentId });
+  pane.shot = snapshot(pane);
+  ws.pane = pane = p;
+  ({ tabs, currentId } = p);
+  shownId = 0;
+  filtersDrawnFor = 0;
+  layoutPanes();
+  renderMain();
+  renderTables();
+}
+
+function cyclePane(step: number) {
+  const panes = ws?.panes ?? [];
+  if (panes.length > 1) focusPane(panes[(panes.indexOf(pane) + step + panes.length) % panes.length]);
+}
+
+/** A new pane to the right of the focused one, with a new SQL tab. */
+function splitRight() {
+  if (!ws) return;
+  stashEditor();
+  Object.assign(pane, { tabs, currentId });
+  pane.shot = snapshot(pane);
+  const p = newPane();
+  ws.panes.splice(ws.panes.indexOf(pane) + 1, 0, p);
+  ws.pane = pane = p;
+  tabs = [];
+  currentId = 0;
+  layoutPanes();
+  openSqlTab();
+  editor.focus();
+}
+
+/** Its last tab closed: the pane goes and its neighbour takes focus. */
+function closePane() {
+  if (!ws || ws.panes.length < 2) return;
+  const i = ws.panes.indexOf(pane);
+  ws.panes.splice(i, 1);
+  const next = ws.panes[Math.max(0, i - 1)];
+  ws.pane = pane = next;
+  ({ tabs, currentId } = next);
+  delete next.shot;
+  shownId = 0;
+  filtersDrawnFor = 0;
+  layoutPanes();
+  renderMain();
   renderTables();
 }
 
@@ -544,7 +751,7 @@ function loadSqlTabs(): KeptTab[] {
 
 function saveSqlTabs() {
   if (!active || !settings.keepTabs) return;
-  const kept: KeptTab[] = tabs.flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql, path: t.path }] : []));
+  const kept: KeptTab[] = allTabs().flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql, path: t.path }] : []));
   try {
     if (kept.length) localStorage.setItem(keptKey(), JSON.stringify(kept));
     else localStorage.removeItem(keptKey());
@@ -649,7 +856,7 @@ function renderDbs() {
 async function openDb(name?: string) {
   name ??= shownDbs()[dbPick];
   if (!name || !active) return;
-  for (const t of tabs) if (!(await okToDiscard(t))) return;
+  for (const t of allTabs()) if (!(await okToDiscard(t))) return;
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
     applyInfo(await call<Info>("use_database", { name: active.name, database: name }));
@@ -678,12 +885,13 @@ $("db-button").onclick = openDbPicker;
 // ---------- Sidebar: tables (expandable to columns) and history ----------
 
 type Column = { name: string; data_type: string; nullable: boolean; default: string | null; primary: boolean };
-const columnsCache = new Map<string, Column[]>();
-const expanded = new Set<string>();
+let columnsCache = new Map<string, Column[]>(); // swapped per workspace, so a late answer lands in its own
+let expanded = new Set<string>();
 
 async function loadColumns(table: string) {
-  if (!columnsCache.has(table)) columnsCache.set(table, await call<Column[]>("columns", { name: active!.name, table }));
-  return columnsCache.get(table)!;
+  const cache = columnsCache; // the workspace may change while this waits
+  if (!cache.has(table)) cache.set(table, await call<Column[]>("columns", { name: active!.name, table }));
+  return cache.get(table)!;
 }
 
 function renderTables() {
@@ -827,7 +1035,11 @@ const current = () => tabs.find((t) => t.id === currentId);
 
 /** The tabs of one pane (the window splits into two side by side). While a pane has focus its tabs and current
  *  tab live in `tabs` and `currentId`; the rest is its history for Back/Forward and Reopen Closed Tab. */
-type Pane = { tabs: Tab[]; currentId: number; back: number[]; forward: number[]; closed: { tab: Tab; index: number }[] };
+type Pane = {
+  tabs: Tab[]; currentId: number; back: number[]; forward: number[]; closed: { tab: Tab; index: number }[];
+  /** What an unfocused pane shows: a still copy of its last frame. */
+  shot?: HTMLElement;
+};
 const newPane = (): Pane => ({ tabs: [], currentId: 0, back: [], forward: [], closed: [] });
 let pane: Pane = newPane();
 let navigating = false; // Back/Forward selects without recording the move
@@ -884,6 +1096,7 @@ async function closeTab(id: number, remember = true) {
   if (remember) pane.closed = [...pane.closed, { tab: tabs[i], index: i }].slice(-20);
   tabs.splice(i, 1);
   saveSqlTabs();
+  if (!tabs.length && (ws?.panes.length ?? 1) > 1) return closePane();
   if (!tabs.length) return void closeWorkspace(); // last tab gone: leave the connection, like TablePlus
   if (id === currentId) select(tabs[Math.max(0, i - 1)].id);
   else renderMain();
@@ -1179,6 +1392,7 @@ async function saveEdits(confirmed = false) {
 }
 
 async function loadTable(tab: TableTab) {
+  const name = active!.name; // the tab's workspace, even if another takes the screen meanwhile
   tab.loading = true;
   tab.error = undefined;
   if (tab.id === currentId) renderMain();
@@ -1190,7 +1404,7 @@ async function loadTable(tab: TableTab) {
         table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort,
         limit: PAGE, offset: tab.page * PAGE, count: tab.total === undefined,
       };
-      const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null }>("browse", { name: active!.name, request });
+      const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null }>("browse", { name, request });
       tab.result = { columns: page.columns, rows: page.rows, affected: 0 };
       if (page.total !== null) tab.total = page.total;
     }
@@ -1856,14 +2070,18 @@ $("page-prev").onclick = () => turnPage(-1);
 $("page-next").onclick = () => turnPage(1);
 /** Leaves the workspace and closes the server connection; the launcher comes back. */
 async function closeWorkspace() {
-  for (const t of tabs) if (!(await okToDiscard(t))) return;
+  for (const t of allTabs()) if (!(await okToDiscard(t))) return;
   if (active) invoke("disconnect", { name: active.name }).catch(() => {});
+  workspaces = workspaces.filter((w) => w !== ws);
+  ws = null;
   active = null;
   info = null;
   tabs = [];
   shownId = 0;
   delete document.body.dataset.env;
-  show("home");
+  const next = workspaces.at(-1);
+  if (next) showWorkspace(next);
+  else show("home");
 }
 
 // ---------- Settings (⌘,) ----------
@@ -2039,6 +2257,21 @@ addCommands([
   })),
   { id: "open-database", label: "Open a Database…", menu: "Connection", keys: ["Mod+KeyK"], when: inWorkspace, run: openDbPicker },
   { id: "reconnect", label: "Reconnect", menu: "Connection", keys: ["Mod+Shift+KeyR"], when: inWorkspace, run: reconnect },
+  { id: "reconnect-all", label: "Reconnect All Workspaces", menu: "Connection", when: () => workspaces.length > 0, run: reconnectAll },
+  { id: "disconnect", label: "Disconnect", menu: "Connection", keys: ["Alt+Mod+Period"], when: inWorkspace, sep: true, run: closeWorkspace },
+  { id: "new-workspace", label: "New Workspace", menu: "File", keys: ["Mod+KeyN"], when: inWorkspace, run: newWorkspace },
+  { id: "reload-workspace", label: "Reload Workspace", menu: "View", keys: ["Alt+Mod+KeyR"], when: inWorkspace,
+    run: async () => (await reloadItems(), current()?.kind === "table" && reloadTab()) },
+  { id: "split-right", label: "Split Pane Right", menu: "Window", keys: ["Mod+Shift+KeyD"], when: inWorkspace, sep: true, run: splitRight },
+  { id: "next-pane", label: "Select Next Pane", menu: "Window", keys: ["Alt+Mod+BracketRight"], when: () => (ws?.panes.length ?? 0) > 1,
+    run: () => cyclePane(1) },
+  { id: "previous-pane", label: "Select Previous Pane", menu: "Window", keys: ["Alt+Mod+BracketLeft"], when: () => (ws?.panes.length ?? 0) > 1,
+    run: () => cyclePane(-1) },
+  { id: "show-workspaces", label: "Show All Workspaces", menu: "Window", when: inWorkspace, sep: true, run: showWorkspaces },
+  { id: "next-workspace", label: "Select Next Workspace", menu: "Window", keys: ["Ctrl+Mod+BracketRight"], when: () => workspaces.length > 1,
+    run: () => cycleWorkspace(1) },
+  { id: "previous-workspace", label: "Select Previous Workspace", menu: "Window", keys: ["Ctrl+Mod+BracketLeft"],
+    when: () => workspaces.length > 1, run: () => cycleWorkspace(-1) },
 ]);
 
 /** Shortcut hints next to buttons, kept in step with Settings › Shortcuts. */

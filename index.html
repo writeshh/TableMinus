@@ -26,6 +26,7 @@
         <ul id="conns" class="conns"></ul>
         <p id="no-conns" class="hint center" hidden>No connections yet.<br />Create one to get started.</p>
         <p id="home-status" class="status"></p>
+        <button id="return-workspace" class="ghost" hidden>Back to the open workspaces</button>
       </div>
     </section>
 
@@ -287,7 +288,7 @@
       </aside>
       <main>
         <header id="where">
-          <span id="where-conn" class="where-conn"></span>
+          <span id="where-conn" class="where-conn" role="button" tabindex="0" title="Workspaces"></span>
           <span class="spacer"></span>
           <span id="pill" class="pill" role="button" tabindex="0" title="Connection info"></span>
           <button id="db-button" class="ghost" title="Open a database"></button>
@@ -307,6 +308,7 @@
           <button id="reconnect" class="primary">Reconnect</button>
           <span class="hint inline" id="reconnect-key"></span>
         </div>
+        <div id="panes" class="panes"><div id="live" class="pane">
         <nav id="tabs" class="tabs" role="tablist"></nav>
         <div id="sql-pane" class="sql-pane">
           <div id="sql" class="editor"></div>
@@ -349,6 +351,7 @@
           <button id="page-prev" class="ghost" title="Previous page" aria-label="Previous page">‹</button>
           <button id="page-next" class="ghost" title="Next page" aria-label="Next page">›</button>
         </footer>
+        </div></div>
       </main>
     </section>
   </body>
