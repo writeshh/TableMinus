@@ -22,6 +22,10 @@ pub struct Browse {
     /// Also count the rows that match, for "1–300 of N".
     #[serde(default)]
     pub count: bool,
+    /// Also read each row's identity (ctid on Postgres, rowid on SQLite) where the table has one, so a change can
+    /// be saved to a row its key doesn't single out.
+    #[serde(default)]
+    pub identity: bool,
 }
 
 /// How several filters combine.
@@ -85,6 +89,9 @@ pub struct Page {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub total: Option<u64>,
+    /// Each row's identity, when asked for and the table has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
 }
 
 /// A LIKE pattern matching `value` literally, with `!` as the escape character. `!` rather than backslash
@@ -205,13 +212,27 @@ impl Conn {
             })
             .collect();
         let from = self.table_ident(&req.table);
+        let identity = if req.identity { self.identity(&from).await } else { None };
+        let select: Vec<String> = select.into_iter().chain(identity.map(String::from)).collect();
         let count = if matches!(self, Conn::Pg(_)) { "count(*)::text" } else { "count(*)" };
         Ok(Select {
             rows: format!("select {} from {from}{filter}{order}", select.join(", ")),
             count: format!("select {count} from {from}{filter}"),
             columns,
             params,
+            identity: identity.is_some(),
         })
+    }
+
+    /// The expression for a row's identity in `from`, if it has one: views and SQLite's WITHOUT ROWID tables
+    /// don't, and asking is the simplest way to tell.
+    async fn identity(&mut self, from: &str) -> Option<&'static str> {
+        let expr = match self {
+            Conn::Pg(_) => "ctid::text",
+            Conn::Lite(_) => "rowid",
+            Conn::My(_) => return None,
+        };
+        self.fetch_with(&format!("select {expr} from {from} limit 0"), &[]).await.ok().map(|_| expr)
     }
 
     /// The total from a [`Select::count`] query.
@@ -226,9 +247,10 @@ impl Conn {
         // Limit and offset are numbers from the request type, so they're written in, not bound: MySQL refuses
         // string parameters there.
         let sql = format!("{} limit {} offset {}", s.rows, req.limit.min(MAX_PAGE), req.offset);
-        let rows = self.fetch_with(&sql, &s.bound()).await?;
+        let mut rows = self.fetch_with(&sql, &s.bound()).await?;
+        let ids = s.identity.then(|| rows.iter_mut().map(|r| r.pop().flatten().unwrap_or_default()).collect());
         let total = if req.count { self.count(&s).await? } else { None };
-        Ok(Page { columns: s.columns, rows, total })
+        Ok(Page { columns: s.columns, rows, total, ids })
     }
 }
 
@@ -239,6 +261,8 @@ pub(crate) struct Select {
     pub rows: String,
     pub count: String,
     pub params: Vec<String>,
+    /// `rows` selects each row's identity after the columns.
+    pub identity: bool,
 }
 
 impl Select {
@@ -275,6 +299,7 @@ mod tests {
             limit: 100,
             offset: 0,
             count: true,
+            identity: false,
         }
     }
 
@@ -357,6 +382,20 @@ mod tests {
     }
 
     #[test]
+    fn browse_should_return_row_identities_only_when_asked_and_available() {
+        tauri::async_runtime::block_on(async {
+            let mut c = people().await;
+            let page = c.browse(&Browse { identity: true, ..request(vec![]) }).await.unwrap();
+            assert_eq!(page.ids.as_deref(), Some(&["1", "2", "3", "4"].map(String::from)[..]));
+            assert_eq!(page.rows[0].len(), 4, "the identity isn't one of the columns");
+            assert!(c.browse(&request(vec![])).await.unwrap().ids.is_none());
+            c.query("create view v as select * from people").await.unwrap();
+            let view = c.browse(&Browse { table: "v".into(), identity: true, ..request(vec![]) }).await.unwrap();
+            assert!(view.ids.is_none(), "a view has no rowid");
+        });
+    }
+
+    #[test]
     fn browse_should_refuse_columns_the_table_does_not_have() {
         tauri::async_runtime::block_on(async {
             let mut c = people().await;
@@ -419,6 +458,7 @@ mod tests {
                 limit: 10,
                 offset: 0,
                 count: true,
+                identity: false,
             };
             let page = c.browse(&req).await;
             c.query(&format!("drop database {db}")).await.unwrap();
