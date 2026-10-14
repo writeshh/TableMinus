@@ -22,6 +22,7 @@ mod ssh;
 mod store;
 mod structure;
 mod tls;
+mod users;
 
 use db::Engine;
 use error::{Error, Result};
@@ -704,6 +705,7 @@ async fn item_overview(open: State<'_, Open>, name: String, table: String) -> Re
 /// # Errors
 /// When the window or webview can't be created.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[expect(clippy::too_many_lines, reason = "the command list, one line per command")]
 pub fn run() -> tauri::Result<()> {
     let (open, prefs) = (Open::default(), Prefs::default());
     open.locked.store(true, Ordering::SeqCst); // until lock_at_startup knows whether a passcode is set
@@ -798,7 +800,11 @@ pub fn run() -> tauri::Result<()> {
             launcher::set_session_password,
             launcher::export_connections,
             launcher::import_connections,
-            launcher::take_opened
+            launcher::take_opened,
+            users::users,
+            users::user_privileges,
+            users::user_sql,
+            users::apply_user_edit
         ])
         .build(tauri::generate_context!())?
         .run(launcher::on_event);

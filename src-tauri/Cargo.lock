@@ -5542,6 +5542,7 @@ dependencies = [
  "mysql_async",
  "native-tls",
  "postgres-native-tls",
+ "postgres-protocol",
  "rmcp",
  "robius-authentication",
  "rusqlite",
