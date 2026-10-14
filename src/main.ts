@@ -8,7 +8,7 @@ import { fillParams, findParams, sourceTable, type ParamFormat } from "./stateme
 import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
-import { MIN_WIDTH, layoutCss, loadLayout, saveLayout, type Layout } from "./columns";
+import { MIN_WIDTH, arrange, layoutCss, loadLayout, moveColumn, saveLayout, type Layout } from "./columns";
 import {
   dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showStructure, sidebarMenu, structurePending,
   tableMenu,
@@ -1643,6 +1643,7 @@ function renderMain() {
     render(tab.result, from, {
       sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add), table: tab.table, menu: quickFilter,
       resize: (column, width, done) => resizeColumn(tab, column, width, done), edit: tab,
+      reorder: (from, to) => reorderColumn(tab, from, to),
     });
     grid.decorate(tab);
     paintSelection();
@@ -1723,7 +1724,7 @@ async function loadTable(tab: TableTab) {
         estimate_over: settings.estimateOver || null, identity: true,
       };
       const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null; estimated: boolean; ids?: string[] }>("browse", { name, request });
-      tab.result = { columns: page.columns, rows: page.rows, affected: 0 };
+      tab.result = arrange({ columns: page.columns, rows: page.rows, affected: 0 }, tab.layout.order);
       tab.ids = page.ids;
       if (page.total !== null) (tab.total = page.total), (tab.estimated = page.estimated);
     }
@@ -2207,6 +2208,8 @@ type RenderOptions = {
   resize?: (column: string, width: number | null, done: boolean) => void;
   /** The staged edits drawn over the rows, when they can be edited. */
   edit?: grid.EditTab;
+  /** Header drag: the column at `from` moves to `to` (positions in the result). */
+  reorder?: (from: number, to: number) => void;
 };
 
 /** Shows one result grid; see [`gridTable`]. */
@@ -2235,7 +2238,7 @@ function gridTable(r: QueryResult, offset: number, sorting?: RenderOptions): HTM
   const table = el("table");
   const head = table.createTHead().insertRow();
   head.append(el("th", { className: "rownum" }));
-  for (const c of r.columns) {
+  r.columns.forEach((c, ci) => {
     const th = el("th", { textContent: c });
     if (sorting?.onSort && sorting.sort) {
       const { sort, onSort } = sorting;
@@ -2247,11 +2250,13 @@ function gridTable(r: QueryResult, offset: number, sorting?: RenderOptions): HTM
         th.append(el("span", { className: "sort", textContent: `${s.desc ? "▼" : "▲"}${sort.length > 1 ? i + 1 : ""}` }));
         th.setAttribute("aria-sort", s.desc ? "descending" : "ascending");
       }
-      th.onclick = (e) => onSort(c, e.shiftKey);
+      th.onclick = (e) => !columnDragged && onSort(c, e.shiftKey);
     }
     if (sorting?.resize) th.append(resizeGrip(th, c, sorting.resize));
+    const reorder = sorting?.reorder;
+    if (reorder) th.onpointerdown = (e) => e.button === 0 && !(e.target as HTMLElement).closest(".grip") && dragColumn(e, head, ci, reorder);
     head.append(th);
-  }
+  });
   const body = table.createTBody();
   const edit = sorting?.edit;
   const count = () => r.rows.length + (edit?.staged.added.length ?? 0);
@@ -2384,6 +2389,50 @@ function openPopover(anchor: HTMLElement, menu: HTMLElement) {
   menuClose = close;
 }
 
+let columnDragged = false; // set while a header drag ends, so its click doesn't sort
+
+/** Drags header `from` sideways; dropping it between two others moves the column there. */
+function dragColumn(start: PointerEvent, head: HTMLTableRowElement, from: number, reorder: (from: number, to: number) => void) {
+  const heads = [...head.cells].slice(1); // after the row number
+  let to = -1;
+  const mark = (at: number) => heads.forEach((h, k) => (h.classList.toggle("drop-before", k === at), h.classList.toggle("drop-after", at === heads.length && k === heads.length - 1)));
+  const move = (e: PointerEvent) => {
+    if (to < 0 && Math.abs(e.clientX - start.clientX) < 6) return;
+    heads[from].classList.add("dragging");
+    // Before the first shown header whose middle is right of the pointer; hidden ones have no width.
+    to = heads.findIndex((h) => {
+      const r = h.getBoundingClientRect();
+      return r.width > 0 && e.clientX < r.left + r.width / 2;
+    });
+    if (to < 0) to = heads.length;
+    mark(to);
+  };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    if (to < 0) return;
+    heads[from].classList.remove("dragging");
+    mark(-1);
+    columnDragged = true;
+    setTimeout(() => (columnDragged = false));
+    const dest = to > from ? to - 1 : to;
+    if (dest !== from) reorder(from, dest);
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+}
+
+/** Moves a table tab's column and remembers the order for the table. Staged edits refer to columns by position,
+ *  so the order holds still while there are some. */
+function reorderColumn(tab: TableTab, from: number, to: number) {
+  if (!tab.result) return;
+  if (tab.staged.count) return note("Save or discard the changes before moving columns", "error");
+  tab.layout.order = moveColumn(tab.result.columns, from, to);
+  saveLayout(active!.name, tab.table, tab.layout);
+  tab.result = arrange(tab.result, tab.layout.order);
+  renderMain();
+}
+
 /** The Columns button: a checklist of the table's columns. Unchecking hides a column. */
 function showColumnsMenu() {
   const tab = current();
@@ -2405,8 +2454,19 @@ function showColumnsMenu() {
   showAll.onclick = () => ((t.layout.hidden = []), boxes.forEach((b) => (b.box.checked = true)), save());
   const reset = el("button", { type: "button", textContent: "Reset widths" });
   reset.onclick = () => ((t.layout.widths = {}), save());
+  const resetOrder = el("button", { type: "button", textContent: "Reset order", disabled: !t.layout.order.length });
+  resetOrder.onclick = () => {
+    const own = columnsCache.get(t.table)?.map((c) => c.name);
+    if (!own) return;
+    if (t.staged.count) return note("Save or discard the changes before moving columns", "error");
+    t.layout.order = [];
+    save();
+    t.result = arrange(t.result!, own);
+    menuClose?.();
+    renderMain();
+  };
   const foot = el("footer");
-  foot.append(showAll, el("span", { className: "spacer" }), reset);
+  foot.append(showAll, el("span", { className: "spacer" }), resetOrder, reset);
   menu.append(...boxes.map((b) => b.row), foot);
   openPopover($("columns-button"), menu);
 }
