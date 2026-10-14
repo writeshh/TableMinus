@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { $, el } from "./dom";
+import { askPassword } from "./safety";
 
 type Token = { id: string; name: string; connections: string[] | null; read_only: boolean; created: number; bridge: boolean };
 type Status = {
@@ -13,7 +14,7 @@ type Status = {
 };
 type Activity = { at: number; token: string; tool: string; connection: string | null; sql: string | null; outcome: string };
 type McpEvent =
-  | { kind: "approval"; id: number; token: string; connection: string; sql: string }
+  | { kind: "approval"; id: number; token: string; connection: string; sql: string; unlock: boolean }
   | { kind: "approval_closed"; id: number }
   | ({ kind: "activity" } & Activity);
 
@@ -262,9 +263,27 @@ function showNext() {
   deny.focus(); // the safe choice for a stray Enter
 }
 
-function answer(ok: boolean) {
-  const current = queue.shift();
-  if (current) invoke("mcp_answer", { id: current.id, allow: ok }).catch(() => {});
+async function answer(ok: boolean) {
+  const current = queue[0];
+  if (!current) return;
+  if (ok && current.unlock) {
+    // A Safe level: allowing takes the password, asked again until right or cancelled.
+    for (let wrong = false; ; wrong = true) {
+      const unlock = await askPassword(current.connection, wrong);
+      if (!unlock) return; // back to Allow / Deny
+      if (queue[0] !== current) return; // timed out meanwhile
+      try {
+        await invoke("mcp_answer", { id: current.id, allow: true, unlock });
+        break;
+      } catch (e) {
+        if (e === "WRONG PASSWORD") continue;
+        // Allowing failed for another reason (no saved password): it can never be allowed, so deny it.
+        invoke("mcp_answer", { id: current.id, allow: false, unlock: null }).catch(() => {});
+        break;
+      }
+    }
+  } else invoke("mcp_answer", { id: current.id, allow: ok, unlock: null }).catch(() => {});
+  if (queue[0] === current) queue.shift();
   showNext();
 }
 

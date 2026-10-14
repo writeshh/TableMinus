@@ -227,6 +227,9 @@ impl ServerHandler for Tools {
     }
 }
 
+/// What [`Tools::reach`] finds out about a connection.
+type Reached = (crate::db::Engine, crate::safety::Safety, Option<secrecy::SecretString>);
+
 /// A tool's JSON reply and the outcome line for the activity log.
 type Done = std::result::Result<(String, String), Refusal>;
 
@@ -235,9 +238,9 @@ fn json(value: &impl serde::Serialize) -> std::result::Result<String, Refusal> {
 }
 
 impl Tools {
-    /// The saved connection's engine, safe mode and openness, after checking the token may reach it. Opens it when
-    /// the token names it and it isn't open yet.
-    async fn reach(&self, token: &Token, name: &str) -> std::result::Result<(crate::db::Engine, bool), Refusal> {
+    /// The saved connection's engine, safe mode level and stored password, after checking the token may reach it.
+    /// Opens it when the token names it and it isn't open yet.
+    async fn reach(&self, token: &Token, name: &str) -> std::result::Result<Reached, Refusal> {
         let mut open = self.0.open.0.lock().await;
         let is_open = open.contains_key(name);
         if !token.reaches(name, is_open) {
@@ -251,7 +254,7 @@ impl Tools {
             open.insert(name.to_string(), live);
         }
         let live = open.get(name).ok_or(Error::NotConnected)?;
-        Ok((live.saved.kind, live.saved.confirm_writes))
+        Ok((live.saved.kind, live.saved.safety, live.password.clone()))
     }
 
     async fn list_connections(&self, token: &Token) -> Done {
@@ -289,21 +292,24 @@ impl Tools {
         Ok((json(&columns)?, format!("{} columns", columns.len())))
     }
 
-    /// Read-only SQL runs straight away. Anything else is refused for read-only tokens, and otherwise waits for
-    /// the user's Allow when approval is on or the connection is in safe mode.
+    /// Read-only tokens may only run read-only SQL. A query waits for the user's Allow when approval is on and it
+    /// may write, or when the connection's safe mode level asks for it (Alert 1 and Safe 1 ask even for reads; Safe
+    /// levels want the password with the Allow).
     // ponytail: "read-only" is readonly::is_read_only's parse, so a SELECT calling a side-effect function passes;
     // run read-only tokens' queries in a read-only transaction if that matters.
     async fn run_query(&self, token: &Token, args: &Args) -> Done {
         let name = need(args.connection.as_ref(), "connection")?;
         let sql = need(args.sql.as_ref(), "sql")?.to_string();
-        let (engine, safe_mode) = self.reach(token, name).await?;
-        if !is_read_only(engine, &sql) {
-            if token.read_only {
-                return Err(Refusal("this token is read-only, and the SQL isn't provably read-only".into()));
-            }
-            let approval = super::lock(&self.0.config).approval;
+        let (engine, level, password) = self.reach(token, name).await?;
+        let read_only = is_read_only(engine, &sql);
+        if !read_only && token.read_only {
+            return Err(Refusal("this token is read-only, and the SQL isn't provably read-only".into()));
+        }
+        let approval = super::lock(&self.0.config).approval && !read_only;
+        if approval || level.asks(read_only) {
+            let safe = (level.asks(read_only) && level.wants_password()).then_some(super::SafeCheck(password));
             // The lock on open connections isn't held while waiting, so the app stays usable.
-            if (approval || safe_mode) && !self.0.approve(token, name, &sql).await {
+            if !self.0.approve(token, name, &sql, safe).await {
                 return Err(Refusal("the user denied the query in DB Manager (or didn't answer in time)".into()));
             }
         }

@@ -5,6 +5,26 @@ pub enum Error {
     /// Safe mode stopped a write. The UI matches this exact text, asks, then resends with `confirmed: true`.
     #[error("CONFIRM")]
     ConfirmRequired,
+    /// Safe 1 and 2 want the database password (or Touch ID). The UI matches this exact text, asks, then resends
+    /// with `unlock`.
+    #[error("PASSWORD")]
+    PasswordRequired,
+    /// The UI matches this exact text and asks again.
+    #[error("WRONG PASSWORD")]
+    WrongPassword,
+    #[error(
+        "this safe mode level checks the connection's saved password, and it has none; save one in the connection's \
+         settings or choose another level"
+    )]
+    SafeModeNoPassword,
+    #[error("Touch ID: {0}")]
+    TouchId(String),
+    #[error("wrong passcode")]
+    WrongPasscode,
+    #[error("passcode: {0}")]
+    Passcode(String),
+    #[error("{0}")]
+    Locations(String),
     #[error("not connected")]
     NotConnected,
     #[error("the query was stopped after the {0}-second query timeout (Settings › General)")]

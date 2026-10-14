@@ -26,21 +26,21 @@ const highlight = HighlightStyle.define([
 ]);
 
 const theme = EditorView.theme({
-  "&": { height: "100%", fontSize: "var(--editor-size, 13px)", color: "CanvasText", backgroundColor: "transparent" },
+  "&": { height: "100%", fontSize: "var(--editor-size, 13px)", color: "var(--fg)", backgroundColor: "transparent" },
   "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "var(--editor-line, 1.5)" },
-  ".cm-content": { caretColor: "var(--accent)", padding: "8px 0" },
+  ".cm-scroller": { fontFamily: "var(--editor-font)", lineHeight: "var(--editor-line, 1.5)" },
+  ".cm-content": { caretColor: "var(--accent)", padding: "var(--editor-pad) 0" },
   ".cm-cursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
   ".cm-gutters": { backgroundColor: "transparent", color: "var(--muted)", border: "none", paddingLeft: "4px" },
   ".cm-activeLine": { backgroundColor: "var(--hover)" },
-  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "CanvasText" },
+  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--fg)" },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
     { backgroundColor: "color-mix(in srgb, var(--accent) 32%, transparent)" },
   ".cm-matchingBracket": { backgroundColor: "color-mix(in srgb, var(--accent) 22%, transparent)", outline: "none" },
-  ".cm-tooltip": { backgroundColor: "Canvas", color: "CanvasText", border: "1px solid var(--line)", borderRadius: "8px", overflow: "hidden" },
+  ".cm-tooltip": { backgroundColor: "var(--bg)", color: "var(--fg)", border: "1px solid var(--line)", borderRadius: "8px", overflow: "hidden" },
   ".cm-tooltip-autocomplete > ul > li": { padding: "2px 8px" },
   ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent)", color: "white" },
-  ".cm-panels": { backgroundColor: "var(--side)", color: "CanvasText" },
+  ".cm-panels": { backgroundColor: "var(--side)", color: "var(--fg)" },
   ".cm-placeholder": { color: "var(--muted)" },
   ".cm-current-statement": { backgroundColor: "color-mix(in srgb, var(--accent) 7%, transparent)" },
 });

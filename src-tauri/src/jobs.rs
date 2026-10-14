@@ -3,6 +3,7 @@
 //! stops it at the next row or statement.
 
 use crate::error::{Error, Result};
+use crate::safety::Unlock;
 use crate::{Open, db, export, import, readonly, store};
 use secrecy::SecretString;
 use serde::Serialize;
@@ -75,14 +76,20 @@ struct Target {
 }
 
 impl Target {
-    /// Copies the live connection's settings. With `writes`, safe mode applies: [`Error::ConfirmRequired`] until
-    /// `confirmed`.
-    async fn of(open: &Open, name: &str, writes: bool, confirmed: bool) -> Result<Target> {
+    /// Copies the live connection's settings, after safe mode's check (see [`crate::guard`]) when `reads` is
+    /// `Some`: whether the job only reads.
+    async fn of(
+        open: &Open,
+        name: &str,
+        reads: Option<bool>,
+        confirmed: bool,
+        unlock: Option<Unlock>,
+    ) -> Result<Target> {
+        if let Some(reads) = reads {
+            crate::guard(open, name, |_| reads, confirmed, unlock.as_ref()).await?;
+        }
         let mut open = open.0.lock().await;
         let live = open.get_mut(name).ok_or(Error::NotConnected)?;
-        if writes && live.saved.confirm_writes && !confirmed {
-            return Err(Error::ConfirmRequired);
-        }
         // MySQL switches database in place (Postgres's URL already names it), so the job's connection follows.
         let database = if matches!(live.conn, db::Conn::My(_)) {
             let r = live.conn.current_database().await;
@@ -140,7 +147,7 @@ where
     id
 }
 
-/// Starts an export; see [`export::Export`]. An editor query that may write goes through safe mode.
+/// Starts an export; see [`export::Export`]. Exporting editor queries goes through safe mode like running them.
 #[tauri::command]
 pub async fn start_export(
     app: AppHandle,
@@ -149,13 +156,19 @@ pub async fn start_export(
     name: String,
     export: export::Export,
     confirmed: bool,
+    unlock: Option<Unlock>,
 ) -> Result<u64> {
     let kind = open.0.lock().await.get(&name).ok_or(Error::NotConnected)?.saved.kind;
-    let writes = export
+    let queries: Vec<&str> = export
         .items
         .iter()
-        .any(|i| matches!(&i.source, export::Source::Query { sql, .. } if !readonly::is_read_only(kind, sql)));
-    let target = Target::of(&open, &name, writes, confirmed).await?;
+        .filter_map(|i| match &i.source {
+            export::Source::Query { sql, .. } => Some(sql.as_str()),
+            export::Source::Table(_) | export::Source::Rows { .. } => None,
+        })
+        .collect();
+    let reads = (!queries.is_empty()).then(|| queries.iter().all(|sql| readonly::is_read_only(kind, sql)));
+    let target = Target::of(&open, &name, reads, confirmed, unlock).await?;
     Ok(spawn(app, &jobs, move |job| async move {
         let mut conn = target.open().await?;
         export::run(&mut conn, &export, &job).await
@@ -171,8 +184,9 @@ pub async fn start_import(
     name: String,
     import: import::Import,
     confirmed: bool,
+    unlock: Option<Unlock>,
 ) -> Result<u64> {
-    let target = Target::of(&open, &name, true, confirmed).await?;
+    let target = Target::of(&open, &name, Some(false), confirmed, unlock).await?;
     Ok(spawn(app, &jobs, move |job| async move {
         let mut conn = target.open().await?;
         import::run(&mut conn, &import, &job).await
@@ -188,8 +202,9 @@ pub async fn start_sql_import(
     name: String,
     path: PathBuf,
     confirmed: bool,
+    unlock: Option<Unlock>,
 ) -> Result<u64> {
-    let target = Target::of(&open, &name, true, confirmed).await?;
+    let target = Target::of(&open, &name, Some(false), confirmed, unlock).await?;
     Ok(spawn(app, &jobs, move |job| async move {
         let mut conn = target.open().await?;
         import::run_sql(&mut conn, target.saved.kind, &path, &job).await

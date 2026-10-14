@@ -9,10 +9,13 @@ mod error;
 mod export;
 mod import;
 mod jobs;
+mod locations;
 mod mcp;
+mod passcode;
 mod processes;
 mod readonly;
 mod rows;
+mod safety;
 mod ssh;
 mod store;
 mod structure;
@@ -246,6 +249,24 @@ async fn reconnect(app: AppHandle, open: State<'_, Open>, name: String) -> Resul
     info(open.entry(name).or_insert(live)).await
 }
 
+/// Safe mode's check for a request on an open connection; see [`safety::check`]. `reads` says whether the request
+/// is read-only for the connection's engine. The connection lock is let go before checking, since Touch ID waits for
+/// the user.
+async fn guard(
+    open: &Open,
+    name: &str,
+    reads: impl FnOnce(Engine) -> bool,
+    confirmed: bool,
+    unlock: Option<&safety::Unlock>,
+) -> Result<()> {
+    let (level, kind, password) = {
+        let open = open.0.lock().await;
+        let live = open.get(name).ok_or(Error::NotConnected)?;
+        (live.saved.safety, live.saved.kind, live.password.clone())
+    };
+    safety::check(level, reads(kind), confirmed, unlock, password.as_ref()).await
+}
+
 /// Drops the live connection; the next connect opens a fresh one.
 #[tauri::command]
 async fn disconnect(open: State<'_, Open>, name: String) -> Result<()> {
@@ -390,8 +411,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
     live.check(r)
 }
 
-/// Safe mode: with `confirm_writes` on, anything not provably read-only fails with
-/// [`Error::ConfirmRequired`] until it is resent with `confirmed: true`.
+/// Runs editor SQL. Safe mode applies; see [`guard`].
 #[tauri::command]
 async fn run_query(
     open: State<'_, Open>,
@@ -399,13 +419,12 @@ async fn run_query(
     name: String,
     sql: String,
     confirmed: bool,
+    unlock: Option<safety::Unlock>,
     max_rows: Option<u32>,
 ) -> Result<db::QueryResult> {
+    guard(&open, &name, |kind| readonly::is_read_only(kind, &sql), confirmed, unlock.as_ref()).await?;
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    if live.saved.confirm_writes && !confirmed && !readonly::is_read_only(live.saved.kind, &sql) {
-        return Err(Error::ConfirmRequired);
-    }
     let max = max_rows.map(|n| n as usize);
     let r =
         with_limit(live, query_limit(&prefs), move |c| Box::pin(async move { c.query_limited(&sql, max).await })).await;
@@ -493,17 +512,46 @@ async fn table_op_sql(open: State<'_, Open>, name: String, op: ddl::TableOp) -> 
     live.check(r)
 }
 
-/// Runs the statements the user saw in a preview. Safe mode applies: [`Error::ConfirmRequired`] until resent
-/// with `confirmed: true`, which applying from the preview does.
+/// Runs the statements the user saw in a preview. Safe mode applies (see [`guard`]); applying from the preview
+/// counts as confirmed, but the Safe levels still want the password.
 #[tauri::command]
-async fn run_ddl(open: State<'_, Open>, name: String, statements: Vec<String>, confirmed: bool) -> Result<()> {
+async fn run_ddl(
+    open: State<'_, Open>,
+    name: String,
+    statements: Vec<String>,
+    confirmed: bool,
+    unlock: Option<safety::Unlock>,
+) -> Result<()> {
+    guard(&open, &name, |_| false, confirmed, unlock.as_ref()).await?;
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    if live.saved.confirm_writes && !confirmed {
-        return Err(Error::ConfirmRequired);
-    }
     let r = live.conn.run_ddl(&statements).await;
     live.check(r)
+}
+
+/// Changes a connection's safe mode level (the toolbar lock). Leaving a Safe level wants the password, or the lock
+/// would be a way around it.
+#[tauri::command]
+async fn set_safety(
+    app: AppHandle,
+    open: State<'_, Open>,
+    name: String,
+    safety: safety::Safety,
+    unlock: Option<safety::Unlock>,
+) -> Result<()> {
+    let dir = dir(&app)?;
+    let mut saved =
+        store::load(&dir)?.into_iter().find(|c| c.name == name).ok_or_else(|| Error::NoSuchConnection(name.clone()))?;
+    if saved.safety.wants_password() && safety != saved.safety {
+        let stored = store::stored(store::Secret::Database, &name)?;
+        safety::verify(&unlock.ok_or(Error::PasswordRequired)?, stored.as_ref()).await?;
+    }
+    saved.safety = safety;
+    store::save(&dir, saved, None, None, None)?;
+    if let Some(live) = open.0.lock().await.get_mut(&name) {
+        live.saved.safety = safety;
+    }
+    Ok(())
 }
 
 /// The CREATE statement of a table or view.
@@ -604,6 +652,18 @@ pub fn run() -> tauri::Result<()> {
             items,
             search_table,
             item_overview,
+            set_safety,
+            safety::touch_id_available,
+            passcode::passcode_set,
+            passcode::set_passcode,
+            passcode::remove_passcode,
+            passcode::unlock,
+            passcode::unlock_with_touch_id,
+            passcode::forgot_passcode,
+            locations::locations,
+            locations::set_location,
+            locations::read_doc,
+            locations::write_doc,
             backup::backup_setup,
             backup::start_backup,
             backup::start_restore,
@@ -651,13 +711,40 @@ mod tests {
             kind: engine,
             url: url.into(),
             tag: String::new(),
-            confirm_writes: false,
+            safety: crate::safety::Safety::Silent,
             ssh: None,
             tls: Tls::default(),
             options: Options::default(),
         };
         let conn = Conn::open(engine, url, None, &saved.tls, &saved.options, None).await.unwrap();
         Live { url: url.into(), saved, password: None, conn, tunnel: None }
+    }
+
+    #[test]
+    fn guard_should_apply_the_open_connections_level() {
+        use crate::safety::{Safety, Unlock};
+        tauri::async_runtime::block_on(async {
+            let mut l = live(Engine::Sqlite, ":memory:").await;
+            l.saved.safety = Safety::Safe2;
+            l.password = Some("pw".into());
+            let open = super::Open::default();
+            open.0.lock().await.insert("t".into(), l);
+            let reads = |sql: &'static str| move |kind| crate::readonly::is_read_only(kind, sql);
+            assert!(super::guard(&open, "t", reads("select 1"), false, None).await.is_ok());
+            let write = super::guard(&open, "t", reads("delete from x"), true, None).await;
+            assert!(matches!(write, Err(Error::PasswordRequired)), "confirming isn't enough at Safe 2");
+            let wrong = Unlock::Password("nope".into());
+            assert!(matches!(
+                super::guard(&open, "t", reads("delete from x"), true, Some(&wrong)).await,
+                Err(Error::WrongPassword)
+            ));
+            let right = Unlock::Password("pw".into());
+            assert!(super::guard(&open, "t", reads("delete from x"), true, Some(&right)).await.is_ok());
+            assert!(matches!(
+                super::guard(&open, "gone", reads("select 1"), true, None).await,
+                Err(Error::NotConnected)
+            ));
+        });
     }
 
     #[test]

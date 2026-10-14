@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { el } from "./dom";
+import { guarded } from "./safety";
 import { fileName, matchColumns } from "./transfer";
 
 /** A browse request, as the table tab sends it. */
@@ -95,13 +96,8 @@ async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<strin
   const show: Shown = { bar, text, button, after };
   bar.removeAttribute("value"); // indeterminate until a total arrives
   try {
-    let id: number;
-    try {
-      id = await invoke<number>(cmd, { ...args, name: ctx.conn, confirmed: false });
-    } catch (e) {
-      if (e !== "CONFIRM" || !(await ctx.confirm(`${label} may change data on "${ctx.conn}". Go ahead?`, "Go ahead"))) throw e === "CONFIRM" ? "Cancelled" : e;
-      id = await invoke<number>(cmd, { ...args, name: ctx.conn, confirmed: true });
-    }
+    const id = await guarded(ctx.conn, (a) => invoke<number>(cmd, { ...args, name: ctx.conn, ...a }),
+      () => ctx.confirm(`${label} on "${ctx.conn}"? It may change data.`, "Go ahead"));
     button.onclick = () => ((button.disabled = true), invoke("cancel_job", { id }));
     shown.set(id, show);
     const done = early.get(id);

@@ -1,6 +1,7 @@
 // Editing a table's rows in the grid: staged cell edits with type-aware editors, added, duplicated and deleted
 // rows, paste, undo and redo, and saving (or previewing) everything as one transaction through save_rows.
 
+import { CANCELLED, guarded, type Approval } from "./safety";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { el } from "./dom";
 import {
@@ -353,15 +354,18 @@ export async function save(tab: EditTab, confirmed = false, byIdentity = false):
   const n = tab.staged.count;
   if (!conn || !n || !tab.result) return;
   try {
-    const rows = await host.call<number>("save_rows", { name: conn.name, table: tab.table, changes: changes(tab, byIdentity), confirmed });
+    // Safe mode's question, password or Touch ID, as the connection's level asks; `confirmed` skips the question
+    // when the statements were just shown in the preview.
+    const send = (a: Approval) =>
+      host.call<number>("save_rows", {
+        name: conn.name, table: tab.table, changes: changes(tab, byIdentity), confirmed: confirmed || a.confirmed, unlock: a.unlock,
+      });
+    const rows = await guarded(conn.name, send, () => host.confirm(`Save ${plural(n, "change")} to ${tab.table} on "${conn.name}"?`, "Save"));
     tab.staged.clear();
     tab.message = [`Saved ${plural(n, "change")} (${plural(rows, "row")})`, "done"];
     await host.reload(tab);
   } catch (e) {
-    if (e === "CONFIRM") {
-      if (await host.confirm(`Save ${plural(n, "change")} to ${tab.table} on "${conn.name}"?`, "Save")) return save(tab, true, byIdentity);
-      return;
-    }
+    if (e === CANCELLED) return;
     if (e === SEVERAL_ROWS && tab.ids && !byIdentity) {
       const id = conn.kind === "postgres" ? "ctid" : "rowid";
       const again = await host.confirm(

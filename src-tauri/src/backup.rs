@@ -791,13 +791,18 @@ pub async fn start_backup(app: AppHandle, name: String, request: BackupRequest) 
     }))
 }
 
-/// Starts a restore. Safe mode applies: [`Error::ConfirmRequired`] until resent with `confirmed: true`.
+/// Starts a restore. Safe mode applies; see [`crate::safety::check`].
 #[tauri::command]
-pub async fn start_restore(app: AppHandle, name: String, request: RestoreRequest, confirmed: bool) -> Result<u64> {
+pub async fn start_restore(
+    app: AppHandle,
+    name: String,
+    request: RestoreRequest,
+    confirmed: bool,
+    unlock: Option<crate::safety::Unlock>,
+) -> Result<u64> {
     let mut live = crate::open_saved(&crate::dir(&app)?, &name).await?;
-    if live.saved.confirm_writes && !confirmed {
-        return Err(Error::ConfirmRequired);
-    }
+    let (level, password) = (live.saved.safety, live.password.as_ref());
+    crate::safety::check(level, false, confirmed, unlock.as_ref(), password).await?;
     if live.saved.kind == Engine::Sqlite {
         let crate::Live { conn: Conn::Lite(mut to), password, .. } = live else {
             return Err(Error::Invalid("not a SQLite connection"));
@@ -853,7 +858,7 @@ mod tests {
             kind,
             url: url.into(),
             tag: String::new(),
-            confirm_writes: false,
+            safety: crate::safety::Safety::Silent,
             ssh: None,
             tls: Tls::default(),
             options: Options::default(),

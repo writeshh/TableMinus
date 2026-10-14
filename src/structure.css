@@ -7,7 +7,7 @@
 .structure td:has(input:not([type="checkbox"]), select) { padding: 2px 4px; }
 .structure td input:not([type="checkbox"]), .structure td select { width: 100%; min-width: 90px; padding: 3px 6px; font: inherit; border-color: transparent; background: none; }
 .structure td input:not([type="checkbox"]):hover, .structure td select:hover { border-color: var(--line); }
-.structure td input:focus { border-color: var(--accent); background: Canvas; }
+.structure td input:focus { border-color: var(--accent); background: var(--bg); }
 .structure tr.changed td, .structure input.changed { background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .structure tr.added td { background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .structure tr.dropped td { text-decoration: line-through; color: var(--muted); background: color-mix(in srgb, var(--danger) 10%, transparent); }
@@ -17,11 +17,11 @@
 .structure-error { margin: 0; padding: 8px 10px; border-radius: 7px; background: color-mix(in srgb, var(--danger) 12%, transparent); white-space: pre-wrap; font: 12px var(--mono); }
 .table-options { display: flex; gap: 16px; flex-wrap: wrap; }
 .table-options label { display: flex; gap: 8px; align-items: center; color: var(--muted); }
-.table-options input { width: 260px; color: CanvasText; }
+.table-options input { width: 260px; color: var(--fg); }
 .structure-dialog.wide { width: min(760px, calc(100vw - 32px)); }
 .structure-dialog h3 { margin: 0 0 12px; }
 .structure-dialog form { display: grid; gap: 10px; }
 .structure-dialog label.field { display: grid; gap: 4px; color: var(--muted); }
-.structure-dialog label.field input { color: CanvasText; }
+.structure-dialog label.field input { color: var(--fg); }
 .structure-dialog label.check { display: flex; gap: 6px; align-items: center; }
 .sql-preview { margin: 0; max-height: 50vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); font: 12px/1.5 var(--mono); white-space: pre-wrap; user-select: text; }

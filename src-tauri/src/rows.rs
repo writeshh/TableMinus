@@ -390,12 +390,11 @@ pub async fn save_rows(
     table: String,
     changes: Changes,
     confirmed: bool,
+    unlock: Option<crate::safety::Unlock>,
 ) -> Result<u64> {
+    crate::guard(&open, &name, |_| false, confirmed, unlock.as_ref()).await?;
     let mut open = open.0.lock().await;
     let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    if live.saved.confirm_writes && !confirmed {
-        return Err(Error::ConfirmRequired);
-    }
     let r = live.conn.save_rows(&table, &changes).await;
     live.check(r)
 }
