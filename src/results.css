@@ -1,4 +1,4 @@
-/* A SQL tab's result strip, appended results, Messages, and the console panel */
+/* A SQL tab's result strip, appended results, Messages, the console panel, history and saved queries in the sidebar */
 .result-strip { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--tabs-bg); flex: none; }
 .result-strip[hidden] { display: none; }
 .result-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; flex: 1; }
@@ -25,3 +25,14 @@
 .console-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 3px 12px; border-bottom: 1px solid var(--grid-line); }
 .console-when { color: var(--muted); font-family: -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
 .console-sql { white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-head, .favorites-head { display: flex; gap: 4px; align-items: center; margin: 0 8px 6px; }
+.history-head #history-search, .favorites-head input { flex: 1; min-width: 0; width: auto; margin: 0; }
+.favorites { overflow: auto; flex: 1; padding: 0 4px; }
+.favorites summary { font-weight: 600; padding: 6px 4px; }
+.favorites details .history-item { padding-left: 16px; }
+.favorite-form { display: grid; gap: 10px; }
+.favorite-form .indent { margin: -4px 0 0 106px; }
+.favorite-form label { align-items: start; }
+.favorite-form label > span { padding-top: 6px; }
+.favorite-form footer { margin-top: 6px; }
+.side-tabs button { min-width: 0; padding-inline: 2px; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }

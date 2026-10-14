@@ -5,9 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { $, el } from "./dom";
 
-type Doc = "sql_tabs" | "history";
+type Doc = "sql_tabs" | "history" | "favorites";
 /** Where each doc lived before it had a file: localStorage keys `<prefix><connection>`. */
-const LEGACY: Record<Doc, string> = { sql_tabs: "sql-tabs:", history: "history:" };
+const LEGACY: Partial<Record<Doc, string>> = { sql_tabs: "sql-tabs:", history: "history:" };
 
 type Held = { data: Record<string, unknown>; writable: boolean; timer: number; problem: string };
 const held = new Map<Doc, Held>();
@@ -26,11 +26,13 @@ async function load(doc: Doc) {
     return;
   }
   // Move entries from localStorage in once, then forget them there when the file has them.
+  const prefix = LEGACY[doc];
+  if (!prefix) return;
   const moved: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)!;
-    if (!key.startsWith(LEGACY[doc])) continue;
-    const name = key.slice(LEGACY[doc].length);
+    if (!key.startsWith(prefix)) continue;
+    const name = key.slice(prefix.length);
     try {
       if (!(name in h.data)) h.data[name] = JSON.parse(localStorage.getItem(key) ?? "null");
       moved.push(key);
@@ -53,8 +55,8 @@ async function write(doc: Doc) {
   }
 }
 
-/** Both docs read; connect waits for this before reading tabs and history. */
-export const docsReady = Promise.all([load("sql_tabs"), load("history")]);
+/** Every doc read; connect waits for this before reading tabs, history and saved queries. */
+export const docsReady = Promise.all([load("sql_tabs"), load("history"), load("favorites")]);
 
 export function docEntry<T>(doc: Doc, conn: string): T | undefined {
   return held.get(doc)?.data[conn] as T | undefined;
@@ -74,7 +76,9 @@ export function setDocEntry(doc: Doc, conn: string, value: unknown) {
 
 type Location = "connections" | "queries" | "history";
 type Folders = Record<Location, string> & { default: string };
-const ROWS: [Location, string, Doc | null][] = [["connections", "Connections", null], ["queries", "SQL tabs", "sql_tabs"], ["history", "History", "history"]];
+const ROWS: [Location, string, Doc[]][] = [
+  ["connections", "Connections", []], ["queries", "SQL tabs and saved queries", ["sql_tabs", "favorites"]], ["history", "History", ["history"]],
+];
 
 const settings = $("settings");
 const tab = el("button");
@@ -104,15 +108,15 @@ async function render() {
     return pane.replaceChildren(el("p", { className: "status error", textContent: String(e) }));
   }
   pane.replaceChildren(
-    ...ROWS.map(([which, label, doc]) => {
+    ...ROWS.map(([which, label, docs]) => {
       const choose = el("button", { type: "button", textContent: "Choose…" });
       const reset = el("button", { type: "button", className: "ghost", textContent: "Default", hidden: folders[which] === folders.default });
       choose.onclick = async () => {
         const picked = await openDialog({ directory: true, defaultPath: folders[which] });
-        if (typeof picked === "string") move(which, doc, picked);
+        if (typeof picked === "string") move(which, docs, picked);
       };
-      reset.onclick = () => move(which, doc, null);
-      const problem = doc ? held.get(doc)?.problem : "";
+      reset.onclick = () => move(which, docs, null);
+      const problem = docs.map((d) => held.get(d)?.problem).filter(Boolean).join("; ");
       return el("div", { className: "row" },
         el("span", { className: "k", textContent: label }),
         el("span", { className: "loc" },
@@ -125,14 +129,14 @@ async function render() {
   );
 }
 
-async function move(which: Location, doc: Doc | null, folder: string | null) {
+async function move(which: Location, docs: Doc[], folder: string | null) {
   note.className = "status";
   note.textContent = "";
   try {
-    if (doc && held.get(doc)?.timer) await write(doc); // nothing pending is left behind in the old folder
+    for (const doc of docs) if (held.get(doc)?.timer) await write(doc); // nothing pending is left behind in the old folder
     await invoke("set_location", { which, folder });
-    if (doc) await load(doc);
-    else dispatchEvent(new Event("connections-moved")); // main.ts reloads the launcher's list
+    for (const doc of docs) await load(doc);
+    if (!docs.length) dispatchEvent(new Event("connections-moved")); // main.ts reloads the launcher's list
     note.textContent = "Moved.";
     note.className = "status done";
   } catch (e) {

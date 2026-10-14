@@ -60,6 +60,18 @@ export function highlightSql(text: string, kind: string): HTMLElement {
   return code;
 }
 
+/** A saved query offered as a completion when its keyword is typed. */
+export type Snippet = { keyword: string; name: string; sql: string };
+let snippets: Snippet[] = [];
+
+/** Completes saved-query keywords. Typed loosely: @codemirror/autocomplete isn't a direct dependency. */
+function snippetSource(cx: { matchBefore(re: RegExp): { from: number; to: number } | null; explicit: boolean }) {
+  const word = cx.matchBefore(/\w+/);
+  if (!snippets.length || !word || (word.from === word.to && !cx.explicit)) return null;
+  const options = snippets.map((s) => ({ label: s.keyword, detail: s.name, info: s.sql, apply: s.sql, type: "text", boost: 50 }));
+  return { from: word.from, options, validFor: /^\w*$/ };
+}
+
 /** Table name → column names, as the backend's `schema` command lists them (Postgres tables are schema.table). */
 export type Schema = Map<string, string[]>;
 
@@ -117,6 +129,7 @@ export function createEditor(
     syntaxHighlighting(highlight),
     placeholder("Write SQL here. Run runs the statement under the cursor (or the selection); Run all runs every statement."),
     theme,
+    EditorState.languageData.of(() => [{ autocomplete: snippetSource }]),
     EditorView.updateListener.of((u) => {
       if (u.docChanged) on.change(u.state.doc.toString());
       if (u.docChanged || u.selectionSet) on.cursor();
@@ -178,6 +191,10 @@ export function createEditor(
     all(): Statement[] {
       const { from, to } = view.state.selection.main;
       return splitStatements(from === to ? view.state.doc.toString() : view.state.sliceDoc(from, to), dialect);
+    },
+    /** Saved queries whose keyword completes to their SQL. */
+    setSnippets(list: Snippet[]) {
+      snippets = list;
     },
     /** Soft-wraps long lines; shows spaces and tabs. */
     setDisplay(wrap: boolean, invisibles: boolean) {

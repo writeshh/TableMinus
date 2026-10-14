@@ -1,4 +1,5 @@
-//! Where the app keeps its files (Settings › Locations): saved connections, kept SQL tabs and query history.
+//! Where the app keeps its files (Settings › Locations): saved connections, kept SQL tabs, saved queries and query
+//! history.
 //! `locations.json` in the app config folder names custom folders, e.g. in iCloud Drive or Dropbox; anything it
 //! doesn't name stays in the config folder.
 
@@ -20,7 +21,7 @@ impl Location {
     fn files(self) -> &'static [&'static str] {
         match self {
             Location::Connections => &["connections.json"],
-            Location::Queries => &["sql-tabs.json"],
+            Location::Queries => &["sql-tabs.json", "favorites.json"],
             Location::History => &["history.json"],
         }
     }
@@ -143,6 +144,8 @@ pub fn set_location(app: AppHandle, which: Location, folder: Option<PathBuf>) ->
 pub enum Doc {
     SqlTabs,
     History,
+    /// Saved queries, which live with the SQL tabs.
+    Favorites,
 }
 
 impl Doc {
@@ -150,6 +153,7 @@ impl Doc {
         let (which, name) = match self {
             Doc::SqlTabs => (Location::Queries, "sql-tabs.json"),
             Doc::History => (Location::History, "history.json"),
+            Doc::Favorites => (Location::Queries, "favorites.json"),
         };
         Ok(folder(config, which)?.join(name))
     }
@@ -233,6 +237,15 @@ mod tests {
         assert_eq!(folder(&config, Location::Queries).unwrap(), config, "others stay");
         relocate(&config, Location::History, None).unwrap();
         assert_eq!(folder(&config, Location::History).unwrap(), config);
+    }
+
+    #[test]
+    fn relocate_moves_saved_queries_with_the_sql_tabs() {
+        let config = temp_dir("favorites");
+        let elsewhere = temp_dir("favorites-dest");
+        std::fs::write(config.join("favorites.json"), r#"{"a":{}}"#).unwrap();
+        relocate(&config, Location::Queries, Some(elsewhere.clone())).unwrap();
+        assert_eq!(std::fs::read_to_string(elsewhere.join("favorites.json")).unwrap(), r#"{"a":{}}"#);
     }
 
     #[test]

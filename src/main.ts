@@ -28,6 +28,7 @@ import { initMenu } from "./menu";
 import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, treeMenu } from "./sidebar";
 import { label } from "./keys";
 import "./console"; // the console log panel and its command
+import { addFavorite, initFavorites, render as renderFavorites } from "./favorites"; // also adds the sidebar's Queries tab
 import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, type QueryResult, type ResultTab, type Results } from "./results";
 import "./workspace.css";
 
@@ -520,6 +521,7 @@ async function connect(c: Saved) {
     applyInfo(i);
     showSide("items");
     renderHistory();
+    renderFavorites();
     showSafety(c);
     status(`Connected · ${i.server}`, "done");
     // Connected without a database: go straight to choosing one.
@@ -609,6 +611,7 @@ function showWorkspace(w: Workspace) {
   layoutPanes();
   renderTables();
   renderHistory();
+  renderFavorites();
   renderMain();
 }
 
@@ -958,27 +961,36 @@ function tableRow(t: string, label: string, extra: MenuItem[]) {
   return li;
 }
 
-type Side = "items" | "history" | "search";
+type Side = "items" | "history" | "queries" | "search";
 function showSide(which: Side) {
   for (const b of document.querySelectorAll<HTMLElement>(".side-tabs button")) b.setAttribute("aria-pressed", String(b.dataset.side === which));
-  $("side-items").hidden = which !== "items";
-  $("side-history").hidden = which !== "history";
-  $("side-search").hidden = which !== "search";
+  for (const p of document.querySelectorAll<HTMLElement>("aside > .side-pane")) p.hidden = p.id !== `side-${which}`;
   if (which === "search") $("db-search-text").focus();
 }
 
-// History lives per connection in history.json (Settings › Locations), newest first, 500 per connection.
+// History lives per connection in history.json (Settings › Locations), newest first, for as long as Settings ›
+// General keeps it, and at most 5,000 per connection.
 type HistoryEntry = { sql: string; at: number; db: string | null };
+const HISTORY_CAP = 5000;
 
 function loadHistory(): HistoryEntry[] {
   const list = active && docEntry<HistoryEntry[]>("history", active.name);
-  return Array.isArray(list) ? list : [];
+  const years = settings.historyYears;
+  const since = years ? Date.now() - years * 365.25 * 864e5 : 0;
+  return Array.isArray(list) ? list.filter((h) => h.at >= since) : [];
 }
 
 function addHistory(sql: string) {
   if (!active) return;
-  const list = [{ sql: sql.trim(), at: Date.now(), db: info?.database ?? null }, ...loadHistory()].slice(0, 500);
+  const list = [{ sql: sql.trim(), at: Date.now(), db: info?.database ?? null }, ...loadHistory()].slice(0, HISTORY_CAP);
   setDocEntry("history", active.name, list);
+  renderHistory();
+}
+
+async function clearHistory() {
+  if (!active || !loadHistory().length) return;
+  if (!(await confirmDialog(`Clear the query history of "${active.name}"?`, "Clear"))) return;
+  setDocEntry("history", active.name, undefined);
   renderHistory();
 }
 
@@ -1009,6 +1021,11 @@ function renderHistory() {
           renderMain();
           editor.focus();
         };
+        item.oncontextmenu = (e) => contextMenu(e, [
+          ["Open in a new tab", () => openSqlIn(null, h.sql)],
+          ["Save as favorite…", () => addFavorite(h.sql)],
+          ["Copy SQL", () => copyText(h.sql, "SQL")],
+        ]);
         d.append(item);
       }
       return d;
@@ -1071,6 +1088,17 @@ function openSqlTab(): SqlTab {
   tabs.push(tab);
   select(tab.id);
   return tab;
+}
+
+/** A new SQL tab holding `sql`, named `title` (or the next free "SQL Query n"). */
+function openSqlIn(title: string | null, sql: string) {
+  const tab = openSqlTab();
+  if (title) tab.title = title;
+  tab.sql = sql;
+  tab.state = editor.newState(sql);
+  shownId = 0; // force renderMain to load the new state
+  renderMain();
+  editor.focus();
 }
 
 function openTable(table: string, view: TableTab["view"] = "data", create = false) {
@@ -2206,13 +2234,15 @@ type Settings = {
   resultsMode: "tabs" | "append";
   /** Running several statements stops at the first that fails. */
   stopOnError: boolean;
+  /** How many years of query history to keep; 0 = forever. */
+  historyYears: number;
   /** Rebound shortcuts, command id → keys (see commands.ts); a missing id keeps its defaults. */
   shortcuts: Record<string, string[]>;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
-  resultsMode: "tabs", stopOnError: true, shortcuts: {},
+  resultsMode: "tabs", stopOnError: true, historyYears: 0, shortcuts: {},
 };
 let settings: Settings = loadSettings();
 
@@ -2260,6 +2290,7 @@ function applySettings() {
   $<HTMLInputElement>("keep-tabs").checked = settings.keepTabs;
   $<HTMLSelectElement>("results-mode").value = settings.resultsMode;
   $<HTMLInputElement>("stop-on-error").checked = settings.stopOnError;
+  $<HTMLSelectElement>("history-years").value = String(settings.historyYears);
   const tab = current();
   if (tab?.kind === "sql" && !$("workspace").hidden) showResults(tab);
   editor.setDisplay(settings.wrapLines, settings.showInvisibles);
@@ -2335,6 +2366,15 @@ $<HTMLInputElement>("show-invisibles").onchange = (e) => setSetting("showInvisib
 $<HTMLInputElement>("keep-tabs").onchange = (e) => setSetting("keepTabs", (e.target as HTMLInputElement).checked);
 $<HTMLSelectElement>("results-mode").onchange = (e) => setSetting("resultsMode", (e.target as HTMLSelectElement).value as Settings["resultsMode"]);
 $<HTMLInputElement>("stop-on-error").onchange = (e) => setSetting("stopOnError", (e.target as HTMLInputElement).checked);
+$<HTMLSelectElement>("history-years").onchange = (e) => (setSetting("historyYears", Number((e.target as HTMLSelectElement).value)), renderHistory());
+$("clear-history").onclick = clearHistory;
+initFavorites({
+  conn: () => active && { name: active.name, kind: active.kind },
+  open: openSqlIn,
+  menu: contextMenu,
+  confirm: confirmDialog,
+  snippets: (list) => editor.setSnippets(list),
+});
 $<HTMLSelectElement>("param-format").onchange = (e) => setSetting("paramFormat", (e.target as HTMLSelectElement).value as Settings["paramFormat"]);
 $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));
@@ -2364,6 +2404,9 @@ addCommands([
   { id: "run-current", label: "Run Current Query", menu: "Edit", keys: ["Mod+Enter"], when: onSqlTab, sep: true, run: runCurrent },
   { id: "run-all", label: "Run All Queries", menu: "Edit", keys: ["Mod+Shift+Enter"], when: onSqlTab, run: runAll },
   { id: "format", label: "Format SQL", menu: "Edit", keys: ["Mod+KeyI"], when: onSqlTab, run: formatSql },
+  { id: "save-favorite", label: "Save Query as Favorite…", menu: "Edit", when: onSqlTab,
+    run: () => addFavorite(editor.current().trim() || (current() as SqlTab).sql) },
+  { id: "saved-queries", label: "Saved Queries", menu: "Navigate", when: inWorkspace, run: () => showSide("queries") },
   { id: "filter", label: "Filter Rows", menu: "Edit", keys: ["Mod+KeyF"], when: () => inWorkspace() && current()?.kind === "table",
     run: () => toggleFilters(true) },
   { id: "font-bigger", label: "Increase Font Size", menu: "View", keys: ["Mod+Equal", "Mod+Shift+Equal"], when: inWorkspace,

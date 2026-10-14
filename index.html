@@ -185,6 +185,10 @@
           <span class="k">Connections</span>
           <label class="check"><input type="checkbox" id="keep-alive" /> Keep connections alive</label>
         </div>
+        <div class="row">
+          <span class="k">Query history</span>
+          <select id="history-years"><option value="1">Keep 1 year</option><option value="2">Keep 2 years</option><option value="3">Keep 3 years</option><option value="0">Keep forever</option></select>
+        </div>
         <p class="hint note">A query that runs past the timeout is stopped on the server. Keep-alive pings every open connection every 30 seconds, so idle ones aren't closed and a lost one shows up straight away.</p>
       </section>
       <section data-pane="appearance" hidden>
@@ -299,7 +303,10 @@
           <div id="db-search-results"></div>
         </div>
         <div id="side-history" class="side-pane" hidden>
-          <input id="history-search" type="search" placeholder="Search history" />
+          <div class="history-head">
+            <input id="history-search" type="search" placeholder="Search history" />
+            <button id="clear-history" class="ghost" title="Clear this connection's history">Clear</button>
+          </div>
           <div id="history"></div>
           <p id="no-history" class="hint">Queries you run appear here.</p>
         </div>
