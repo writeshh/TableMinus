@@ -35,6 +35,9 @@ fn saved(name: &str, url: &str) -> store::Saved {
         ssh: None,
         tls: Tls::default(),
         options: Options::default(),
+        password_mode: crate::store::PasswordMode::Keychain,
+        color: None,
+        group: String::new(),
     }
 }
 

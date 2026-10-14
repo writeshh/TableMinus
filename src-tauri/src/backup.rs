@@ -862,6 +862,9 @@ mod tests {
             ssh: None,
             tls: Tls::default(),
             options: Options::default(),
+            password_mode: crate::store::PasswordMode::Keychain,
+            color: None,
+            group: String::new(),
         }
     }
 
