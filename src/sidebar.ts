@@ -61,6 +61,8 @@ function store(key: string, value: unknown) {
 const prefsKey = () => `sidebar:${connName(ctx.conn()?.name ?? "")}`; // per connection, not per tab
 const prefs = (): Prefs => load<Prefs>(prefsKey(), { pins: [], groups: [] });
 const savePrefs = (p: Prefs) => (store(prefsKey(), p), ctx.redraw());
+/** The Postgres schema the sidebar shows, or null for all schemas (or none chosen yet). */
+export const shownSchema = () => prefs().schema ?? null;
 /** Hidden sections and collapsed headings, the same for every connection. */
 const looks = () => load<{ off: string[]; collapsed: string[] }>("sidebar-looks", { off: [], collapsed: [] });
 

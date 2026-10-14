@@ -28,7 +28,8 @@ import { addCommands, bindings, commands, isMac, onBindingsChanged, setOverrides
 import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
 import { initMenu, setRecent } from "./menu";
-import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, treeMenu } from "./sidebar";
+import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, shownSchema, treeMenu } from "./sidebar";
+import { initDiagram, openDiagram } from "./diagram";
 import { label } from "./keys";
 import * as launcher from "./connections";
 import { COLORS, GROUP_ICONS, tagColor, tagLabel } from "./connections";
@@ -1264,7 +1265,7 @@ function tableRow(t: string, label: string, extra: MenuItem[]) {
   const row = el("div", { className: "tree-row", title: t }, chevron, el("span", { className: "tbl-icon" }), el("span", { className: "label", textContent: label }));
   row.classList.toggle("active", t === open);
   row.onclick = () => openTable(t);
-  row.oncontextmenu = (e) => (e.stopPropagation(), contextMenu(e, [...tableMenu(t), "-", ...transferMenu(t), ...extra]));
+  row.oncontextmenu = (e) => (e.stopPropagation(), contextMenu(e, [...tableMenu(t), "-", ...transferMenu(t), "-", ["Show diagram", () => showDiagram(t)], ...extra]));
   const li = el("li", {}, row);
   if (isOpen)
     li.append(
@@ -1803,13 +1804,15 @@ function contextMenu(e: MouseEvent, items: MenuItem[]) {
       menu.append(b);
     }
   }
-  document.body.append(menu);
+  // Inside the topmost modal window when there is one, or the window would keep it out of reach.
+  ([...document.querySelectorAll("dialog:modal")].pop() ?? document.body).append(menu);
   const r = menu.getBoundingClientRect();
   menu.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`;
   menu.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
   menu.querySelector("button")?.focus();
   const onDown = (ev: Event) => !menu.contains(ev.target as Node) && close();
-  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && close();
+  // Esc closes only the menu, not a window it sits in.
+  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && (ev.preventDefault(), ev.stopPropagation(), close());
   function close() {
     menu.remove();
     removeEventListener("pointerdown", onDown, true);
@@ -2323,7 +2326,8 @@ function showColumnsMenu() {
   const h = menu.getBoundingClientRect().height;
   Object.assign(menu.style, { left: `${Math.max(8, r.left)}px`, top: `${Math.max(8, r.top - h - 6)}px` });
   const onDown = (ev: Event) => !menu.contains(ev.target as Node) && ev.target !== $("columns-button") && close();
-  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && close();
+  // Esc closes only the menu, not a window it sits in.
+  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && (ev.preventDefault(), ev.stopPropagation(), close());
   function close() {
     menu.remove();
     removeEventListener("pointerdown", onDown, true);
@@ -2519,7 +2523,13 @@ grid.initGridEdit({
   confirm: confirmDialog,
   fill: fillCell,
 });
-$("side-items").oncontextmenu = (e) => active && contextMenu(e, [...sidebarMenu(), "-", ...treeMenu()]);
+$("side-items").oncontextmenu = (e) => active && contextMenu(e, [...sidebarMenu(), ["Show diagram", () => showDiagram()], "-", ...treeMenu()]);
+/** The ER diagram of the sidebar's schema, or of `table`'s schema centred on it. */
+function showDiagram(table?: string) {
+  const pg = active?.kind === "postgres";
+  openDiagram(pg ? (table?.includes(".") ? table.split(".")[0] : shownSchema()) : null, table);
+}
+initDiagram({ call, conn: hostConn, openTable: (t) => openTable(t), menu: contextMenu });
 initSidebar({
   conn: hostConn,
   tables: () => tables,
@@ -2927,6 +2937,7 @@ const hasTools = () => inWorkspace() && !!active;
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: hasTools, run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: hasTools, run: () => openRestore(active!, info?.database, confirmDialog) },
+  { id: "diagram", label: "Show Diagram", menu: "Tools", when: hasTools, run: () => showDiagram() },
   { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && active!.kind !== "sqlite",
     sep: true, run: () => openProcesses(active!, confirmDialog) },
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
