@@ -1431,7 +1431,8 @@ function openSqlIn(title: string | null, sql: string) {
   editor.focus();
 }
 
-function openTable(table: string, view: TableTab["view"] = "data", create = false) {
+/** Opens `table`'s tab (or brings it forward); a new tab starts with `filters` when given. */
+function openTable(table: string, view: TableTab["view"] = "data", create = false, filters?: FilterRow[]) {
   const existing = tabs.find((t) => t.kind === "table" && t.table === table) as TableTab | undefined;
   if (existing) {
     if (existing.view !== view && !pendingCount(existing)) existing.view = view;
@@ -1439,7 +1440,7 @@ function openTable(table: string, view: TableTab["view"] = "data", create = fals
   }
   const tab: TableTab = {
     id: nextId++, kind: "table", title: table, table, view, offset: 0, staged: new Staged(), create,
-    sort: [], filters: [blankFilter()], combine: "and", filtersShown: false, layout: loadLayout(active!.name, table),
+    sort: [], filters: filters ?? [blankFilter()], combine: "and", filtersShown: !!filters, layout: loadLayout(active!.name, table),
   };
   tabs.push(tab);
   select(tab.id);
@@ -1562,6 +1563,7 @@ async function reloadTab() {
   if (tab?.kind !== "table") return reloadItems();
   if (!(await okToDiscard(tab))) return;
   columnsCache.delete(tab.table);
+  foreignKeys.delete(fkKey(tab.table));
   tab.total = undefined;
   if (tab.view === "data") loadTable(tab);
   else (dropDraft(tab.id), renderMain());
@@ -1638,12 +1640,15 @@ function renderMain() {
       const column = tab.result!.columns[ci];
       const value = tab.result!.rows[ri][ci];
       const shown = value === null ? "NULL" : value.length > 24 ? value.slice(0, 24) + "…" : value;
-      return ["-", [`Filter rows where ${column} = ${shown}`, () => filterByCell(tab, column, value)], ...grid.cellMenu(tab, ri, ci, selectedRows())];
+      const follow = keysOf(tab.table).filter((fk) => fk.columns.includes(column))
+        .map((fk): MenuItem => [`Open referenced row in ${fk.ref_table}`, () => followKey(tab, ri, fk)]);
+      return ["-", ...follow, [`Filter rows where ${column} = ${shown}`, () => filterByCell(tab, column, value)], ...grid.cellMenu(tab, ri, ci, selectedRows())];
     };
     render(tab.result, from, {
       sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add), table: tab.table, menu: quickFilter,
       resize: (column, width, done) => resizeColumn(tab, column, width, done), edit: tab,
       reorder: (from, to) => reorderColumn(tab, from, to),
+      reference: (column) => keysOf(tab.table).find((fk) => fk.columns.includes(column)),
     });
     grid.decorate(tab);
     paintSelection();
@@ -1713,6 +1718,7 @@ async function loadTable(tab: TableTab) {
   try {
     // Structure view, the filter bar's columns, and the primary key for editing and the default sort.
     const columns = await loadColumns(tab.table);
+    loadForeignKeys(tab.table);
     if (tab.view === "data") {
       if (!tab.sortSet) {
         tab.sortSet = true;
@@ -1789,6 +1795,46 @@ async function sortBy(tab: TableTab, column: string, add: boolean) {
   else tab.sort.splice(i, 1);
   tab.offset = 0;
   loadTable(tab);
+}
+
+type ForeignKey = { name: string; columns: string[]; ref_table: string; ref_columns: string[] };
+/** Each table's foreign keys, by session key and table; asked for once, as the table first loads. */
+const foreignKeys = new Map<string, ForeignKey[]>();
+const fkKey = (table: string) => `${sessionKey()}\u0000${table}`;
+const keysOf = (table: string) => foreignKeys.get(fkKey(table)) ?? [];
+
+function loadForeignKeys(table: string) {
+  const key = fkKey(table);
+  if (foreignKeys.has(key)) return;
+  foreignKeys.set(key, []); // a failure just means no links
+  call<{ foreign_keys: ForeignKey[] }>("table_structure", { name: sessionKey(), table }).then((s) => {
+    foreignKeys.set(key, s.foreign_keys);
+    const tab = current();
+    if (s.foreign_keys.length && tab?.kind === "table" && tab.table === table && fkKey(table) === key) renderMain(); // mark the headers
+  }, () => {});
+}
+
+/** Opens the row a foreign key's value points at: the referenced table, filtered to it. */
+async function followKey(tab: TableTab, ri: number, fk: ForeignKey) {
+  const values = fk.columns.map((c) => grid.valueAt(tab, ri, tab.result!.columns.indexOf(c)));
+  if (values.some((v) => typeof v !== "string")) return note("The key is NULL, so it references no row", "");
+  let refColumns = fk.ref_columns;
+  // SQLite leaves the columns out of a key that references the primary key.
+  if (refColumns.length !== fk.columns.length || refColumns.some((c) => !c)) {
+    try {
+      refColumns = (await loadColumns(fk.ref_table)).filter((c) => c.primary).map((c) => c.name);
+    } catch (e) {
+      return note(String(e), "error");
+    }
+  }
+  const filters = refColumns.map((column, i): FilterRow => ({ ...blankFilter(), column, op: "eq", value: values[i] as string }));
+  const open = tabs.find((t): t is TableTab => t.kind === "table" && t.table === fk.ref_table);
+  if (!open) return openTable(fk.ref_table, "data", false, filters);
+  if (!(await okToDiscard(open))) return;
+  Object.assign(open, { view: "data", filters, combine: "and", filtersShown: true });
+  filtersDrawnFor = 0;
+  select(open.id);
+  applyFilters(open);
 }
 
 /** Right-click on a cell: filter the table to rows with this value. */
@@ -2210,6 +2256,8 @@ type RenderOptions = {
   edit?: grid.EditTab;
   /** Header drag: the column at `from` moves to `to` (positions in the result). */
   reorder?: (from: number, to: number) => void;
+  /** The foreign key a column belongs to, marked in its header. */
+  reference?: (column: string) => ForeignKey | undefined;
 };
 
 /** Shows one result grid; see [`gridTable`]. */
@@ -2251,6 +2299,11 @@ function gridTable(r: QueryResult, offset: number, sorting?: RenderOptions): HTM
         th.setAttribute("aria-sort", s.desc ? "descending" : "ascending");
       }
       th.onclick = (e) => !columnDragged && onSort(c, e.shiftKey);
+    }
+    const fk = sorting?.reference?.(c);
+    if (fk) {
+      th.append(el("span", { className: "fk-mark", textContent: "→" }));
+      th.title = `References ${fk.ref_table}${fk.ref_columns.some(Boolean) ? ` (${fk.ref_columns.join(", ")})` : ""}. Right-click a value to open its row.`;
     }
     if (sorting?.resize) th.append(resizeGrip(th, c, sorting.resize));
     const reorder = sorting?.reorder;
