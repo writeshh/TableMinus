@@ -243,14 +243,14 @@ impl Tools {
     async fn reach(&self, token: &Token, name: &str) -> std::result::Result<Reached, Refusal> {
         let open = &self.0.open;
         open.unlocked()?;
-        let is_open = open.is_open(name).await;
-        if !token.reaches(name, is_open) {
+        // Open in any workspace tab counts; the server itself works on the connection's first session.
+        if !token.reaches(name, open.any_open(name).await) {
             return Err(Refusal(format!(
                 "this token can't use {name:?}: it reaches only the connections it lists, or open ones when it \
                  allows all"
             )));
         }
-        if !is_open {
+        if !open.is_open(name).await {
             let live = crate::open_saved(open, &self.0.dir, name).await?;
             open.insert(name.to_string(), live).await;
         }
@@ -261,13 +261,14 @@ impl Tools {
     async fn list_connections(&self, token: &Token) -> Done {
         let saved = crate::store::load(&self.0.dir)?;
         self.0.open.unlocked()?;
-        let open = self.0.open.conns.lock().await;
+        let conns = self.0.open.conns.lock().await;
+        let open: std::collections::HashSet<&str> = conns.keys().map(|k| crate::saved_name(k)).collect();
         let list: Vec<_> = saved
             .iter()
-            .filter(|c| token.reaches(&c.name, open.contains_key(&c.name)))
+            .filter(|c| token.reaches(&c.name, open.contains(c.name.as_str())))
             .map(|c| {
                 // Only what an agent needs to pick one: never the URL, user or anything from the keychain.
-                serde_json::json!({ "name": c.name, "engine": c.kind, "tag": c.tag, "open": open.contains_key(&c.name) })
+                serde_json::json!({ "name": c.name, "engine": c.kind, "tag": c.tag, "open": open.contains(c.name.as_str()) })
             })
             .collect();
         Ok((json(&list)?, format!("{} connections", list.len())))

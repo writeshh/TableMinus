@@ -2,7 +2,7 @@
 // (safety.rs decides), and the toolbar lock that switches the active connection's level.
 
 import { invoke } from "@tauri-apps/api/core";
-import { $, el } from "./dom";
+import { $, connName, el } from "./dom";
 
 export type Safety = "silent" | "alert1" | "alert2" | "safe1" | "safe2";
 export const LEVELS: [Safety, string, string][] = [
@@ -88,7 +88,7 @@ document.body.append(pwDialog);
 
 /** The password a Safe level wants; null when cancelled. */
 export function askPassword(conn: string, wrong = false): Promise<Unlock | null> {
-  pwText.textContent = `Enter the database password of “${conn}” to go ahead.`;
+  pwText.textContent = `Enter the database password of “${connName(conn)}” to go ahead.`;
   pwError.textContent = wrong ? "That isn't the saved password." : "";
   pwInput.value = "";
   pwTouch.hidden = !useTouchId();

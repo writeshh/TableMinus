@@ -2,7 +2,7 @@
 // materialized views, functions and procedures, sequences and types, each switchable on or off; a schema
 // switcher on Postgres; "search in database"; and an item's overview. Table rows come from main.ts (they expand to
 // columns and carry the table menu); everything else is drawn here.
-import { el } from "./dom";
+import { connName, el } from "./dom";
 import { modal } from "./backup";
 
 type MenuItem = [string, () => void] | "-";
@@ -58,7 +58,7 @@ function store(key: string, value: unknown) {
   } catch {} // unavailable storage: the choice lasts until the app closes
 }
 
-const prefsKey = () => `sidebar:${ctx.conn()?.name}`;
+const prefsKey = () => `sidebar:${connName(ctx.conn()?.name ?? "")}`; // per connection, not per tab
 const prefs = (): Prefs => load<Prefs>(prefsKey(), { pins: [], groups: [] });
 const savePrefs = (p: Prefs) => (store(prefsKey(), p), ctx.redraw());
 /** Hidden sections and collapsed headings, the same for every connection. */

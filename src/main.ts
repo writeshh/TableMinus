@@ -9,7 +9,10 @@ import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
 import { MIN_WIDTH, layoutCss, loadLayout, saveLayout, type Layout } from "./columns";
-import { dropDraft, initStructure, saveStructure, showStructure, sidebarMenu, structurePending, tableMenu } from "./structure";
+import {
+  dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showStructure, sidebarMenu, structurePending,
+  tableMenu,
+} from "./structure";
 import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
@@ -613,7 +616,7 @@ async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(cmd, args);
   } catch (e) {
-    if (e === "DISCONNECTED") $("lost").hidden = false;
+    if (e === "DISCONNECTED") ($("lost").hidden = false), renderDbTabs();
     throw e;
   }
 }
@@ -625,8 +628,9 @@ async function reconnect() {
   btn.disabled = true;
   status("Reconnecting…", "busy");
   try {
-    info = await invoke<Info>("reconnect", { name: active.name });
+    info = await invoke<Info>("reconnect", { name: sessionKey() });
     $("lost").hidden = true;
+    renderDbTabs();
     tables = info.tables;
     columnsCache.clear();
     renderTables();
@@ -640,11 +644,13 @@ async function reconnect() {
 }
 $("reconnect").onclick = reconnect;
 
-// Keep-alive found the active connection dead: show the banner now rather than on the next query.
+// Keep-alive found a connection dead: show the banner (or the mark on its tab) now rather than on the next query.
 listen<string>("connection-lost", (e) => {
-  if (e.payload === active?.name) $("lost").hidden = false;
-  const w = workspaces.find((w) => w.conn.name === e.payload && w !== ws);
-  if (w) (w.lost = true), renderWorkspaceButton();
+  const w = workspaces.find((w) => w.key === e.payload);
+  if (!w) return; // the MCP server's own session, or one closed meanwhile
+  w.lost = true;
+  if (w === ws) $("lost").hidden = false;
+  renderWorkspaceButton();
 }).catch(() => {}); // no event bridge outside the app
 
 // ---------- Connection info (click the status pill) ----------
@@ -660,7 +666,7 @@ async function showConnectionInfo() {
   Object.assign(pop.style, { top: `${r.bottom + 6}px`, left: `${Math.max(8, r.right - 340)}px` });
   pop.hidden = false;
   try {
-    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>("connection_info", { name: active.name });
+    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>("connection_info", { name: sessionKey() });
     list.replaceChildren(
       ...row("Connection", active.name),
       ...row("Server", i.server),
@@ -688,33 +694,48 @@ async function connect(c: Saved) {
   if (open) return showWorkspace(open);
   setStatus("home-status", `Connecting to ${c.name}…`, "busy");
   try {
-    await docsReady; // kept tabs and history, read at startup
-    const i = await launcher.withAskedPassword(c.name, () => invoke<Info>("connect", { name: c.name }));
-    if (!i) return setStatus("home-status", "");
-    launcher.addRecent(c.name);
-    stashWorkspace();
-    pane = newPane();
-    ws = { conn: c, info: i, tables: i.tables, panes: [pane], pane, columns: new Map(), expanded: new Set(), lost: false, filter: "" };
-    workspaces.push(ws);
-    rememberOpen();
-    active = c;
-    columnsCache = ws.columns;
-    expanded = ws.expanded;
-    $("lost").hidden = true;
+    await openWorkspace(c);
     setStatus("home-status", "");
-    showHeader();
-    show("workspace");
-    applyInfo(i);
-    showSide("items");
-    renderHistory();
-    showSafety(c);
-    status(`Connected · ${i.server}`, "done");
-    // Connected without a database: go straight to choosing one.
-    if (i.can_switch && !i.database) openDbPicker();
-    else editor.focus();
   } catch (e) {
     setStatus("home-status", String(e), "error");
   }
+}
+
+/** A session key no open workspace uses: the connection's name, else name + "\u001f" + n (see `connName`). */
+function freeKey(name: string) {
+  const taken = new Set(workspaces.map((w) => w.key));
+  let key = name;
+  for (let n = 2; taken.has(key); n++) key = `${name}\u001f${n}`;
+  return key;
+}
+
+/** A new workspace on its own session of `c`, on `database` when given, in the tab after the current one. */
+async function openWorkspace(c: Saved, database?: string) {
+  await docsReady; // kept tabs and history, read at startup
+  const key = freeKey(c.name);
+  const i = await launcher.withAskedPassword(c.name, () => invoke<Info>("connect", { name: key, database }));
+  if (!i) return; // the password prompt was cancelled
+  launcher.addRecent(c.name);
+  const at = ws && workspaces.includes(ws) ? workspaces.indexOf(ws) + 1 : workspaces.length;
+  stashWorkspace();
+  pane = newPane();
+  ws = { key, conn: c, info: i, tables: i.tables, panes: [pane], pane, columns: new Map(), expanded: new Set(), lost: false, filter: "" };
+  workspaces.splice(at, 0, ws);
+  rememberOpen();
+  active = c;
+  columnsCache = ws.columns;
+  expanded = ws.expanded;
+  $("lost").hidden = true;
+  showHeader();
+  show("workspace");
+  applyInfo(i);
+  showSide("items");
+  renderHistory();
+  showSafety(c);
+  status(`Connected · ${i.server}`, "done");
+  // Connected without a database: go straight to choosing one.
+  if (i.can_switch && !i.database) openDbPicker();
+  else editor.focus();
 }
 
 /** A new connection or database: fresh tree, and a single empty SQL tab. */
@@ -724,7 +745,7 @@ function applyInfo(i: Info) {
   columnsCache.clear();
   expanded.clear();
   $<HTMLInputElement>("filter").value = "";
-  forgetItems(active!.name);
+  forgetItems(sessionKey());
   showHeader();
   editor.setDialect(active!.kind, new Map(tables.map((t) => [t, []]))); // before the new tab's state is created
   loadSchema();
@@ -758,6 +779,8 @@ function showHeader() {
 // ---------- Workspaces: several connections open in one window, each with its own panes and tabs ----------
 
 type Workspace = {
+  /** The backend's handle on this workspace's own session (`name` in every command); see `freeKey`. */
+  key: string;
   conn: Saved; info: Info | null; tables: string[];
   /** Side by side; `pane` is the one with focus. */
   panes: Pane[]; pane: Pane;
@@ -765,6 +788,7 @@ type Workspace = {
 };
 let workspaces: Workspace[] = [];
 let ws: Workspace | null = null; // the one on screen (or last on screen, while the launcher shows)
+const sessionKey = () => ws?.key ?? "";
 
 /** Every tab of the workspace on screen, in all its panes. */
 const allTabs = () => (ws?.panes ?? [pane]).flatMap((p) => (p === pane ? tabs : p.tabs));
@@ -819,9 +843,9 @@ async function reconnectAll() {
       continue;
     }
     try {
-      w.info = await invoke<Info>("reconnect", { name: w.conn.name });
+      w.info = await invoke<Info>("reconnect", { name: w.key });
       Object.assign(w, { tables: w.info.tables, columns: new Map(), lost: false });
-      forgetItems(w.conn.name);
+      forgetItems(w.key);
     } catch (e) {
       status(`${w.conn.name}: ${e}`, "error");
     }
@@ -839,6 +863,63 @@ function renderWorkspaceButton() {
     head.append(el("span", { className: `ws-count${lost ? " lost" : ""}`, textContent: `+${others.length}`,
       title: lost ? "Another workspace lost its connection" : `${others.length} more workspace${others.length === 1 ? "" : "s"}` }));
   }
+  renderDbTabs();
+}
+
+// ---------- Database tabs: one per workspace, above the item tabs, once there are two ----------
+
+let draggedTab: Workspace | null = null;
+
+/** Each tab shows its connection's tag colour, its database (or the connection, without one), a mark when its
+ *  connection was lost and × to close; drag one to reorder. The order is also ⌃⌘[ / ⌃⌘]'s. */
+function renderDbTabs() {
+  const strip = $("db-tabs");
+  strip.hidden = workspaces.length < 2;
+  if (strip.hidden) return;
+  strip.replaceChildren(
+    ...workspaces.map((w) => {
+      const database = (w === ws ? info : w.info)?.database;
+      const lost = w === ws ? !$("lost").hidden : w.lost;
+      const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
+      close.onclick = (e) => (e.stopPropagation(), closeDbTab(w));
+      const b = el("button", {
+        className: `db-tab ${w.conn.tag}`, draggable: true,
+        title: `${w.conn.name}${database ? ` · ${database}` : ""}${lost ? " (connection lost)" : ""}`,
+      },
+        el("span", { className: "dot" }),
+        el("span", { className: "label", textContent: database ?? w.conn.name }),
+        ...(database ? [el("span", { className: "conn", textContent: w.conn.name })] : []),
+        ...(lost ? [el("span", { className: "lost-mark", textContent: "!", title: "Connection lost" })] : []),
+        close,
+      );
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", String(w === ws));
+      b.onclick = () => w !== ws && showWorkspace(w);
+      b.onauxclick = (e) => e.button === 1 && closeDbTab(w); // middle-click closes
+      b.ondragstart = (e) => ((draggedTab = w), e.dataTransfer?.setData("text/plain", w.conn.name));
+      b.ondragend = () => (draggedTab = null);
+      b.ondragover = (e) => draggedTab && draggedTab !== w && e.preventDefault();
+      b.ondrop = (e) => {
+        e.preventDefault();
+        if (!draggedTab || draggedTab === w) return;
+        const r = b.getBoundingClientRect();
+        workspaces.splice(workspaces.indexOf(draggedTab), 1);
+        workspaces.splice(workspaces.indexOf(w) + (e.clientX > r.left + r.width / 2 ? 1 : 0), 0, draggedTab);
+        draggedTab = null;
+        renderDbTabs();
+      };
+      return b;
+    }),
+  );
+  strip.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+/** Closes a database tab; closing one in the background comes back to the tab on screen. */
+async function closeDbTab(w: Workspace) {
+  if (w === ws) return closeWorkspace();
+  const back = ws;
+  showWorkspace(w); // its tabs may have unsaved edits to ask about
+  await closeWorkspace(back);
 }
 
 function showWorkspaces() {
@@ -851,7 +932,7 @@ function showWorkspaces() {
     ...items, "-",
     [`New Workspace…  ${keyLabel("new-workspace")}`, newWorkspace],
     ["Reconnect All", reconnectAll],
-    ["Close Workspace", closeWorkspace],
+    ["Close Workspace", () => closeWorkspace()],
   ]);
 }
 $("where-conn").onclick = showWorkspaces;
@@ -949,13 +1030,16 @@ function closePane() {
 
 type KeptTab = { title: string; sql: string; path?: string };
 
+// ponytail: only a connection's first workspace keeps its SQL tabs; key them by database if the others should.
+const keepsTabs = () => !!active && sessionKey() === active.name;
+
 function loadSqlTabs(): KeptTab[] {
-  const kept = active && docEntry<KeptTab[]>("sql_tabs", active.name);
+  const kept = keepsTabs() && docEntry<KeptTab[]>("sql_tabs", active!.name);
   return Array.isArray(kept) ? kept.filter((k) => typeof k?.title === "string" && typeof k?.sql === "string") : [];
 }
 
 function saveSqlTabs() {
-  if (!active || !settings.keepTabs) return;
+  if (!active || !keepsTabs() || !settings.keepTabs) return;
   const kept: KeptTab[] = allTabs().flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql, path: t.path }] : []));
   setDocEntry("sql_tabs", active.name, kept.length ? kept : undefined);
 }
@@ -1018,14 +1102,20 @@ async function openDbPicker() {
   if (!active || !info?.can_switch) return;
   const d = $<HTMLDialogElement>("dbpicker");
   $<HTMLInputElement>("db-search").value = "";
-  setStatus("db-status", "Loading…", "busy");
   databases = [];
   renderDbs();
   if (!d.open) d.showModal();
   $("db-search").focus();
+  await loadDbs(info?.database ?? "");
+}
+
+/** Fills the list, with `pick` selected when it's there. */
+async function loadDbs(pick: string) {
+  setStatus("db-status", "Loading…", "busy");
   try {
-    databases = await call<string[]>("list_databases", { name: active.name });
-    dbPick = Math.max(0, databases.indexOf(info?.database ?? ""));
+    databases = await call<string[]>("list_databases", { name: sessionKey() });
+    $<HTMLInputElement>("db-search").value = "";
+    dbPick = Math.max(0, databases.indexOf(pick));
     setStatus("db-status", "");
     renderDbs();
   } catch (e) {
@@ -1048,7 +1138,7 @@ function renderDbs() {
       li.setAttribute("aria-selected", String(i === dbPick));
       if (name === info?.database) li.append(el("span", { className: "current", textContent: "current" }));
       li.onclick = () => ((dbPick = i), renderDbs());
-      li.ondblclick = () => openDb(name);
+      li.ondblclick = (e) => (e.metaKey || e.ctrlKey ? openDbInNewTab(name) : openDb(name));
       return li;
     }),
   );
@@ -1061,7 +1151,7 @@ async function openDb(name?: string) {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
-    applyInfo(await call<Info>("use_database", { name: active.name, database: name }));
+    applyInfo(await call<Info>("use_database", { name: sessionKey(), database: name }));
     $<HTMLDialogElement>("dbpicker").close();
     status(`${name} · ${tables.length} tables`, "done");
     editor.focus();
@@ -1070,12 +1160,52 @@ async function openDb(name?: string) {
   }
 }
 
+/** Opens the database in a new database tab: its own session of the connection, sidebar and item tabs. */
+async function openDbInNewTab(name = shownDbs()[dbPick]) {
+  if (!name || !active) return;
+  setStatus("db-status", `Opening ${name}…`, "busy");
+  try {
+    await openWorkspace(active, name);
+    $<HTMLDialogElement>("dbpicker").close();
+  } catch (e) {
+    setStatus("db-status", String(e), "error");
+  }
+}
+
+/** Runs a create, rename or drop from the window, then lists the databases again. */
+async function databaseOp(run: () => Promise<string | boolean | null>, after: (done: string | boolean) => Promise<void> | void) {
+  setStatus("db-status", "");
+  try {
+    const done = await run();
+    if (done) await after(done);
+  } catch (e) {
+    setStatus("db-status", String(e), "error");
+  }
+}
+
+$("db-new").onclick = () => databaseOp(newDatabase, (name) => loadDbs(String(name)));
+$("db-rename").onclick = () => {
+  const db = shownDbs()[dbPick];
+  if (db) databaseOp(() => renameDatabase(db), async (to) => {
+    // MySQL moved the tables out from under this tab; follow them. (Postgres can't rename the database in use.)
+    if (db === info?.database) await openDb(String(to));
+    else await loadDbs(String(to));
+  });
+};
+$("db-drop").onclick = () => {
+  const db = shownDbs()[dbPick];
+  if (db) databaseOp(() => dropDatabase(db), async () => {
+    if (db === info?.database) applyInfo(await call<Info>("connect", { name: sessionKey() })); // MySQL: now on none
+    await loadDbs(info?.database ?? "");
+  });
+};
+$("db-open-tab").onclick = () => openDbInNewTab();
 $("db-search").addEventListener("input", () => ((dbPick = 0), renderDbs()));
 $("db-search").addEventListener("keydown", (e) => {
   const n = shownDbs().length;
   if (e.key === "ArrowDown") dbPick = Math.min(n - 1, dbPick + 1);
   else if (e.key === "ArrowUp") dbPick = Math.max(0, dbPick - 1);
-  else if (e.key === "Enter") return e.preventDefault(), openDb();
+  else if (e.key === "Enter") return e.preventDefault(), e.metaKey || e.ctrlKey ? openDbInNewTab() : openDb();
   else return;
   e.preventDefault();
   renderDbs();
@@ -1092,7 +1222,7 @@ let expanded = new Set<string>();
 
 async function loadColumns(table: string) {
   const cache = columnsCache; // the workspace may change while this waits
-  if (!cache.has(table)) cache.set(table, await call<Column[]>("columns", { name: active!.name, table }));
+  if (!cache.has(table)) cache.set(table, await call<Column[]>("columns", { name: sessionKey(), table }));
   return cache.get(table)!;
 }
 
@@ -1524,7 +1654,7 @@ async function saveEdits() {
 }
 
 async function loadTable(tab: TableTab) {
-  const name = active!.name; // the tab's workspace, even if another takes the screen meanwhile
+  const name = sessionKey(); // the tab's workspace, even if another takes the screen meanwhile
   tab.loading = true;
   tab.error = undefined;
   if (tab.id === currentId) renderMain();
@@ -1679,8 +1809,8 @@ function ask(text: string, detail: string, okLabel: string): Promise<boolean> {
 
 /** The sidebar's items again (new or dropped tables), with columns and autocomplete reloaded. */
 async function reloadItems() {
-  const i = await call<Info>("connect", { name: active!.name }); // reuses the open connection
-  forgetItems(active!.name);
+  const i = await call<Info>("connect", { name: sessionKey() }); // reuses the open connection
+  forgetItems(sessionKey());
   info = i;
   tables = i.tables;
   columnsCache.clear();
@@ -1691,10 +1821,10 @@ async function reloadItems() {
 /** Columns for every table, for autocomplete. Runs in the background; the editor works without it meanwhile. */
 async function loadSchema() {
   if (!active) return;
-  const conn = active;
+  const [conn, key] = [active, sessionKey()];
   try {
-    const pairs = await invoke<[string, string][]>("schema", { name: conn.name });
-    if (active !== conn) return; // switched connections meanwhile
+    const pairs = await invoke<[string, string][]>("schema", { name: key });
+    if (sessionKey() !== key) return; // switched workspaces meanwhile
     const schema: Schema = new Map(tables.map((t) => [t, []]));
     for (const [table, column] of pairs) (schema.get(table) ?? schema.set(table, []).get(table)!).push(column);
     editor.setDialect(conn.kind, schema);
@@ -1715,8 +1845,8 @@ async function run(sql: string) {
   say("Running…", "busy");
   const t0 = performance.now();
   try {
-    const conn = active;
-    const r = await guarded(conn.name, (a) => call<QueryResult>("run_query", { name: conn.name, sql, ...a, maxRows: rowLimit() }),
+    const [conn, key] = [active, sessionKey()];
+    const r = await guarded(conn.name, (a) => call<QueryResult>("run_query", { name: key, sql, ...a, maxRows: rowLimit() }),
       () => (say("", ""), ask(conn.safety === "alert1" ? `Run this on "${conn.name}"?` : `This may change data on "${conn.name}".`, sql.trim(), "Run anyway")));
     tab.result = r;
     tab.ran = sql;
@@ -1798,7 +1928,7 @@ async function runAll() {
     const sql = statements[i].text;
     say(`Running ${i + 1} of ${statements.length}…`, "busy");
     try {
-      const r = await call<QueryResult>("run_query", { name: active.name, sql, ...approved, maxRows: rowLimit() });
+      const r = await call<QueryResult>("run_query", { name: sessionKey(), sql, ...approved, maxRows: rowLimit() });
       affected += r.affected;
       if (r.columns.length || i === statements.length - 1) {
         tab.result = r;
@@ -2146,9 +2276,11 @@ $("discard-edits").onclick = () => {
 $("toggle-filters").onclick = () => toggleFilters();
 $("add-row").onclick = () => current()?.kind === "table" && grid.addRow(current() as TableTab);
 $("preview-edits").onclick = () => current()?.kind === "table" && grid.preview(current() as TableTab);
+/** The on-screen connection for the modules below: `name` is the session key they send (shown via `connName`). */
+const hostConn = () => active && { ...active, name: sessionKey() };
 grid.initGridEdit({
   call,
-  conn: () => active,
+  conn: hostConn,
   columns: (table) => columnsCache.get(table),
   render: renderMain,
   reload: (tab) => loadTable(tab as TableTab),
@@ -2157,7 +2289,7 @@ grid.initGridEdit({
 });
 $("side-items").oncontextmenu = (e) => active && contextMenu(e, [...sidebarMenu(), "-", ...treeMenu()]);
 initSidebar({
-  conn: () => active,
+  conn: hostConn,
   tables: () => tables,
   call,
   tableRow,
@@ -2177,7 +2309,7 @@ initSidebar({
 initSearch();
 initStructure({
   call,
-  conn: () => active,
+  conn: hostConn,
   tables: () => tables,
   refreshTables: reloadItems,
   openStructure: (table, create) => openTable(table, "structure", create),
@@ -2209,7 +2341,7 @@ initStructure({
 
 function transferCtx(): TransferCtx {
   return {
-    conn: active!.name,
+    conn: sessionKey(),
     database: info?.database ?? "",
     tables,
     columns: async (table) => (await loadColumns(table)).map((c) => c.name),
@@ -2217,7 +2349,7 @@ function transferCtx(): TransferCtx {
     imported: async (table) => {
       // A new table appears in the sidebar; an open tab of the table shows the new rows.
       try {
-        tables = (await call<Info>("connect", { name: active!.name })).tables;
+        tables = (await call<Info>("connect", { name: sessionKey() })).tables;
         if (info) info.tables = tables;
         columnsCache.delete(table);
         renderTables();
@@ -2253,10 +2385,17 @@ $("export-result").onclick = () => {
 $("columns-button").onclick = () => (menuClose ? menuClose() : showColumnsMenu());
 $("page-prev").onclick = () => turnPage(-1);
 $("page-next").onclick = () => turnPage(1);
-/** Leaves the workspace and closes the server connection; the launcher comes back. */
-async function closeWorkspace() {
+/** Leaves the workspace and closes its session; `next` (else the neighbouring workspace, else the launcher) comes
+ *  up. */
+async function closeWorkspace(next?: Workspace | null) {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
-  if (active) invoke("disconnect", { name: active.name }).catch(() => {}), launcher.forgetAskedPassword(active.name);
+  if (ws) {
+    invoke("disconnect", { name: ws.key }).catch(() => {});
+    // An asked-for password serves every tab of its connection, so it goes with the last one.
+    const name = ws.conn.name;
+    if (!workspaces.some((w) => w !== ws && w.conn.name === name)) launcher.forgetAskedPassword(name);
+  }
+  const i = ws ? workspaces.indexOf(ws) : -1;
   workspaces = workspaces.filter((w) => w !== ws);
   rememberOpen();
   ws = null;
@@ -2265,14 +2404,14 @@ async function closeWorkspace() {
   tabs = [];
   shownId = 0;
   delete document.body.dataset.env;
-  const next = workspaces.at(-1);
+  next = next && workspaces.includes(next) ? next : workspaces[Math.min(Math.max(i, 0), workspaces.length - 1)];
   if (next) showWorkspace(next);
   else show("home");
 }
 
 /** Notes the open workspaces, for reopening them at the next start, and refreshes Open Recent. */
 function rememberOpen() {
-  launcher.setOpenAtQuit(workspaces.map((w) => w.conn.name));
+  launcher.setOpenAtQuit([...new Set(workspaces.map((w) => w.conn.name))]);
   showRecent();
 }
 
@@ -2407,7 +2546,7 @@ $("engine-search").addEventListener("keydown", (e) => e.key === "Enter" && (e.pr
 $("picker-next").onclick = nextFromPicker;
 $("picker-cancel").onclick = () => $<HTMLDialogElement>("picker").close();
 $("editor-cancel").onclick = () => $<HTMLDialogElement>("editor").close();
-$("back").onclick = closeWorkspace;
+$("back").onclick = () => closeWorkspace();
 $("filter").addEventListener("input", renderTables);
 
 $("run").onclick = runCurrent;
@@ -2504,7 +2643,7 @@ const ITEM_KINDS = { schema: "schema", view: "view", matview: "materialized view
 /** What Open Anything searches: the workspace's items and SQL tabs, the other workspaces, and every command that
  *  applies right now. */
 function anythingItems(): AnythingItem[] {
-  const sideItems = active ? loadedItems(active.name) : [];
+  const sideItems = active ? loadedItems(sessionKey()) : [];
   const kinds = new Set(sideItems.map((i) => i.name));
   const sqlTabs = (ws?.panes ?? [pane]).flatMap((p) =>
     (p === pane ? tabs : p.tabs).flatMap((t) => (t.kind === "sql" ? [{ p, t }] : [])),
@@ -2516,7 +2655,7 @@ function anythingItems(): AnythingItem[] {
       run: () => (i.kind === "view" || i.kind === "matview" ? openTable(i.name) : navigator.clipboard.writeText(i.name).then(() => note(`Copied ${i.name}`, "done"), () => {})),
     })),
     ...sqlTabs.map(({ p, t }) => ({ label: t.title, kind: "SQL tab", detail: t.path, run: () => (focusPane(p), select(t.id)) })),
-    ...workspaces.filter((w) => w !== ws).map((w) => ({ label: w.conn.name, kind: "workspace", run: () => showWorkspace(w) })),
+    ...workspaces.filter((w) => w !== ws).map((w) => ({ label: w.conn.name, kind: "workspace", detail: w.info?.database ?? undefined, run: () => showWorkspace(w) })),
     ...commands
       .filter((c) => c.id !== "open-anything" && !c.hidden && (!c.when || c.when()))
       .map((c) => ({ label: c.label.replace(/…$/, ""), kind: "command", detail: keyLabel(c.id), run: c.run })),
