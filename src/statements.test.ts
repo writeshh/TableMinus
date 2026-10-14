@@ -1,7 +1,7 @@
 // Run with `node --test 'src/**/*.test.ts'`. Part of `npm run check`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fillParams, findParams, splitStatements, statementAt } from "./statements.ts";
+import { fillParams, findParams, sourceTable, splitStatements, statementAt } from "./statements.ts";
 
 const texts = (sql: string, d: "postgres" | "mysql" | "sqlite" = "postgres") => splitStatements(sql, d).map((s) => s.text);
 
@@ -53,4 +53,24 @@ test("fillParams puts values in as typed, repeated names included", () => {
   const sql = "select * from t where a = :x or b = :x and c = :name";
   const filled = fillParams(sql, findParams(sql, "postgres", "colon"), { x: "1", name: "'Ada'" });
   assert.equal(filled, "select * from t where a = 1 or b = 1 and c = 'Ada'");
+});
+
+const tables = ["public.people", "public.pets", "app.orders"];
+
+test("sourceTable finds the one table a plain select reads", () => {
+  assert.equal(sourceTable("select * from people where id > 2 order by name limit 10;", tables), "public.people");
+  assert.equal(sourceTable('SELECT id, name FROM "public"."pets" p', tables), "public.pets");
+  assert.equal(sourceTable("select * from orders", tables), "app.orders");
+  assert.equal(sourceTable("-- note\nselect * from People", tables), "public.people");
+});
+
+test("sourceTable refuses what doesn't map onto one table's rows", () => {
+  assert.equal(sourceTable("select * from people join pets on true", tables), null);
+  assert.equal(sourceTable("select * from people, pets", tables), null);
+  assert.equal(sourceTable("select count(*) from people group by name", tables), null);
+  assert.equal(sourceTable("select distinct name from people", tables), null);
+  assert.equal(sourceTable("select * from people union select * from pets", tables), null);
+  assert.equal(sourceTable("select (select 1) from people", tables), null);
+  assert.equal(sourceTable("select * from unknown", tables), null);
+  assert.equal(sourceTable("update people set a = 1", tables), null);
 });

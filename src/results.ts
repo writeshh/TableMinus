@@ -2,6 +2,7 @@
 // statement run with its outcome and time. main.ts runs the statements and draws the grids.
 
 import { el } from "./dom";
+import type { EditTab } from "./grid-edit";
 import { highlightSql } from "./editor";
 import "./results.css";
 
@@ -17,6 +18,8 @@ export type ResultTab = {
   pinned: boolean;
   /** The statement only reads, so running it again for more rows is harmless. */
   readOnly: boolean;
+  /** Staged edits, when the statement reads one table (grid-edit.ts); `result` is the same object. */
+  edit?: EditTab;
 };
 
 /** One line per statement run. */
@@ -26,7 +29,8 @@ export type Message = { sql: string; text: string; error: boolean; ms: number; a
 export const MESSAGES = 0;
 export const ALL = -1;
 
-export type Results = { tabs: ResultTab[]; messages: Message[]; shown: number };
+/** `search` filters the shown result's rows. */
+export type Results = { tabs: ResultTab[]; messages: Message[]; shown: number; search?: string };
 
 export type StripActions = {
   show: (id: number) => void;
@@ -61,6 +65,20 @@ export function renderStrip(nav: HTMLElement, results: Results, append: boolean,
   const messages = button(MESSAGES, label, "Every statement run, its outcome and time");
   messages.classList.toggle("failed", errors > 0);
   nav.replaceChildren(...tabs, messages);
+}
+
+/** The rows of `r` with a cell containing `text` (any case). The same object for the same search, so a redraw keeps
+ *  the selection. */
+const found = new WeakMap<QueryResult, { text: string; r: QueryResult }>();
+export function searchRows(r: QueryResult, text: string): QueryResult {
+  const q = text.trim().toLowerCase();
+  if (!q) return r;
+  const hit = found.get(r);
+  if (hit?.text === q) return hit.r;
+  const rows = r.rows.filter((row) => row.some((v) => v !== null && v.toLowerCase().includes(q)));
+  const out = { ...r, rows };
+  found.set(r, { text: q, r: out });
+  return out;
 }
 
 /** The Messages tab: what each statement did, oldest first. */

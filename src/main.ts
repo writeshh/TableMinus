@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor, type FormatStyle, type Schema } from "./editor";
-import { fillParams, findParams, type ParamFormat } from "./statements";
+import { fillParams, findParams, sourceTable, type ParamFormat } from "./statements";
 import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
@@ -29,7 +29,7 @@ import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, treeMenu
 import { label } from "./keys";
 import "./console"; // the console log panel and its command
 import { addFavorite, initFavorites, render as renderFavorites } from "./favorites"; // also adds the sidebar's Queries tab
-import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, type QueryResult, type ResultTab, type Results } from "./results";
+import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, searchRows, type QueryResult, type ResultTab, type Results } from "./results";
 import "./workspace.css";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
@@ -1343,12 +1343,14 @@ function showPending(tab: Tab) {
 // ---------- Inline cell editing (table tabs) ----------
 
 const pendingCount = (tab: Tab) =>
-  tab.kind === "table" ? tab.staged.count + structurePending(tab.id) : 0;
+  tab.kind === "table" ? tab.staged.count + structurePending(tab.id)
+  : (tab.out?.tabs ?? []).reduce((n, r) => n + (r.edit?.staged.count ?? 0), 0);
 
 async function okToDiscard(tab: Tab) {
   const n = pendingCount(tab);
   if (!n || (await confirmDialog(`Discard ${n} unsaved change${n === 1 ? "" : "s"} in ${tab.title}?`, "Discard"))) {
     if (tab.kind === "table") (tab.staged.clear(), dropDraft(tab.id));
+    else for (const r of tab.out?.tabs ?? []) r.edit?.staged.clear();
     return true;
   }
   return false;
@@ -1364,6 +1366,8 @@ async function saveEdits() {
   const tab = current();
   if (tab?.kind === "table" && tab.view === "structure") return saveStructure(tab.id, $("out"));
   if (tab?.kind === "table") return grid.save(tab);
+  const target = resultTarget();
+  if (target) return grid.save(target);
 }
 
 async function loadTable(tab: TableTab) {
@@ -1556,7 +1560,7 @@ let nextResultId = 1;
 async function execute(statements: string[]) {
   const tab = current();
   statements = statements.filter((s) => s.trim());
-  if (!active || tab?.kind !== "sql" || !statements.length) return;
+  if (!active || tab?.kind !== "sql" || !statements.length || !(await okToDiscard(tab))) return;
   const conn = active;
   const say = (text: string, kind: StatusKind) => {
     tab.status = [text, kind];
@@ -1579,6 +1583,12 @@ async function execute(statements: string[]) {
       ran.results.forEach((result, index) => {
         if (!result.columns.length) return void (affected += result.affected);
         const r: ResultTab = { id: nextResultId++, title: `Result ${res.tabs.length + 1}`, sql, index, result, pinned: false, readOnly: ran.read_only };
+        const table = ran.results.length === 1 ? sourceTable(sql, tables) : null;
+        if (table) {
+          r.edit = { id: r.id, table, result, staged: new Staged() };
+          // The key columns decide whether it's editable; draw again once they're known.
+          loadColumns(table).then(() => tab.id === currentId && showResults(tab), () => {});
+        }
         res.tabs.push(r);
         shown = r.id; // the last new result shows, as before there were tabs
       });
@@ -1644,10 +1654,29 @@ function showResults(tab: SqlTab) {
     togglePin: (r) => ((r.pinned = !r.pinned), showResults(tab)),
   });
   const shown = res.shown === ALL ? res.tabs : res.tabs.filter((r) => r.id === res.shown);
+  const search = $<HTMLInputElement>("result-search");
+  search.hidden = append || !shown.length;
+  search.value = res.search ?? "";
+  const target = shown.length === 1 && !append ? editable(shown[0]) : null;
+  showResultEdits(target);
+  $("result-found").textContent = "";
   tab.result = shown[0]?.result;
   if (!shown.length) return renderMessages($("out"), res.messages, active?.kind ?? "");
-  if (!append) render(shown[0].result, 0);
-  else {
+  if (!append) {
+    const r = shown[0];
+    const rows = searchRows(r.result, search.value);
+    tab.result = rows;
+    if (!target) render(rows, 0);
+    else {
+      render(rows, 0, {
+        table: target.table,
+        menu: (ri, ci) => grid.cellMenu(target, ri, ci, selectedRows()),
+      });
+      grid.decorate(target);
+      paintSelection();
+    }
+    $("result-found").textContent = rows === r.result ? "" : `${fmt(rows.rows.length)} of ${fmt(r.result.rows.length)}`;
+  } else {
     $("out").replaceChildren(...shown.map((r) =>
       el("section", { className: "appended" }, el("h4", { textContent: `${r.title} · ${rowsLabel(r.result)}`, title: r.sql }), gridTable(r.result, 0))));
     if (selection && !shown.some((r) => r.result === selection!.r)) selection = null;
@@ -1658,6 +1687,52 @@ function showResults(tab: SqlTab) {
     more.onclick = () => loadMore(tab, r);
     (drawn.get(r.result)?.parentElement ?? $("out")).append(more);
   }
+}
+
+/** The result's staged edits, when its rows can be edited in place: it reads one table, every column is one of the
+ *  table's, the table's key is among them, and no search hides rows. */
+function editable(r: ResultTab) {
+  const e = r.edit;
+  const columns = e && columnsCache.get(e.table);
+  if (!e || !columns || (current() as SqlTab).out?.search?.trim()) return null;
+  const names = new Set(columns.map((c) => c.name));
+  const plain = r.result.columns.every((c) => names.has(c)) && new Set(r.result.columns).size === r.result.columns.length;
+  return plain && grid.keyOf(e) ? e : null;
+}
+
+/** The strip's edit controls for a result edited in place. */
+function showResultEdits(target: grid.EditTab | null) {
+  const n = target?.staged.count ?? 0;
+  const [msg, kind] = target?.message ?? ["", ""];
+  const info = $("result-edit-info");
+  info.textContent = n ? `${n} unsaved change${n === 1 ? "" : "s"}` : target ? msg || "Editable" : "";
+  info.className = `result-edit-info ${n ? "" : kind}`;
+  info.title = target ? `Double-click a cell to edit; changes save to ${target.table}` : "";
+  for (const id of ["result-discard", "result-preview", "result-save"]) $(id).hidden = !n;
+  $("result-add-row").hidden = !target;
+}
+
+/** The SQL tab's result whose rows grid edits apply to right now, if any. */
+function resultTarget() {
+  const tab = current();
+  const r = tab?.kind === "sql" ? tab.out?.tabs.find((x) => x.id === tab.out!.shown) : undefined;
+  return r && settings.resultsMode === "tabs" ? editable(r) : null;
+}
+
+/** Runs a result's statement again after its edits were saved, keeping as many rows as it showed. */
+async function reloadResult(edit: grid.EditTab) {
+  const tab = current();
+  const r = tab?.kind === "sql" ? tab.out?.tabs.find((x) => x.edit === edit) : undefined;
+  if (!active || !r || tab?.kind !== "sql") return;
+  const maxRows = Math.max(r.result.rows.length, rowLimit() ?? 0) || null;
+  try {
+    const ran = await call<Ran>("run_query", { name: active.name, sql: r.sql, confirmed: false, unlock: null, maxRows });
+    const next = ran.results[r.index];
+    if (next?.columns.length) r.result = edit.result = next;
+  } catch (e) {
+    edit.message = [`Saved, but reloading failed: ${e}`, "error"];
+  }
+  if (tab.id === currentId) showResults(tab);
 }
 
 function resultMenu(tab: SqlTab, r: ResultTab): MenuItem[] {
@@ -1684,7 +1759,10 @@ async function loadMore(tab: SqlTab, r: ResultTab) {
     const ran = await guarded(conn.name, (a) => call<Ran>("run_query", { name: conn.name, sql: r.sql, ...a, maxRows }),
       () => ask(`Run this on "${conn.name}" again?`, r.sql.trim(), "Run"));
     const next = ran.results[r.index];
-    if (next?.columns.length) r.result = next;
+    if (next?.columns.length && !r.edit?.staged.count) {
+      r.result = next;
+      if (r.edit) r.edit.result = next;
+    }
     tab.status = [`${fmt(r.result.rows.length)} rows${r.result.truncated ? " (more not loaded)" : ""} · ${Math.round(performance.now() - t0)} ms`, "done"];
   } catch (e) {
     tab.status = [e === CANCELLED ? "Cancelled" : String(e), e === CANCELLED ? "" : "error"];
@@ -1755,8 +1833,9 @@ async function runAll() {
 const numeric = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i;
 
 type RenderOptions = {
-  sort: Sort[];
-  onSort: (column: string, add: boolean) => void;
+  /** Without these the headers don't sort (SQL results). */
+  sort?: Sort[];
+  onSort?: (column: string, add: boolean) => void;
   /** The table the rows come from, for "Copy as INSERT". */
   table: string;
   /** Extra context-menu items for a cell. */
@@ -1782,18 +1861,19 @@ function gridTable(r: QueryResult, offset: number, sorting?: RenderOptions): HTM
   head.append(el("th", { className: "rownum" }));
   for (const c of r.columns) {
     const th = el("th", { textContent: c });
-    if (sorting) {
+    if (sorting?.onSort && sorting.sort) {
+      const { sort, onSort } = sorting;
       th.className = "sortable";
       th.title = "Sort by this column; Shift-click to add it to the sort";
-      const i = sorting.sort.findIndex((s) => s.column === c);
+      const i = sort.findIndex((s) => s.column === c);
       if (i >= 0) {
-        const s = sorting.sort[i];
-        th.append(el("span", { className: "sort", textContent: `${s.desc ? "▼" : "▲"}${sorting.sort.length > 1 ? i + 1 : ""}` }));
+        const s = sort[i];
+        th.append(el("span", { className: "sort", textContent: `${s.desc ? "▼" : "▲"}${sort.length > 1 ? i + 1 : ""}` }));
         th.setAttribute("aria-sort", s.desc ? "descending" : "ascending");
       }
-      th.onclick = (e) => sorting.onSort(c, e.shiftKey);
-      if (sorting.resize) th.append(resizeGrip(th, c, sorting.resize));
+      th.onclick = (e) => onSort(c, e.shiftKey);
     }
+    if (sorting?.resize) th.append(resizeGrip(th, c, sorting.resize));
     head.append(th);
   }
   const body = table.createTBody();
@@ -2028,7 +2108,7 @@ document.addEventListener("keydown", (e) => {
   if (!(e.metaKey || e.ctrlKey) || $("workspace").hidden || typingSomewhere() || document.querySelector("dialog[open]")) return;
   const key = e.key.toLowerCase();
   const tab = current();
-  const rows = tab?.kind === "table" && tab.view === "data" ? tab : null;
+  const rows = tab?.kind === "table" ? (tab.view === "data" ? tab : null) : resultTarget();
   if (key === "z" && rows) (e.preventDefault(), e.shiftKey ? grid.redo(rows) : grid.undo(rows));
   else if (key === "backspace" && rows && selection?.r === rows.result) (e.preventDefault(), grid.deleteRows(rows, selectedRows()));
   else if (key === "c" && selection) (e.preventDefault(), copySelection("plain"));
@@ -2054,10 +2134,11 @@ document.addEventListener("keydown", (e) => {
 // ⌘V on the grid pastes tab-separated text into the selected cells.
 document.addEventListener("paste", (e) => {
   const tab = current();
-  if (typingSomewhere() || document.querySelector("dialog[open]") || tab?.kind !== "table" || tab.view !== "data") return;
-  if (!selection || selection.r !== tab.result) return;
+  const rows = tab?.kind === "table" ? (tab.view === "data" ? tab : null) : resultTarget();
+  if (typingSomewhere() || document.querySelector("dialog[open]") || !rows) return;
+  if (!selection || selection.r !== rows.result) return;
   e.preventDefault();
-  grid.paste(tab, selectedBlock(selection), e.clipboardData?.getData("text/plain") ?? "");
+  grid.paste(rows, selectedBlock(selection), e.clipboardData?.getData("text/plain") ?? "");
 });
 
 function updateCursor() {
@@ -2090,12 +2171,31 @@ $("discard-edits").onclick = () => {
 $("toggle-filters").onclick = () => toggleFilters();
 $("add-row").onclick = () => current()?.kind === "table" && grid.addRow(current() as TableTab);
 $("preview-edits").onclick = () => current()?.kind === "table" && grid.preview(current() as TableTab);
+$("result-save").onclick = () => saveEdits();
+$("result-preview").onclick = () => {
+  const t = resultTarget();
+  if (t) grid.preview(t);
+};
+$("result-discard").onclick = () => {
+  const t = resultTarget();
+  if (t) (t.staged.clear(), renderMain());
+};
+$("result-add-row").onclick = () => {
+  const t = resultTarget();
+  if (t) grid.addRow(t);
+};
+$("result-search").addEventListener("input", (e) => {
+  const tab = current();
+  if (tab?.kind !== "sql" || !tab.out) return;
+  tab.out.search = (e.target as HTMLInputElement).value;
+  showResults(tab);
+});
 grid.initGridEdit({
   call,
   conn: () => active,
   columns: (table) => columnsCache.get(table),
   render: renderMain,
-  reload: (tab) => loadTable(tab as TableTab),
+  reload: (tab) => ("kind" in tab ? loadTable(tab as TableTab) : reloadResult(tab)),
   confirm: confirmDialog,
   fill: fillCell,
 });

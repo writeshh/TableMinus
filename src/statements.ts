@@ -1,6 +1,6 @@
 // Reads SQL the way the server will: splitting statements at semicolons and finding query parameters, both only
-// outside strings, quoted names, comments and Postgres dollar quotes. Pure, so it's tested on its own
-// (statements.test.ts).
+// outside strings, quoted names, comments and Postgres dollar quotes; and finding the one table a plain SELECT
+// reads. Pure, so it's tested on its own (statements.test.ts).
 
 export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite";
 export type Statement = { from: number; to: number; text: string };
@@ -136,4 +136,21 @@ function isOnlyComments(text: string, mysql: boolean) {
     .replace(mysql ? /(--|#)[^\n]*/g : /--[^\n]*/g, "")
     .trim();
   return stripped === "";
+}
+
+/** The table a plain `select … from t [where …]` reads, as `tables` names it; null for joins, unions, grouping,
+ *  subqueries and anything else whose rows don't map one to one onto a table's rows. */
+export function sourceTable(sql: string, tables: string[]): string | null {
+  const s = sql.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "").trim();
+  if (/\b(join|union|intersect|except|group\s+by|having|distinct|window)\b|\(\s*select\b/i.test(s)) return null;
+  const m = /^select\b[\s\S]+?\bfrom\s+([`"]?[\w$]+[`"]?(?:\.[`"]?[\w$]+[`"]?)?)\s*(?:(?:as\s+)?\w+\s*)?(?:\b(?:where|order|limit|offset|fetch)\b[\s\S]*)?;?$/i.exec(s);
+  if (!m) return null;
+  const name = m[1].replace(/[`"]/g, "");
+  const lower = name.toLowerCase();
+  return (
+    tables.find((t) => t === name) ??
+    tables.find((t) => t === `public.${name}`) ??
+    tables.find((t) => t.toLowerCase() === lower || t.toLowerCase().endsWith(`.${lower}`)) ??
+    null
+  );
 }

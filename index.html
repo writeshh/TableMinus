@@ -359,7 +359,16 @@
             <button id="ask-ok" class="danger"></button>
           </div>
         </div>
-        <nav id="result-strip" class="result-strip" hidden><div id="result-tabs" class="result-tabs" role="tablist"></div></nav>
+        <nav id="result-strip" class="result-strip" hidden>
+          <div id="result-tabs" class="result-tabs" role="tablist"></div>
+          <span id="result-edit-info" class="result-edit-info"></span>
+          <button id="result-add-row" class="ghost" title="Add a row" hidden>+ Row</button>
+          <button id="result-preview" class="ghost" title="Preview the changes as SQL" hidden>SQL</button>
+          <button id="result-discard" hidden>Discard</button>
+          <button id="result-save" class="primary" title="Save changes" hidden>Save</button>
+          <span id="result-found" class="result-found"></span>
+          <input id="result-search" type="search" placeholder="Search result" hidden />
+        </nav>
         <div id="filters" class="filters" hidden></div>
         <style id="column-layout"></style>
         <div class="grid-area">
