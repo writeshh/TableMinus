@@ -334,7 +334,10 @@
         </div>
         <div id="filters" class="filters" hidden></div>
         <style id="column-layout"></style>
-        <div id="out"></div>
+        <div class="grid-area">
+          <div id="out"></div>
+          <aside id="row-detail" class="row-detail" hidden></aside>
+        </div>
         <footer id="table-foot" class="table-foot" hidden>
           <div class="seg" id="view-seg"><button data-view="data">Data</button><button data-view="structure">Structure</button></div>
           <button id="toggle-filters" class="ghost" title="Filter rows (⌘F)">Filters</button>
@@ -342,7 +345,9 @@
           <button id="export-table" class="ghost" title="Export these rows to a file">Export…</button>
           <span id="foot-msg" class="foot-msg"></span>
           <span class="spacer"></span>
+          <button id="add-row" class="ghost" title="Add a row" hidden>+ Row</button>
           <span id="edit-info" class="edit-info"></span>
+          <button id="preview-edits" class="ghost" hidden title="Preview the changes as SQL">SQL</button>
           <button id="discard-edits" hidden>Discard</button>
           <button id="save-edits" class="primary" hidden title="Save changes (⌘S)">Save</button>
           <span id="page-info" class="page-info"></span>
