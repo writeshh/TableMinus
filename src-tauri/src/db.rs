@@ -998,6 +998,21 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a local Postgres"]
+    fn local_postgres_query_results_should_return_every_statements_result() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Postgres, "postgres://postgres@127.0.0.1:5432?sslmode=prefer").await;
+            let sql = "create temporary table tm_multi(a int); insert into tm_multi values (1), (2), (3); \
+                       select a from tm_multi order by a; select 'x' as b";
+            let r = c.query_results(sql, Some(2)).await.unwrap();
+            assert_eq!(r.len(), 4);
+            assert_eq!((r[1].columns.len(), r[1].affected), (0, 3), "the insert's count");
+            assert_eq!((r[2].rows.len(), r[2].truncated), (2, true));
+            assert_eq!((r[3].rows.len(), r[3].truncated), (0, true));
+        });
+    }
+
+    #[test]
     fn query_results_should_share_the_row_limit_across_results() {
         tauri::async_runtime::block_on(async {
             let mut c = open(Engine::Sqlite, ":memory:").await;
