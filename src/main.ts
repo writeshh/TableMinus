@@ -14,8 +14,10 @@ import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
 import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
-import { addCommands, bindings, commands, isMac, onBindingsChanged } from "./commands";
+import { addCommands, bindings, commands, isMac, onBindingsChanged, setOverrides } from "./commands";
+import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
+import { initMenu } from "./menu";
 import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, treeMenu } from "./sidebar";
 import { label } from "./keys";
 import "./workspace.css";
@@ -2123,10 +2125,13 @@ type Settings = {
   showInvisibles: boolean;
   /** Save each connection's SQL tabs and reopen them on connect. */
   keepTabs: boolean;
+  /** Rebound shortcuts, command id → keys (see commands.ts); a missing id keeps its defaults. */
+  shortcuts: Record<string, string[]>;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeDefault: true, queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
+  shortcuts: {},
 };
 let settings: Settings = loadSettings();
 
@@ -2170,11 +2175,13 @@ function applySettings() {
   $<HTMLInputElement>("show-invisibles").checked = settings.showInvisibles;
   $<HTMLInputElement>("keep-tabs").checked = settings.keepTabs;
   editor.setDisplay(settings.wrapLines, settings.showInvisibles);
+  setOverrides(settings.shortcuts);
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
   invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout, maxRows: settings.sqlLimit }).catch(() => {});
 }
 
 function showTab(tab: string) {
+  if (tab === "shortcuts") renderShortcuts($("shortcuts-pane"), settings.shortcuts, (o) => setSetting("shortcuts", o));
   for (const t of $("settings").querySelectorAll<HTMLElement>("[role=tab]")) t.setAttribute("aria-selected", String(t.dataset.tab === tab));
   for (const p of $("settings").querySelectorAll<HTMLElement>("[data-pane]")) p.hidden = p.dataset.pane !== tab;
 }
@@ -2198,6 +2205,7 @@ $<HTMLSelectElement>("safe-default").onchange = (e) => setSetting("safeDefault",
 $("settings-reset").onclick = () => {
   settings = { ...DEFAULT_SETTINGS };
   setSetting("theme", settings.theme); // persists and re-applies everything
+  if (!$("shortcuts-pane").hidden) showTab("shortcuts");
 };
 $("settings-done").onclick = () => $<HTMLDialogElement>("settings").close();
 
@@ -2328,6 +2336,16 @@ function anythingItems(): AnythingItem[] {
       .map((c) => ({ label: c.label.replace(/…$/, ""), kind: "command", detail: keyLabel(c.id), run: c.run })),
   ];
 }
+
+const hasTools = () => inWorkspace() && !!active;
+addCommands([
+  { id: "backup", label: "Backup…", menu: "Tools", when: hasTools, run: () => openBackup(active!, info?.database) },
+  { id: "restore", label: "Restore…", menu: "Tools", when: hasTools, run: () => openRestore(active!, info?.database, confirmDialog) },
+  { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && active!.kind !== "sqlite",
+    sep: true, run: () => openProcesses(active!, confirmDialog) },
+  { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
+]);
+initMenu();
 
 /** Shortcut hints next to buttons, kept in step with Settings › Shortcuts. */
 function showKeys() {

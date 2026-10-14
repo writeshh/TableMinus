@@ -18,7 +18,7 @@ export type Command = {
   sep?: boolean;
   /** Runs while a dialog is open too (Settings). Everything else waits for the dialog to close. */
   overDialogs?: boolean;
-  /** Left out of the menu bar (e.g. ⌘1…⌘9 beyond the first, which the menu lists once). */
+  /** Left out of Open Anything (e.g. Tab 1…9, which only make sense as keys). */
   hidden?: boolean;
 };
 
@@ -40,6 +40,7 @@ export function bindings(id: string): string[] {
 
 /** Replaces the user's shortcuts (id → keys; a missing id keeps its defaults). */
 export function setOverrides(o: Record<string, string[]>) {
+  if (JSON.stringify(o) === JSON.stringify(overrides)) return; // every settings change passes through here
   overrides = o;
   for (const f of changed) f();
 }

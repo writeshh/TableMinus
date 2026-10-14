@@ -51,3 +51,17 @@ dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
 .overview { width: 260px; }
 .overview h4 { margin: 0 0 8px; overflow-wrap: anywhere; }
 .overview dl { margin: 0; }
+
+/* Settings › Shortcuts */
+#shortcuts-pane { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; }
+#shortcuts-pane[hidden] { display: none; }
+.shortcut-head { display: flex; gap: 8px; }
+.shortcut-search { flex: 1; }
+.shortcut-list { overflow: auto; min-height: 0; flex: 1; }
+.shortcut-row { display: grid; grid-template-columns: 82px 1fr auto auto auto; gap: 6px; align-items: center; padding: 3px 0; }
+.shortcut-row .menu-name { color: var(--muted); font-size: 11px; }
+.shortcut-row .keys { min-width: 96px; display: flex; gap: 4px; justify-content: center; font-size: 12px; }
+.shortcut-row .keys.recording { border-color: var(--accent); color: var(--accent); }
+.shortcut-row kbd { font: 12px var(--mono); }
+.shortcut-row kbd.clash { color: var(--danger); }
+.shortcut-row button.ghost { font-size: 12px; padding: 2px 6px; }
