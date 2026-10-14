@@ -22,6 +22,10 @@ pub struct Browse {
     /// Also count the rows that match, for "1–300 of N".
     #[serde(default)]
     pub count: bool,
+    /// With `count` and no filters: when the catalog estimates more rows than this, the estimate is the total
+    /// and nothing is counted (an exact count reads the whole table).
+    #[serde(default)]
+    pub estimate_over: Option<u64>,
     /// Also read each row's identity (ctid on Postgres, rowid on SQLite) where the table has one, so a change can
     /// be saved to a row its key doesn't single out.
     #[serde(default)]
@@ -89,6 +93,8 @@ pub struct Page {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub total: Option<u64>,
+    /// `total` is the catalog's estimate (see [`Browse::estimate_over`]).
+    pub estimated: bool,
     /// Each row's identity, when asked for and the table has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ids: Option<Vec<String>>,
@@ -249,8 +255,26 @@ impl Conn {
         let sql = format!("{} limit {} offset {}", s.rows, req.limit.min(MAX_PAGE), req.offset);
         let mut rows = self.fetch_with(&sql, &s.bound()).await?;
         let ids = s.identity.then(|| rows.iter_mut().map(|r| r.pop().flatten().unwrap_or_default()).collect());
-        let total = if req.count { self.count(&s).await? } else { None };
-        Ok(Page { columns: s.columns, rows, total, ids })
+        let estimate = match req.estimate_over {
+            Some(over) if req.count && req.filters.is_empty() => self.estimate(&req.table, over).await,
+            _ => None,
+        };
+        let total = match estimate {
+            Some(n) => Some(n),
+            None if req.count => self.count(&s).await?,
+            None => None,
+        };
+        Ok(Page { columns: s.columns, rows, total, estimated: estimate.is_some(), ids })
+    }
+
+    /// The catalog's row estimate for `table`, when it is one and above `over`. SQLite keeps none.
+    async fn estimate(&mut self, table: &str, over: u64) -> Option<u64> {
+        if matches!(self, Conn::Lite(_)) {
+            return None;
+        }
+        // No estimate (never analyzed, or the catalog can't say) just means counting.
+        let o = self.overview(table).await.ok()?;
+        o.rows.filter(|&n| o.estimated && n > over)
     }
 }
 
@@ -299,6 +323,7 @@ mod tests {
             limit: 100,
             offset: 0,
             count: true,
+            estimate_over: None,
             identity: false,
         }
     }
@@ -427,6 +452,47 @@ mod tests {
         });
     }
 
+    #[test]
+    fn browse_should_count_sqlite_rows_exactly_whatever_the_estimate_threshold() {
+        tauri::async_runtime::block_on(async {
+            let mut c = people().await;
+            let page = c.browse(&Browse { estimate_over: Some(0), ..request(vec![]) }).await.unwrap();
+            assert_eq!((page.total, page.estimated), (Some(4), false));
+        });
+    }
+
+    /// The catalog estimate stands in for the count above the threshold, and only without filters. Runs in a
+    /// scratch database, dropped afterwards. `DBM_PG_URL` points elsewhere than the default server.
+    #[test]
+    #[ignore = "needs a local Postgres; creates and drops a scratch database"]
+    fn local_postgres_browse_should_estimate_large_tables() {
+        tauri::async_runtime::block_on(async {
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+            let open = |url: String| async move {
+                Conn::open(Engine::Postgres, &url, None, &Tls::default(), &Options::default(), None).await.unwrap()
+            };
+            let mut admin = open(url.clone()).await;
+            let db = format!("dbm_estimate_{}", std::process::id());
+            admin.query(&format!("create database {db}")).await.unwrap();
+            let mut u = url::Url::parse(&url).unwrap();
+            u.set_path(&db);
+            let mut c = open(u.to_string()).await;
+            c.query("create table people(id int primary key, name text)").await.unwrap();
+            c.query("insert into people select n, 'p' || n from generate_series(1, 500) n").await.unwrap();
+            c.query("analyze people").await.unwrap();
+            let estimated = c.browse(&Browse { estimate_over: Some(100), ..request(vec![]) }).await.unwrap();
+            let small = c.browse(&Browse { estimate_over: Some(1000), ..request(vec![]) }).await.unwrap();
+            let filtered = Browse { estimate_over: Some(100), ..request(vec![filter(Some("id"), Op::Le, "10")]) };
+            let filtered = c.browse(&filtered).await.unwrap();
+            drop(c);
+            admin.query(&format!("drop database {db}")).await.unwrap();
+            assert_eq!((estimated.total, estimated.estimated), (Some(500), true));
+            assert_eq!((small.total, small.estimated), (Some(500), false));
+            assert_eq!((filtered.total, filtered.estimated), (Some(10), false));
+        });
+    }
+
     /// Typed MySQL values through prepared statements read like the text protocol's. Creates and drops a
     /// scratch database, because `information_schema` doesn't list temporary tables.
     #[test]
@@ -458,6 +524,7 @@ mod tests {
                 limit: 10,
                 offset: 0,
                 count: true,
+                estimate_over: None,
                 identity: false,
             };
             let page = c.browse(&req).await;

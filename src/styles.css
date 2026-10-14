@@ -178,7 +178,7 @@ aside { display: flex; flex-direction: column; }
 .sql-pane .editor { background: var(--editor-bg); flex: 1; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--line); }
 .cursor { font: 11px var(--mono); color: var(--muted); }
 .table-foot { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); flex: none; }
-.page-info { color: var(--muted); font-variant-numeric: tabular-nums; }
+.page-info { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-foot button.ghost { font-size: 16px; padding: 2px 10px; }
 button:disabled { opacity: 0.35; pointer-events: none; }
 th.rownum, td.rownum { position: sticky; left: 0; text-align: right; color: var(--muted); background: var(--side); min-width: 44px; font-variant-numeric: tabular-nums; }
@@ -210,6 +210,7 @@ dialog.prefs footer { padding: 12px 18px 16px; margin: 0; }
 .check { display: flex; align-items: center; gap: 8px; color: var(--fg); }
 .check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .num-input { width: 76px; text-align: right; font-variant-numeric: tabular-nums; }
+.num-input.wide-num { width: 110px; }
 .hint.inline { margin-left: 8px; }
 .note { margin: 0 0 0 164px; }
 .seg { display: inline-flex; justify-self: start; padding: 2px; gap: 2px; border-radius: 8px; background: var(--hover); }
@@ -302,6 +303,16 @@ th .sort { margin-left: 4px; color: var(--accent); font-size: 10px; }
 th .grip { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 1; }
 th .grip:hover, th .grip.active { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 .columns-menu { max-height: min(60vh, 420px); overflow: auto; }
+.paging-menu { width: 320px; display: grid; gap: 8px; }
+.paging-row { display: flex; align-items: center; gap: 8px; }
+.paging-row > span:first-child { width: 96px; color: var(--muted); flex: none; }
+.paging-row > span + span { flex: 1; font-variant-numeric: tabular-nums; }
+.table-foot button.page-info { font-size: 12px; padding: 2px 6px; }
+/* Thin scroll bars over the grid that show while the pointer is on it (WebKit's pseudo-elements: the app's webview) */
+body.hide-scrollbars #out::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+body.hide-scrollbars #out::-webkit-scrollbar-corner { background: transparent; }
+body.hide-scrollbars #out::-webkit-scrollbar-thumb { border-radius: 4px; background: transparent; }
+body.hide-scrollbars #out:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 28%, transparent); }
 .columns-menu label.check { padding: 3px 2px; }
 
 /* Import and export (importexport.ts) */

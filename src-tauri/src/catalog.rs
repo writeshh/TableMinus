@@ -131,6 +131,7 @@ impl Conn {
             limit: SEARCH_CAP,
             offset: 0,
             count: false,
+            estimate_over: None,
             identity: false,
         };
         let s = self.select(&req).await?;

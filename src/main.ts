@@ -1371,8 +1371,15 @@ type SqlTab = {
 };
 type Sort = { column: string; desc: boolean };
 type TableTab = {
-  id: number; kind: "table"; title: string; table: string; view: "data" | "structure"; page: number;
-  total?: number; result?: QueryResult; error?: string; loading?: boolean;
+  id: number; kind: "table"; title: string; table: string; view: "data" | "structure";
+  /** The first row on the page, from 0. */
+  offset: number;
+  total?: number;
+  /** `total` is the catalog's estimate; Count in the page settings replaces it with the exact number. */
+  estimated?: boolean;
+  /** The default sort was applied (on the first load, once the key is known). */
+  sortSet?: boolean;
+  result?: QueryResult; error?: string; loading?: boolean;
   sort: Sort[]; filters: FilterRow[]; combine: "and" | "or"; filtersShown: boolean; layout: Layout;
   /** Staged cell edits, added and deleted rows (grid-edit.ts). */
   staged: Staged;
@@ -1384,7 +1391,6 @@ type TableTab = {
 };
 type Tab = SqlTab | TableTab;
 type StatusKind = "" | "busy" | "error" | "done";
-const PAGE = 300;
 let tabs: Tab[] = [];
 let currentId = 0;
 let nextId = 1;
@@ -1432,7 +1438,7 @@ function openTable(table: string, view: TableTab["view"] = "data", create = fals
     return select(existing.id);
   }
   const tab: TableTab = {
-    id: nextId++, kind: "table", title: table, table, view, page: 0, staged: new Staged(), create,
+    id: nextId++, kind: "table", title: table, table, view, offset: 0, staged: new Staged(), create,
     sort: [], filters: [blankFilter()], combine: "and", filtersShown: false, layout: loadLayout(active!.name, table),
   };
   tabs.push(tab);
@@ -1606,14 +1612,18 @@ function renderMain() {
   }
   $("result-strip").hidden = true;
   for (const b of $("view-seg").querySelectorAll<HTMLElement>("button")) b.setAttribute("aria-pressed", String(b.dataset.view === tab.view));
-  const from = tab.page * PAGE;
+  const from = tab.offset;
   const shown = tab.result?.rows.length ?? 0;
+  const total = tab.total === undefined ? "?" : `${tab.estimated ? "~" : ""}${fmt(tab.total)}`;
   $("page-info").textContent =
     tab.view === "structure" ? (tab.create ? "New table" : "")
     : tab.loading ? "Loading…"
-    : `${shown ? from + 1 : 0}–${from + shown} of ${tab.total ?? "?"} rows`;
-  $<HTMLButtonElement>("page-prev").disabled = tab.view !== "data" || tab.page === 0;
-  $<HTMLButtonElement>("page-next").disabled = tab.view !== "data" || tab.total === undefined || from + shown >= tab.total;
+    : `${shown ? fmt(from + 1) : 0}–${fmt(from + shown)} of ${total} rows`;
+  $<HTMLButtonElement>("page-info").disabled = tab.view !== "data";
+  $<HTMLButtonElement>("page-prev").disabled = tab.view !== "data" || tab.offset === 0;
+  // An estimate can be off either way: a full page means there may be more.
+  const last = shown < settings.pageSize || (!tab.estimated && tab.total !== undefined && from + shown >= tab.total);
+  $<HTMLButtonElement>("page-next").disabled = tab.view !== "data" || last;
   showPending(tab);
   const [msg, kind] = tab.message ?? ["", ""];
   const m = $("foot-msg");
@@ -1700,17 +1710,22 @@ async function loadTable(tab: TableTab) {
   tab.error = undefined;
   if (tab.id === currentId) renderMain();
   try {
-    await loadColumns(tab.table); // structure view, the filter bar's columns, and the primary key for editing
+    // Structure view, the filter bar's columns, and the primary key for editing and the default sort.
+    const columns = await loadColumns(tab.table);
     if (tab.view === "data") {
-      // ponytail: exact count(*) can be slow on huge tables; estimate from catalog stats when that hurts.
+      if (!tab.sortSet) {
+        tab.sortSet = true;
+        const key = settings.defaultSort === "none" ? [] : columns.filter((c) => c.primary);
+        if (!tab.sort.length) tab.sort = key.map((c) => ({ column: c.name, desc: settings.defaultSort === "desc" }));
+      }
       const request = {
-        table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort,
-        limit: PAGE, offset: tab.page * PAGE, count: tab.total === undefined, identity: true,
+        ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset, count: tab.total === undefined,
+        estimate_over: settings.estimateOver || null, identity: true,
       };
-      const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null; ids?: string[] }>("browse", { name, request });
+      const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null; estimated: boolean; ids?: string[] }>("browse", { name, request });
       tab.result = { columns: page.columns, rows: page.rows, affected: 0 };
       tab.ids = page.ids;
-      if (page.total !== null) tab.total = page.total;
+      if (page.total !== null) (tab.total = page.total), (tab.estimated = page.estimated);
     }
   } catch (e) {
     tab.error = String(e);
@@ -1740,9 +1755,14 @@ function showFilters(tab: Tab) {
   renderFilters(bar, tab, columns, () => applyFilters(tab));
 }
 
+const MAX_PAGE = 100_000; // browse.rs MAX_PAGE
+
+/** The rows a table tab shows, without paging: its table, filters and sort. */
+const browseRequest = (tab: TableTab) => ({ table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort });
+
 async function applyFilters(tab: TableTab) {
   if (!(await okToDiscard(tab))) return;
-  tab.page = 0;
+  tab.offset = 0;
   tab.total = undefined; // a different filter matches a different number of rows
   loadTable(tab);
 }
@@ -1766,7 +1786,7 @@ async function sortBy(tab: TableTab, column: string, add: boolean) {
   else if (i < 0) tab.sort.push(next!);
   else if (next) tab.sort[i] = next;
   else tab.sort.splice(i, 1);
-  tab.page = 0;
+  tab.offset = 0;
   loadTable(tab);
 }
 
@@ -2343,11 +2363,31 @@ function resizeGrip(th: HTMLElement, column: string, resize: NonNullable<RenderO
   return grip;
 }
 
+/** Shows `menu` above `anchor`, a footer button; a click outside or Esc closes it. */
+function openPopover(anchor: HTMLElement, menu: HTMLElement) {
+  menuClose?.();
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  const { width, height } = menu.getBoundingClientRect();
+  Object.assign(menu.style, { left: `${clamp(r.left, 8, innerWidth - width - 8)}px`, top: `${Math.max(8, r.top - height - 6)}px` });
+  const onDown = (ev: Event) => !menu.contains(ev.target as Node) && ev.target !== anchor && close();
+  // Esc closes only the menu, not a window it sits in.
+  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && (ev.preventDefault(), ev.stopPropagation(), close());
+  function close() {
+    menu.remove();
+    removeEventListener("pointerdown", onDown, true);
+    removeEventListener("keydown", onKey, true);
+    menuClose = null;
+  }
+  addEventListener("pointerdown", onDown, true);
+  addEventListener("keydown", onKey, true);
+  menuClose = close;
+}
+
 /** The Columns button: a checklist of the table's columns. Unchecking hides a column. */
 function showColumnsMenu() {
   const tab = current();
   if (tab?.kind !== "table" || !tab.result) return;
-  menuClose?.();
   const t = tab;
   const menu = el("div", { className: "popover columns-menu" });
   const save = () => (saveLayout(active!.name, t.table, t.layout), applyLayout(t));
@@ -2368,22 +2408,52 @@ function showColumnsMenu() {
   const foot = el("footer");
   foot.append(showAll, el("span", { className: "spacer" }), reset);
   menu.append(...boxes.map((b) => b.row), foot);
-  document.body.append(menu);
-  const r = $("columns-button").getBoundingClientRect();
-  const h = menu.getBoundingClientRect().height;
-  Object.assign(menu.style, { left: `${Math.max(8, r.left)}px`, top: `${Math.max(8, r.top - h - 6)}px` });
-  const onDown = (ev: Event) => !menu.contains(ev.target as Node) && ev.target !== $("columns-button") && close();
-  // Esc closes only the menu, not a window it sits in.
-  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && (ev.preventDefault(), ev.stopPropagation(), close());
-  function close() {
-    menu.remove();
-    removeEventListener("pointerdown", onDown, true);
-    removeEventListener("keydown", onKey, true);
-    menuClose = null;
-  }
-  addEventListener("pointerdown", onDown, true);
-  addEventListener("keydown", onKey, true);
-  menuClose = close;
+  openPopover($("columns-button"), menu);
+}
+
+/** The page settings (Ref: PagingPopover, EstimatedOffsetPopover): rows per page, the row to start at, and the
+ *  row count, which Count makes exact when it is an estimate. */
+function showPagingMenu() {
+  const tab = current();
+  if (tab?.kind !== "table" || tab.view !== "data") return;
+  const t = tab;
+  const size = el("input", { type: "number", min: "1", max: String(MAX_PAGE), value: String(settings.pageSize), className: "num-input" });
+  const start = el("input", { type: "number", min: "1", value: String(t.offset + 1), className: "num-input wide-num" });
+  const total = el("span");
+  const count = el("button", { type: "button", textContent: "Count" });
+  const showTotal = () => {
+    total.textContent = t.total === undefined ? "Not counted" : `${t.estimated ? "About " : ""}${fmt(t.total)} rows${t.estimated ? " (estimated)" : ""}`;
+    count.hidden = t.total !== undefined && !t.estimated;
+  };
+  showTotal();
+  count.onclick = async () => {
+    count.disabled = true;
+    total.textContent = "Counting…";
+    try {
+      const page = await call<{ total: number | null }>("browse", { name: sessionKey(), request: { ...browseRequest(t), limit: 0, offset: 0, count: true } });
+      if (page.total !== null) (t.total = page.total), (t.estimated = false);
+      if (t.id === currentId) renderMain();
+    } catch (e) {
+      total.textContent = String(e);
+    }
+    count.disabled = false;
+    if (total.textContent === "Counting…") showTotal();
+  };
+  const apply = el("button", { type: "submit", className: "primary", textContent: "Go" });
+  const row = (label: string, ...kids: (Node | string)[]) => el("label", { className: "paging-row" }, el("span", { textContent: label }), ...kids);
+  const menu = el("form", { className: "popover paging-menu" },
+    row("Rows per page", size), row("Start at row", start), el("div", { className: "paging-row" }, el("span", { textContent: "Total" }), total, count),
+    el("footer", {}, el("span", { className: "spacer" }), apply));
+  menu.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!(await okToDiscard(t))) return;
+    setSetting("pageSize", clamp(Math.round(Number(size.value)) || settings.pageSize, 1, MAX_PAGE));
+    t.offset = Math.max(0, Math.round(Number(start.value) || 1) - 1);
+    menuClose?.();
+    loadTable(t);
+  };
+  openPopover($("page-info"), menu);
+  start.select();
 }
 
 /** A short note where the current tab shows messages: the run bar for SQL tabs, the footer for table tabs. */
@@ -2552,7 +2622,7 @@ for (const b of $("view-seg").querySelectorAll<HTMLElement>("button"))
 const turnPage = async (delta: number) => {
   const tab = current();
   if (tab?.kind !== "table" || !(await okToDiscard(tab))) return;
-  tab.page = Math.max(0, tab.page + delta);
+  tab.offset = Math.max(0, tab.offset + delta * settings.pageSize);
   loadTable(tab);
 };
 $("save-edits").onclick = () => saveEdits();
@@ -2704,7 +2774,7 @@ function transferMenu(table: string): MenuItem[] {
 $("export-table").onclick = () => {
   const tab = current();
   if (tab?.kind !== "table" || !active) return;
-  const request = { table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort, limit: PAGE, offset: tab.page * PAGE, count: false };
+  const request = { ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset, count: false };
   const source: ExportSource = { kind: "rows", request, pageRows: tab.result?.rows.length ?? 0 };
   exportDialog(transferCtx(), source);
 };
@@ -2719,6 +2789,7 @@ $("export-result").onclick = (e) => {
 };
 $("columns-button").onclick = () => (menuClose ? menuClose() : showColumnsMenu());
 $("page-prev").onclick = () => turnPage(-1);
+$("page-info").onclick = showPagingMenu;
 $("page-next").onclick = () => turnPage(1);
 /** Leaves the workspace and closes its session; `next` (else the neighbouring workspace, else the launcher) comes
  *  up. */
@@ -2780,12 +2851,25 @@ type Settings = {
   launcherSort: "name" | "kind" | "tag";
   /** Reconnect, at startup, the workspaces open at quit. */
   reopenWorkspaces: boolean;
+  /** Rows on a table tab's page. */
+  pageSize: number;
+  /** Tables the catalog estimates at this many rows or more show the estimate instead of a count; 0 = always count. */
+  estimateOver: number;
+  /** The sort a table tab opens with. */
+  defaultSort: "none" | "asc" | "desc";
+  /** PostGIS geometry and geography as WKT rather than hex WKB. */
+  geometryWkt: boolean;
+  /** Overlay scroll bars on the grid, shown while scrolling. */
+  hideScrollbars: boolean;
+  /** Write the values updated and deleted rows had to the console log when saving. */
+  logOriginals: boolean;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
   shortcuts: {}, launcherSort: "name", reopenWorkspaces: false,
   resultsMode: "tabs", stopOnError: true, historyYears: 0,
+  pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, hideScrollbars: false, logOriginals: false,
 };
 let settings: Settings = loadSettings();
 
@@ -2836,6 +2920,13 @@ function applySettings() {
   $<HTMLSelectElement>("results-mode").value = settings.resultsMode;
   $<HTMLInputElement>("stop-on-error").checked = settings.stopOnError;
   $<HTMLSelectElement>("history-years").value = String(settings.historyYears);
+  $<HTMLInputElement>("page-size").value = String(settings.pageSize);
+  $<HTMLInputElement>("estimate-over").value = String(settings.estimateOver);
+  $<HTMLSelectElement>("default-sort").value = settings.defaultSort;
+  $<HTMLInputElement>("geometry-wkt").checked = settings.geometryWkt;
+  $<HTMLInputElement>("hide-scrollbars").checked = settings.hideScrollbars;
+  $<HTMLInputElement>("log-originals").checked = settings.logOriginals;
+  document.body.classList.toggle("hide-scrollbars", settings.hideScrollbars);
   const tab = current();
   if (tab?.kind === "sql" && !$("workspace").hidden) showResults(tab);
   editor.setDisplay(settings.wrapLines, settings.showInvisibles);
@@ -2925,6 +3016,12 @@ initFavorites({
 $<HTMLSelectElement>("param-format").onchange = (e) => setSetting("paramFormat", (e.target as HTMLSelectElement).value as Settings["paramFormat"]);
 $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));
+$<HTMLInputElement>("page-size").onchange = (e) => setSetting("pageSize", clamp(Math.round(Number((e.target as HTMLInputElement).value)) || 300, 1, MAX_PAGE));
+$<HTMLInputElement>("estimate-over").onchange = (e) => setSetting("estimateOver", Math.max(0, Math.round(Number((e.target as HTMLInputElement).value)) || 0));
+$<HTMLSelectElement>("default-sort").onchange = (e) => setSetting("defaultSort", (e.target as HTMLSelectElement).value as Settings["defaultSort"]);
+$<HTMLInputElement>("geometry-wkt").onchange = (e) => setSetting("geometryWkt", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("hide-scrollbars").onchange = (e) => setSetting("hideScrollbars", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("log-originals").onchange = (e) => setSetting("logOriginals", (e.target as HTMLInputElement).checked);
 
 // ---------- Commands (commands.ts): shortcuts, and later the menu bar and Open Anything ----------
 
