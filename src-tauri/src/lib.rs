@@ -519,6 +519,14 @@ async fn run_query(
     Ok(Ran { results: live.check(r)?, read_only })
 }
 
+/// Whether safe mode counts `sql` as only reading. The metrics board asks before running anything else, and never
+/// runs it on its own (auto-refresh).
+#[tauri::command]
+async fn is_read_only(open: State<'_, Open>, name: String, sql: String) -> Result<bool> {
+    let kind = open.get(&name).await?.saved.kind;
+    Ok(readonly::is_read_only(kind, &sql))
+}
+
 /// The largest SQL file the editor opens.
 const MAX_SQL_FILE: u64 = 20 * 1024 * 1024;
 
@@ -751,6 +759,7 @@ pub fn run() -> tauri::Result<()> {
             schema,
             read_text_file,
             write_text_file,
+            is_read_only,
             table_structure,
             structure_sql,
             table_op_sql,

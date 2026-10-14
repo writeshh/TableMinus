@@ -1,11 +1,12 @@
-// Settings › Locations, and the files that kept SQL tabs and query history live in (locations.rs). Each file is one
-// JSON object keyed by connection name, held in memory here and written back shortly after a change.
+// Settings › Locations, and the files that kept SQL tabs, saved queries, metrics boards and query history live in
+// (locations.rs). Each file is one JSON object keyed by connection name, held in memory here and written back shortly
+// after a change.
 
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { $, el } from "./dom";
 
-type Doc = "sql_tabs" | "history" | "favorites";
+type Doc = "sql_tabs" | "history" | "favorites" | "metrics";
 /** Where each doc lived before it had a file: localStorage keys `<prefix><connection>`. */
 const LEGACY: Partial<Record<Doc, string>> = { sql_tabs: "sql-tabs:", history: "history:" };
 
@@ -56,7 +57,7 @@ async function write(doc: Doc) {
 }
 
 /** Every doc read; connect waits for this before reading tabs, history and saved queries. */
-export const docsReady = Promise.all([load("sql_tabs"), load("history"), load("favorites")]);
+export const docsReady = Promise.all([load("sql_tabs"), load("history"), load("favorites"), load("metrics")]);
 
 export function docEntry<T>(doc: Doc, conn: string): T | undefined {
   return held.get(doc)?.data[conn] as T | undefined;
@@ -77,7 +78,7 @@ export function setDocEntry(doc: Doc, conn: string, value: unknown) {
 type Location = "connections" | "queries" | "history";
 type Folders = Record<Location, string> & { default: string };
 const ROWS: [Location, string, Doc[]][] = [
-  ["connections", "Connections", []], ["queries", "SQL tabs and saved queries", ["sql_tabs", "favorites"]], ["history", "History", ["history"]],
+  ["connections", "Connections", []], ["queries", "SQL tabs, saved queries and metrics boards", ["sql_tabs", "favorites", "metrics"]], ["history", "History", ["history"]],
 ];
 
 const settings = $("settings");

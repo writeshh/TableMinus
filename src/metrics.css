@@ -1,0 +1,45 @@
+/* Metrics boards (metrics.ts): the board window, its grid of widgets, and a widget's settings. */
+dialog.metrics-board { width: calc(100vw - 32px); height: calc(100vh - 32px); max-width: none; max-height: none; padding: 0; overflow: hidden; }
+dialog.metrics-board[open] { display: flex; flex-direction: column; }
+.board-head { display: flex; align-items: center; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.board-head > select:first-child { max-width: 220px; font-weight: 600; }
+.board-head select { padding: 4px 8px; }
+.board-foot { margin: 0; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 12px; }
+.metrics-board.locked .edit-only { display: none; }
+.board-grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 64px; gap: 10px; padding: 12px; align-content: start; background: var(--side); }
+.board-empty { grid-column: 1 / -1; text-align: center; margin-top: 48px; font-size: 13px; }
+.widget { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.widget.moving { z-index: 1; box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); }
+.widget > header { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: grab; touch-action: none; }
+.metrics-board.locked .widget > header { cursor: default; }
+.widget-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.widget-tools { margin-left: auto; display: flex; gap: 2px; opacity: 0; transition: opacity 120ms ease-out; }
+.widget:hover .widget-tools, .widget:focus-within .widget-tools { opacity: 1; }
+.widget-tools button { padding: 0 6px; font-size: 12px; font-weight: 400; }
+.widget-body { flex: 1; min-height: 0; overflow: auto; padding: 2px 10px 8px; display: flex; flex-direction: column; gap: 4px; }
+.widget-body > input, .widget-body > select, .widget-body > button { width: 100%; padding-block: 4px; }
+.widget.table .widget-body { padding: 0; }
+.widget-note { margin: 0; font-size: 12px; color: var(--muted); }
+.widget-note.error { color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; }
+.widget.table .widget-note { padding: 4px 10px; }
+.widget-chart { flex: 1; min-height: 0; }
+.widget-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, color-mix(in srgb, var(--fg) 25%, transparent) 50% 60%, transparent 60% 70%, color-mix(in srgb, var(--fg) 25%, transparent) 70% 80%, transparent 80%); }
+.widget-table { border-collapse: collapse; width: 100%; font: var(--grid-size) var(--grid-font); }
+.widget-table th { position: sticky; top: 0; background: var(--side); text-align: left; font-weight: 600; }
+.widget-table th, .widget-table td { padding: 3px 10px; border-bottom: 1px solid var(--grid-line); white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.widget-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.widget-table td.null { color: var(--grid-null); }
+.score { flex: 1; display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.score strong { font-size: 36px; font-weight: 600; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.score span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.board-edit { width: min(640px, calc(100vw - 32px)); }
+dialog.board-edit h3, dialog.metrics-board ~ dialog h3 { margin: 0 0 14px; font-size: 15px; }
+.board-form { display: grid; gap: 10px; }
+.board-form .hint { margin: -4px 0 0 106px; }
+.board-form footer { margin-top: 6px; }
+.board-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; align-items: start; }
+.board-row > span:first-child { padding-top: 6px; color: var(--muted); }
+.board-sql { font: 12px/1.45 var(--mono); padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); resize: vertical; width: 100%; }
+.board-form textarea:not(.board-sql) { padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); resize: vertical; width: 100%; }
+@media (prefers-reduced-motion: reduce) { .widget-tools { transition: none; } }

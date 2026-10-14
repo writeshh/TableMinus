@@ -3,6 +3,7 @@
 
 import { el } from "./dom";
 import type { EditTab } from "./grid-edit";
+import type { ChartSpec } from "./chartdata";
 import { highlightSql } from "./editor";
 import "./results.css";
 
@@ -20,6 +21,8 @@ export type ResultTab = {
   readOnly: boolean;
   /** Staged edits, when the statement reads one table (grid-edit.ts); `result` is the same object. */
   edit?: EditTab;
+  /** Shown as a chart instead of the grid, and the chart's columns (kept when switching back). */
+  charted?: boolean; chart?: ChartSpec;
 };
 
 /** One line per statement run. */
