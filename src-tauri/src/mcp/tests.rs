@@ -2,6 +2,7 @@
 
 use super::{Event, Shared, bridge_file, new_token};
 use crate::db::{Conn, Engine, Options};
+use crate::error::Error;
 use crate::{Live, Open, Prefs, store, tls::Tls};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
@@ -30,7 +31,7 @@ fn saved(name: &str, url: &str) -> store::Saved {
         kind: Engine::Sqlite,
         url: url.into(),
         tag: "local".into(),
-        confirm_writes: false,
+        safety: crate::safety::Safety::Silent,
         ssh: None,
         tls: Tls::default(),
         options: Options::default(),
@@ -269,11 +270,55 @@ fn a_connection_in_safe_mode_asks_even_with_approval_off() {
     tauri::async_runtime::block_on(async {
         let s = server("safe-mode").await;
         s.shared.update(|c| c.approval = false).unwrap();
-        s.shared.open.0.lock().await.get_mut("lite").unwrap().saved.confirm_writes = true;
+        s.shared.open.0.lock().await.get_mut("lite").unwrap().saved.safety = crate::safety::Safety::Alert2;
         let port = s.port;
         let delete = json!({ "connection": "lite", "sql": "delete from t" });
         let pending = tauri::async_runtime::spawn(async move { call(port, READ_WRITE, "run_query", delete).await });
         assert_eq!(answer_next(&s, false), "delete from t");
         assert!(pending.await.unwrap().0);
+    });
+}
+
+#[test]
+fn alert1_asks_even_before_a_read() {
+    tauri::async_runtime::block_on(async {
+        let s = server("alert1").await;
+        s.shared.update(|c| c.approval = false).unwrap();
+        s.shared.open.0.lock().await.get_mut("lite").unwrap().saved.safety = crate::safety::Safety::Alert1;
+        let port = s.port;
+        let select = json!({ "connection": "lite", "sql": "select count(*) from t" });
+        let pending = tauri::async_runtime::spawn(async move { call(port, READ_WRITE, "run_query", select).await });
+        assert_eq!(answer_next(&s, false), "select count(*) from t");
+        assert!(pending.await.unwrap().0);
+    });
+}
+
+#[test]
+fn a_safe_level_allows_only_with_the_right_password() {
+    tauri::async_runtime::block_on(async {
+        let s = server("safe1").await;
+        {
+            let mut open = s.shared.open.0.lock().await;
+            let live = open.get_mut("lite").unwrap();
+            live.saved.safety = crate::safety::Safety::Safe2;
+            live.password = Some("pw".into());
+        }
+        let port = s.port;
+        let insert = json!({ "connection": "lite", "sql": "insert into t values (3, 'c')" });
+        let pending = tauri::async_runtime::spawn(async move { call(port, READ_WRITE, "run_query", insert).await });
+        let id = loop {
+            if let Event::Approval { id, unlock, .. } =
+                s.events.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+            {
+                assert!(unlock, "the dialog should ask for the password");
+                break id;
+            }
+        };
+        let wrong = crate::safety::Unlock::Password("nope".into());
+        assert!(matches!(s.shared.answer_checked(id, true, Some(&wrong)).await, Err(Error::WrongPassword)));
+        assert!(matches!(s.shared.answer_checked(id, true, None).await, Err(Error::PasswordRequired)));
+        let right = crate::safety::Unlock::Password("pw".into());
+        s.shared.answer_checked(id, true, Some(&right)).await.unwrap();
+        assert!(!pending.await.unwrap().0, "allowed, so it ran");
     });
 }

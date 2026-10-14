@@ -4,6 +4,8 @@
 mod server;
 
 use crate::error::{Error, Result};
+use crate::safety::Unlock;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
@@ -92,12 +94,14 @@ pub struct Activity {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Event {
-    /// An agent wants to run this SQL; answer with `mcp_answer`.
+    /// An agent wants to run this SQL; answer with `mcp_answer`. With `unlock` (a Safe level), allowing it takes
+    /// the database password or Touch ID.
     Approval {
         id: u64,
         token: String,
         connection: String,
         sql: String,
+        unlock: bool,
     },
     /// The approval was answered or timed out; the dialog can go.
     ApprovalClosed {
@@ -115,11 +119,21 @@ pub struct Shared {
     prefs: crate::Prefs,
     config: Mutex<Config>,
     activity: Mutex<VecDeque<Activity>>,
-    pending: Mutex<HashMap<u64, oneshot::Sender<bool>>>,
+    pending: Mutex<HashMap<u64, Pending>>,
     next_id: AtomicU64,
     server: Mutex<Option<server::Running>>,
     notify: Notify,
 }
+
+/// An approval waiting for the user's answer.
+struct Pending {
+    tx: oneshot::Sender<bool>,
+    safe: Option<SafeCheck>,
+}
+
+/// At a Safe level, allowing is checked against the connection's stored password (if it has one).
+#[derive(Clone)]
+pub(crate) struct SafeCheck(pub Option<SecretString>);
 
 /// The Tauri-managed handle on [`Shared`].
 pub struct Mcp(pub Arc<Shared>);
@@ -239,16 +253,19 @@ impl Shared {
         (self.notify)(Event::Activity(entry));
     }
 
-    /// Asks the user to allow `sql`; no answer within [`APPROVAL_TIMEOUT`] is a denial.
-    async fn approve(&self, token: &Token, connection: &str, sql: &str) -> bool {
+    /// Asks the user to allow `sql`; no answer within [`APPROVAL_TIMEOUT`] is a denial. `safe` is a Safe level's
+    /// check on allowing.
+    async fn approve(&self, token: &Token, connection: &str, sql: &str, safe: Option<SafeCheck>) -> bool {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        lock(&self.pending).insert(id, tx);
+        let unlock = safe.is_some();
+        lock(&self.pending).insert(id, Pending { tx, safe });
         (self.notify)(Event::Approval {
             id,
             token: token.name.clone(),
             connection: connection.to_string(),
             sql: sql.to_string(),
+            unlock,
         });
         let allowed = matches!(tokio::time::timeout(APPROVAL_TIMEOUT, rx).await, Ok(Ok(true)));
         lock(&self.pending).remove(&id);
@@ -257,10 +274,21 @@ impl Shared {
     }
 
     fn answer(&self, id: u64, allow: bool) {
-        if let Some(tx) = lock(&self.pending).remove(&id) {
+        if let Some(p) = lock(&self.pending).remove(&id) {
             // The request may have timed out meanwhile; then the answer has nowhere to go.
-            let _ = tx.send(allow);
+            let _ = p.tx.send(allow);
         }
+    }
+
+    /// The user's answer from the dialog. At a Safe level, allowing needs the password or Touch ID; a wrong one
+    /// leaves the request waiting, so the dialog can ask again.
+    async fn answer_checked(&self, id: u64, allow: bool, unlock: Option<&Unlock>) -> Result<()> {
+        let safe = lock(&self.pending).get(&id).and_then(|p| p.safe.clone());
+        if allow && let Some(SafeCheck(stored)) = safe {
+            crate::safety::verify(unlock.ok_or(Error::PasswordRequired)?, stored.as_ref()).await?;
+        }
+        self.answer(id, allow);
+        Ok(())
     }
 
     /// Makes sure the bridge token exists and its file names the current port.
@@ -432,9 +460,8 @@ pub fn mcp_clear_activity(mcp: State<'_, Mcp>) {
 }
 
 #[tauri::command]
-#[expect(clippy::needless_pass_by_value, reason = "Tauri hands command arguments over by value")]
-pub fn mcp_answer(mcp: State<'_, Mcp>, id: u64, allow: bool) {
-    mcp.0.answer(id, allow);
+pub async fn mcp_answer(mcp: State<'_, Mcp>, id: u64, allow: bool, unlock: Option<Unlock>) -> Result<()> {
+    mcp.0.answer_checked(id, allow, unlock.as_ref()).await
 }
 
 #[cfg(test)]

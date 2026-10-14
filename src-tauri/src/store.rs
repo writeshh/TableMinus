@@ -2,6 +2,8 @@
 
 use crate::db::{Engine, Options};
 use crate::error::{Error, Result};
+use crate::locations::{self, Location};
+use crate::safety::Safety;
 use crate::ssh::Ssh;
 use crate::tls::Tls;
 use secrecy::{ExposeSecret, SecretString};
@@ -34,8 +36,9 @@ pub struct Saved {
     pub url: String,
     #[serde(default)]
     pub tag: String, // "" | local | development | staging | production
-    #[serde(default = "yes")]
-    pub confirm_writes: bool, // safe mode
+    /// Safe mode. Files from before levels existed have `confirm_writes: bool` instead.
+    #[serde(default, alias = "confirm_writes", deserialize_with = "crate::safety::level_or_legacy")]
+    pub safety: Safety,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<Ssh>,
     #[serde(default, skip_serializing_if = "Tls::is_default")]
@@ -71,18 +74,14 @@ impl Saved {
     }
 }
 
-fn yes() -> bool {
-    true
-}
-
-fn file(dir: &Path) -> PathBuf {
-    dir.join("connections.json")
+fn file(dir: &Path) -> Result<PathBuf> {
+    Ok(locations::folder(dir, Location::Connections)?.join("connections.json"))
 }
 
 /// All saved connections. A missing file means none yet; a file that can't be read or parsed is an error,
 /// so a later save can't overwrite connections the user still has.
 pub fn load(dir: &Path) -> Result<Vec<Saved>> {
-    let path = file(dir);
+    let path = file(dir)?;
     match std::fs::read(&path) {
         Ok(bytes) => {
             let mut all: Vec<Saved> = serde_json::from_slice(&bytes)?;
@@ -97,13 +96,7 @@ pub fn load(dir: &Path) -> Result<Vec<Saved>> {
 /// Writes to a temporary file first, then renames it over the old one, so a crash mid-write
 /// leaves the previous file intact.
 fn write(dir: &Path, all: &[Saved]) -> Result<()> {
-    let path = file(dir);
-    let failed = |source| Error::File { path: path.display().to_string(), source };
-    std::fs::create_dir_all(dir).map_err(failed)?;
-    let tmp = dir.join("connections.json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(all)?).map_err(failed)?;
-    std::fs::rename(tmp, &path).map_err(failed)?;
-    Ok(())
+    locations::write_safely(&file(dir)?, &serde_json::to_vec_pretty(all)?)
 }
 
 fn entry(which: Secret, name: &str) -> Result<keyring::Entry> {
@@ -124,6 +117,12 @@ fn forget(which: Secret, name: &str) -> Result<()> {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Removes both of a connection's keychain secrets.
+pub fn forget_secrets(name: &str) -> Result<()> {
+    forget(Secret::Database, name)?;
+    forget(Secret::Ssh, name)
 }
 
 /// `None` keeps the stored secret; an empty one removes it.
@@ -174,8 +173,7 @@ pub fn save(
 
 pub fn delete(dir: &Path, name: &str) -> Result<()> {
     let mut all = load(dir)?;
-    forget(Secret::Database, name)?;
-    forget(Secret::Ssh, name)?;
+    forget_secrets(name)?;
     all.retain(|x| x.name != name);
     write(dir, &all)
 }
@@ -184,6 +182,7 @@ pub fn delete(dir: &Path, name: &str) -> Result<()> {
 mod tests {
     use super::{Saved, load, save};
     use crate::db::{Engine, Options};
+    use crate::safety::Safety;
     use crate::tls::{Tls, TlsMode};
     use std::path::PathBuf;
 
@@ -200,7 +199,7 @@ mod tests {
             kind: Engine::Postgres,
             url: url.into(),
             tag: String::new(),
-            confirm_writes: true,
+            safety: Safety::Alert2,
             ssh: None,
             tls: Tls::default(),
             options: Options::default(),
@@ -255,5 +254,34 @@ mod tests {
             (TlsMode::Require, "postgres://u@h:5432/db?application_name=x")
         );
         assert_eq!((all[1].tls.mode, all[1].url.as_str()), (TlsMode::Require, "mysql://root@h:3306"));
+    }
+
+    #[test]
+    fn load_turns_the_old_confirm_writes_flag_into_a_level() {
+        let dir = temp_dir("levels");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = r#"[{"name":"a","kind":"sqlite","url":"x","confirm_writes":true},
+                       {"name":"b","kind":"sqlite","url":"x","confirm_writes":false},
+                       {"name":"c","kind":"sqlite","url":"x"},
+                       {"name":"d","kind":"sqlite","url":"x","safety":"safe1"}]"#;
+        std::fs::write(dir.join("connections.json"), file).unwrap();
+        let levels: Vec<_> = load(&dir).unwrap().into_iter().map(|c| c.safety).collect();
+        assert_eq!(levels, [Safety::Alert2, Safety::Silent, Safety::Alert2, Safety::Safe1]);
+    }
+
+    #[test]
+    fn save_writes_the_level_and_drops_the_old_flag() {
+        let dir = temp_dir("level-save");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("connections.json"),
+            r#"[{"name":"a","kind":"sqlite","url":"x","confirm_writes":false}]"#,
+        )
+        .unwrap();
+        let mut c = load(&dir).unwrap().remove(0);
+        c.url = "y".into();
+        save(&dir, c, None, None, None).unwrap();
+        let text = std::fs::read_to_string(dir.join("connections.json")).unwrap();
+        assert!(text.contains(r#""safety": "silent""#) && !text.contains("confirm_writes"), "{text}");
     }
 }
