@@ -120,9 +120,19 @@ async fn open_db(
     Ok((conn, tunnel))
 }
 
-/// Opens a saved connection by name, with its keychain secrets. Refused while the passcode lock is on.
-async fn open_saved(open: &Open, dir: &std::path::Path, name: &str) -> Result<Live> {
+/// Separates a saved connection's name from the session number in a session key; see [`Open`].
+const SESSION_SEP: char = '\u{1f}';
+
+/// The saved connection a session key belongs to: `name` or `name\u{1f}n`.
+fn saved_name(key: &str) -> &str {
+    key.split_once(SESSION_SEP).map_or(key, |(name, _)| name)
+}
+
+/// Opens a saved connection by name (or a session key of it), with its keychain secrets. Refused while the
+/// passcode lock is on.
+async fn open_saved(open: &Open, dir: &std::path::Path, key: &str) -> Result<Live> {
     open.unlocked()?;
+    let name = saved_name(key);
     let saved = store::load(dir)?
         .into_iter()
         .find(|c| c.name == name)
@@ -156,8 +166,12 @@ async fn info(live: &mut Live) -> Result<Info> {
 
 // ponytail: SQLite's calls block the async worker thread they run on. Each connection has its own lock, so that
 // stalls only its own connection's requests (the runtime has a worker per core); spawn_blocking if it hurts.
-/// The open connections by name, each behind its own lock so a slow query holds up only its connection. Clones
-/// share everything (the MCP server holds one).
+/// The open connections, each behind its own lock so a slow query holds up only its connection. Clones share
+/// everything (the MCP server holds one).
+///
+/// They're keyed by session: a workspace's first session of a saved connection is keyed by the connection's
+/// name, further ones (another database on the same server, each in its own tab) by `name\u{1f}n`. Every
+/// command's `name` is such a key; the MCP server uses the plain name, so it shares the first session.
 #[derive(Default, Clone)]
 struct Open {
     conns: Arc<Mutex<HashMap<String, Arc<Mutex<Live>>>>>,
@@ -189,6 +203,16 @@ impl Open {
     async fn is_open(&self, name: &str) -> bool {
         self.conns.lock().await.contains_key(name)
     }
+
+    /// Whether any session of the saved connection is open.
+    async fn any_open(&self, name: &str) -> bool {
+        self.conns.lock().await.keys().any(|k| saved_name(k) == name)
+    }
+
+    /// Takes every session of the saved connection out of the map.
+    async fn remove_all(&self, name: &str) {
+        self.conns.lock().await.retain(|k, _| saved_name(k) != name);
+    }
 }
 
 fn dir(app: &AppHandle) -> Result<std::path::PathBuf> {
@@ -211,16 +235,16 @@ async fn save_connection(
     previous: Option<String>,
 ) -> Result<()> {
     // Drop live connections so the next connect uses the new settings.
-    open.remove(&conn.name).await;
+    open.remove_all(&conn.name).await;
     if let Some(old) = &previous {
-        open.remove(old).await;
+        open.remove_all(old).await;
     }
     store::save(&dir(&app)?, conn, password.as_ref(), ssh_password.as_ref(), previous.as_deref())
 }
 
 #[tauri::command]
 async fn delete_connection(app: AppHandle, open: State<'_, Open>, name: String) -> Result<()> {
-    open.remove(&name).await;
+    open.remove_all(&name).await;
     store::delete(&dir(&app)?, &name)
 }
 
@@ -248,13 +272,21 @@ async fn test_connection(
     Ok(format!("Connected · {n} tables"))
 }
 
-/// Opens (or reuses) the saved connection.
+/// Opens (or reuses) a session of a saved connection; `name` is its session key (see [`Open`]). With `database`,
+/// the session switches to it.
 #[tauri::command]
-async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<Info> {
+async fn connect(app: AppHandle, open: State<'_, Open>, name: String, database: Option<String>) -> Result<Info> {
     open.unlocked()?;
     if open.is_open(&name).await {
         let mut live = open.get(&name).await?;
-        match info(&mut live).await {
+        let r = async {
+            if let Some(db) = &database {
+                switch_database(&mut live, db).await?;
+            }
+            info(&mut live).await
+        }
+        .await;
+        match r {
             // Dropped while the workspace was closed: open a fresh one rather than show an error.
             Err(e) if live.conn.lost_by(&e) => {
                 drop(live);
@@ -264,6 +296,9 @@ async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<
         }
     }
     let mut live = open_saved(&open, &dir(&app)?, &name).await?;
+    if let Some(db) = &database {
+        switch_database(&mut live, db).await?;
+    }
     let r = info(&mut live).await;
     open.insert(name, live).await;
     r
@@ -543,6 +578,22 @@ async fn table_op_sql(open: State<'_, Open>, name: String, op: ddl::TableOp) -> 
     live.check(r)
 }
 
+/// The statements a database operation (create, rename, drop) would run, for the preview.
+#[tauri::command]
+async fn database_sql(open: State<'_, Open>, name: String, op: ddl::DbOp) -> Result<Vec<String>> {
+    let mut live = open.get(&name).await?;
+    let r = live.conn.database_sql(&op).await;
+    live.check(r)
+}
+
+/// The encodings and collations for the new database form.
+#[tauri::command]
+async fn database_options(open: State<'_, Open>, name: String) -> Result<ddl::DbOptions> {
+    let mut live = open.get(&name).await?;
+    let r = live.conn.database_options().await;
+    live.check(r)
+}
+
 /// Runs the statements the user saw in a preview. Safe mode applies (see [`guard`]); applying from the preview
 /// counts as confirmed, but the Safe levels still want the password.
 #[tauri::command]
@@ -579,8 +630,11 @@ async fn set_safety(
     }
     saved.safety = safety;
     store::save(&dir, saved, None, None, None)?;
-    if let Ok(mut live) = open.get(&name).await {
-        live.saved.safety = safety;
+    // Every session of the connection, the map's lock let go before waiting on theirs.
+    let sessions: Vec<_> =
+        open.conns.lock().await.iter().filter(|(k, _)| saved_name(k) == name).map(|(_, l)| l.clone()).collect();
+    for live in sessions {
+        live.lock().await.saved.safety = safety;
     }
     Ok(())
 }
@@ -672,6 +726,8 @@ pub fn run() -> tauri::Result<()> {
             table_structure,
             structure_sql,
             table_op_sql,
+            database_sql,
+            database_options,
             run_ddl,
             table_ddl,
             rows::save_rows,
@@ -774,6 +830,24 @@ mod tests {
                 super::guard(&open, "gone", reads("select 1"), true, None).await,
                 Err(Error::NotConnected)
             ));
+        });
+    }
+
+    #[test]
+    fn open_should_key_sessions_by_connection_and_remove_them_together() {
+        tauri::async_runtime::block_on(async {
+            assert_eq!(super::saved_name("prod\u{1f}2"), "prod");
+            assert_eq!(super::saved_name("prod"), "prod");
+            let open = super::Open::default();
+            for key in ["prod", "prod\u{1f}2", "prod 2"] {
+                open.insert(key.into(), live(Engine::Sqlite, ":memory:").await).await;
+            }
+            open.remove("prod").await;
+            assert!(open.any_open("prod").await, "its second session is still open");
+            assert!(!open.is_open("prod").await);
+            open.remove_all("prod").await;
+            assert!(!open.any_open("prod").await);
+            assert!(open.is_open("prod 2").await, "another connection's name only looks alike");
         });
     }
 

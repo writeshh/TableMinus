@@ -137,6 +137,46 @@ pub enum TableOp {
     },
 }
 
+/// A database operation from the database window (Postgres and MySQL; a SQLite file is its one database).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DbOp {
+    /// A blank `encoding` or `collation` keeps the server's default. MySQL's encoding is its character set.
+    Create {
+        name: String,
+        encoding: Option<String>,
+        collation: Option<String>,
+    },
+    Rename {
+        name: String,
+        to: String,
+    },
+    Drop {
+        name: String,
+    },
+}
+
+/// What the new database form offers: the server's encodings, and its collations as (collation, encoding) pairs.
+/// Postgres's collations are locales, which go with any encoding (the encoding is blank).
+#[derive(Debug, serde::Serialize)]
+pub struct DbOptions {
+    pub encodings: Vec<String>,
+    pub collations: Vec<(String, String)>,
+}
+
+fn create_database_sql(d: Dialect, name: &str, encoding: Option<&str>, collation: Option<&str>) -> Result<String> {
+    let name = d.ident(not_blank(name, "the database needs a name")?);
+    let clause = |keyword: &str, v: Option<&str>| v.map(|v| format!(" {keyword} {}", d.literal(v))).unwrap_or_default();
+    let options = if d == Dialect::Pg {
+        // Only template0 may be copied with an encoding or locale other than its own.
+        let template = if encoding.is_some() || collation.is_some() { " TEMPLATE template0" } else { "" };
+        format!("{}{}{template}", clause("ENCODING", encoding), clause("LC_COLLATE", collation))
+    } else {
+        format!("{}{}", clause("CHARACTER SET", encoding), clause("COLLATE", collation))
+    };
+    Ok(format!("CREATE DATABASE {name}{options}"))
+}
+
 fn blank_is_none(s: Option<&String>) -> Option<&str> {
     s.map(|s| s.trim()).filter(|s| !s.is_empty())
 }
@@ -606,6 +646,107 @@ impl Conn {
         })
     }
 
+    /// The statements for a database operation.
+    pub async fn database_sql(&mut self, op: &DbOp) -> Result<Vec<String>> {
+        let d = self.dialect();
+        if d == Dialect::Lite {
+            return Err(Error::Invalid("a SQLite file is its only database"));
+        }
+        Ok(match op {
+            DbOp::Create { name, encoding, collation } => {
+                vec![create_database_sql(d, name, blank_is_none(encoding.as_ref()), blank_is_none(collation.as_ref()))?]
+            }
+            DbOp::Rename { name, to } => {
+                let to = not_blank(to, "the database needs a name")?;
+                if d == Dialect::Pg {
+                    vec![format!("ALTER DATABASE {} RENAME TO {}", d.ident(name), d.ident(to))]
+                } else {
+                    self.mysql_rename_database_sql(name, to).await?
+                }
+            }
+            DbOp::Drop { name } => vec![format!("DROP DATABASE {}", d.ident(name))],
+        })
+    }
+
+    /// MySQL has no RENAME DATABASE: a new database with the old one's character set and collation, every table
+    /// moved over with RENAME TABLE, then the emptied old one dropped. Views, routines, triggers and events don't
+    /// move that way, so a database holding any is refused rather than have DROP DATABASE take them along.
+    // ponytail: a table created between this preview and running it would go with the DROP; lock or re-check
+    // at run time if that ever matters.
+    async fn mysql_rename_database_sql(&mut self, name: &str, to: &str) -> Result<Vec<String>> {
+        let d = Dialect::My;
+        let others = self
+            .fetch_with(
+                "select (select count(*) from information_schema.tables where table_schema = ? \
+                 and table_type <> 'BASE TABLE') + (select count(*) from information_schema.routines \
+                 where routine_schema = ?) + (select count(*) from information_schema.triggers \
+                 where trigger_schema = ?) + (select count(*) from information_schema.events where event_schema = ?)",
+                &[Some(name); 4],
+            )
+            .await?;
+        if others.first().and_then(|r| r.first()).cloned().flatten().as_deref() != Some("0") {
+            return Err(Error::Invalid(
+                "MySQL can't rename a database; tables can be moved to a new one, but this one also has views, \
+                 routines, triggers or events, which can't",
+            ));
+        }
+        let rows = self
+            .fetch_with(
+                "select default_character_set_name, default_collation_name from information_schema.schemata \
+                 where schema_name = ?",
+                &[Some(name)],
+            )
+            .await?;
+        let [Some(charset), Some(collation)] = rows.first().map(Vec::as_slice).unwrap_or_default() else {
+            return Err(Error::Invalid("no such database"));
+        };
+        let tables = self
+            .fetch_with(
+                "select table_name from information_schema.tables where table_schema = ? order by 1",
+                &[Some(name)],
+            )
+            .await?;
+        let (from, into) = (d.ident(name), d.ident(to));
+        let mut out = vec![format!(
+            "CREATE DATABASE {into} CHARACTER SET {} COLLATE {}",
+            d.literal(charset),
+            d.literal(collation)
+        )];
+        let moves: Vec<String> = tables
+            .into_iter()
+            .filter_map(|mut r| r.swap_remove(0))
+            .map(|t| format!("{from}.{t} TO {into}.{t}", t = d.ident(&t)))
+            .collect();
+        if !moves.is_empty() {
+            out.push(format!("RENAME TABLE {}", moves.join(", ")));
+        }
+        out.push(format!("DROP DATABASE {from}"));
+        Ok(out)
+    }
+
+    /// The encodings and collations the server offers for a new database.
+    pub async fn database_options(&mut self) -> Result<DbOptions> {
+        let (encodings, collations) = match self.dialect() {
+            Dialect::Pg => (
+                // The server's encoding numbers run up to the low 40s; the client-only ones are refused on create.
+                "select pg_encoding_to_char(i) from generate_series(0, 63) i where pg_encoding_to_char(i) <> '' \
+                 order by 1",
+                "select distinct collcollate, '' from pg_collation where collcollate is not null order by 1",
+            ),
+            Dialect::My => (
+                "select character_set_name from information_schema.character_sets order by 1",
+                "select collation_name, character_set_name from information_schema.collations order by 1",
+            ),
+            Dialect::Lite => return Err(Error::Invalid("a SQLite file is its only database")),
+        };
+        let encodings = self.fetch_with(encodings, &[]).await?.into_iter().filter_map(|mut r| r.swap_remove(0));
+        let collations = self.fetch_with(collations, &[]).await?.into_iter().filter_map(|mut r| {
+            r.resize(2, None);
+            Some((r[0].take()?, r[1].take().unwrap_or_default()))
+        });
+        Ok(DbOptions { encodings: encodings.collect(), collations: collations.collect() })
+    }
+
     async fn clone_sql(&mut self, table: &str, to: &str, data: bool) -> Result<Vec<String>> {
         let d = self.dialect();
         let to = not_blank(to, "the copy needs a name")?;
@@ -719,9 +860,10 @@ impl Conn {
     }
 
     /// Runs statements generated above. Postgres and SQLite run them in one transaction. MySQL commits each DDL
-    /// statement as it goes, so it runs them one by one and, on an error, says which had already run.
+    /// statement as it goes, so it runs them one by one and, on an error, says which had already run. A single
+    /// statement runs on its own: it needs no transaction, and Postgres's CREATE and DROP DATABASE refuse one.
     pub async fn run_ddl(&mut self, statements: &[String]) -> Result<()> {
-        if !matches!(self, Conn::My(_)) {
+        if !matches!(self, Conn::My(_)) && statements.len() > 1 {
             self.query("begin").await?;
             for s in statements {
                 if let Err(e) = self.query(s).await {
@@ -761,7 +903,9 @@ fn without_fk_checks(ignore: bool, statement: String) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, ColumnDef, Rule, TableOp, alter_sql, pg_create_sql, sqlite_renamed_create};
+    use super::{
+        Change, ColumnDef, DbOp, Rule, TableOp, alter_sql, create_database_sql, pg_create_sql, sqlite_renamed_create,
+    };
     use crate::db::{Conn, Dialect, Engine, Options};
     use crate::error::Error;
     use crate::structure::{ColumnInfo, ForeignKeyInfo, IndexInfo, NamedDef, Structure};
@@ -1040,6 +1184,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn create_database_sql_should_add_encoding_and_collation_per_engine() {
+        assert_eq!(create_database_sql(Dialect::Pg, "shop", None, None).unwrap(), r#"CREATE DATABASE "shop""#);
+        assert_eq!(
+            create_database_sql(Dialect::Pg, "shop", Some("UTF8"), Some("C")).unwrap(),
+            r#"CREATE DATABASE "shop" ENCODING E'UTF8' LC_COLLATE E'C' TEMPLATE template0"#
+        );
+        assert_eq!(
+            create_database_sql(Dialect::My, "a`b", Some("utf8mb4"), Some("x' or '1")).unwrap(),
+            "CREATE DATABASE `a``b` CHARACTER SET 'utf8mb4' COLLATE 'x'' or ''1'"
+        );
+        assert!(create_database_sql(Dialect::My, " ", None, None).is_err());
+    }
+
+    #[test]
+    fn database_sql_should_refuse_sqlite_and_unknown_fields() {
+        tauri::async_runtime::block_on(async {
+            let err = sqlite().await.database_sql(&DbOp::Drop { name: "main".into() }).await.unwrap_err();
+            assert_eq!(err.to_string(), "a SQLite file is its only database");
+        });
+        assert!(serde_json::from_str::<DbOp>(r#"{"op":"drop","name":"x","force":true}"#).is_err());
+    }
+
     async fn sqlite() -> Conn {
         Conn::open(Engine::Sqlite, ":memory:", None, &Tls::default(), &Options::default(), None).await.unwrap()
     }
@@ -1160,6 +1327,84 @@ mod tests {
             c.query(&format!("drop database {db}")).await.unwrap();
             outcome.unwrap();
         });
+    }
+
+    #[test]
+    #[ignore = "needs a local MySQL; creates, renames and drops scratch databases"]
+    fn local_mysql_database_ops() {
+        tauri::async_runtime::block_on(async {
+            let url = "mysql://root@127.0.0.1:3306";
+            let mut c = Conn::open(Engine::Mysql, url, None, &Tls::default(), &Options::default(), None).await.unwrap();
+            let (a, b) = (format!("dbm_dbops_a_{}", std::process::id()), format!("dbm_dbops_b_{}", std::process::id()));
+            let outcome = mysql_database_scenario(&mut c, &a, &b).await;
+            for db in [&a, &b] {
+                let _ = c.query(&format!("drop database if exists {db}")).await; // cleanup; gone already is fine
+            }
+            outcome.unwrap();
+        });
+    }
+
+    async fn mysql_database_scenario(c: &mut Conn, a: &str, b: &str) -> crate::error::Result<()> {
+        let options = c.database_options().await?;
+        assert!(options.encodings.iter().any(|e| e == "utf8mb4"));
+        assert!(options.collations.iter().any(|(c, e)| c == "utf8mb4_bin" && e == "utf8mb4"));
+        let create =
+            DbOp::Create { name: a.into(), encoding: Some("utf8mb4".into()), collation: Some("utf8mb4_bin".into()) };
+        let sql = c.database_sql(&create).await?;
+        c.run_ddl(&sql).await?;
+        c.query(&format!("create table {a}.t1(id int primary key); create table {a}.t2(id int)")).await?;
+        c.query(&format!("insert into {a}.t1 values (7)")).await?;
+
+        let sql = c.database_sql(&DbOp::Rename { name: a.into(), to: b.into() }).await?;
+        assert_eq!(sql.len(), 3, "{sql:?}");
+        c.run_ddl(&sql).await?;
+        assert!(!c.databases().await?.iter().any(|d| d == a));
+        assert_eq!(c.query(&format!("select id from {b}.t1")).await?.rows[0][0].as_deref(), Some("7"));
+        let collation =
+            format!("select default_collation_name from information_schema.schemata where schema_name = '{b}'");
+        assert_eq!(c.query(&collation).await?.rows[0][0].as_deref(), Some("utf8mb4_bin"));
+
+        c.query(&format!("create view {b}.v as select * from {b}.t1")).await?;
+        let refused = c.database_sql(&DbOp::Rename { name: b.into(), to: a.into() }).await;
+        assert!(refused.is_err_and(|e| e.to_string().contains("views")));
+
+        let sql = c.database_sql(&DbOp::Drop { name: b.into() }).await?;
+        c.run_ddl(&sql).await?;
+        assert!(!c.databases().await?.iter().any(|d| d == b));
+        Ok(())
+    }
+
+    /// Creating runs outside a transaction, which Postgres requires. `DBM_PG_URL` points elsewhere than the
+    /// default server.
+    #[test]
+    #[ignore = "needs a local Postgres; creates, renames and drops a scratch database"]
+    fn local_postgres_database_ops() {
+        tauri::async_runtime::block_on(async {
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+            let mut c =
+                Conn::open(Engine::Postgres, &url, None, &Tls::default(), &Options::default(), None).await.unwrap();
+            let (a, b) = (format!("dbm_dbops_a_{}", std::process::id()), format!("dbm_dbops_b_{}", std::process::id()));
+            let outcome = postgres_database_scenario(&mut c, &a, &b).await;
+            for db in [&a, &b] {
+                let _ = c.query(&format!("drop database if exists {db}")).await; // cleanup; gone already is fine
+            }
+            outcome.unwrap();
+        });
+    }
+
+    async fn postgres_database_scenario(c: &mut Conn, a: &str, b: &str) -> crate::error::Result<()> {
+        assert!(c.database_options().await?.encodings.iter().any(|e| e == "UTF8"));
+        let create = DbOp::Create { name: a.into(), encoding: Some("UTF8".into()), collation: Some("C".into()) };
+        let sql = c.database_sql(&create).await?;
+        c.run_ddl(&sql).await?;
+        let sql = c.database_sql(&DbOp::Rename { name: a.into(), to: b.into() }).await?;
+        c.run_ddl(&sql).await?;
+        let sql = c.database_sql(&DbOp::Drop { name: b.into() }).await?;
+        c.run_ddl(&sql).await?;
+        let left = c.databases().await?;
+        assert!(!left.iter().any(|d| d == a || d == b), "{left:?}");
+        Ok(())
     }
 
     async fn mysql_scenario(c: &mut Conn) -> crate::error::Result<()> {
