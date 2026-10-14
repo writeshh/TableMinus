@@ -429,6 +429,14 @@ mod tests {
     }
 
     #[test]
+    fn scope_reads_what_the_ui_sends() {
+        let scope = |json: &str| serde_json::from_str::<Scope>(json).unwrap();
+        assert!(matches!(scope(r#"{"kind":"all"}"#), Scope::All));
+        assert!(matches!(scope(r#"{"kind":"group","name":"g"}"#), Scope::Group(g) if g == "g"));
+        assert!(serde_json::from_str::<Scope>(r#"{"kind":"all","extra":1}"#).is_err());
+    }
+
+    #[test]
     fn hex_round_trips() {
         assert_eq!(super::unhex(&super::hex(&[0, 15, 255])).unwrap(), [0, 15, 255]);
         assert!(super::unhex("abc").is_err() && super::unhex("zz").is_err());

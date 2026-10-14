@@ -24,9 +24,11 @@ import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } 
 import { addCommands, bindings, commands, isMac, onBindingsChanged, setOverrides } from "./commands";
 import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
-import { initMenu } from "./menu";
+import { initMenu, setRecent } from "./menu";
 import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, treeMenu } from "./sidebar";
 import { label } from "./keys";
+import * as launcher from "./connections";
+import { COLORS, GROUP_ICONS, tagColor, tagLabel } from "./connections";
 import "./workspace.css";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
@@ -40,7 +42,10 @@ const OPTIONS_DEFAULT: Options = {
   startup_sql: "", startup_script: "", direct_tls: false, no_channel_binding: false, system_schemas: false,
   socket: "", sni: "", cleartext_auth: false,
 };
-type Saved = { name: string; kind: string; url: string; tag: string; safety: Safety; ssh?: Ssh; tls?: Tls; options?: Options };
+type Saved = {
+  name: string; kind: string; url: string; tag: string; safety: Safety; ssh?: Ssh; tls?: Tls; options?: Options;
+  password_mode?: "keychain" | "ask" | "no_password"; color?: string | null; group?: string;
+};
 type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number; truncated?: boolean };
 type Engine = {
   kind: string;
@@ -68,7 +73,6 @@ const ENGINES: Engine[] = [
   { kind: "sqlite", label: "SQLite", mono: "Sl", color: "#7b4fd6" },
 ];
 const engine = (kind: string) => ENGINES.find((e) => e.kind === kind) ?? ENGINES[0];
-const TAGS: Record<string, string> = { local: "Local", development: "Development", staging: "Staging", production: "Production" };
 
 const form = $<HTMLFormElement>("form");
 const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement & HTMLSelectElement;
@@ -109,7 +113,19 @@ function avatar(kind: string) {
   return a;
 }
 function tagPill(tag: string) {
-  return tag ? el("span", { className: `tag ${tag}`, textContent: TAGS[tag] ?? tag }) : "";
+  if (!tag) return "";
+  const pill = el("span", { className: `tag ${tag}`, textContent: tagLabel(tag) });
+  const color = tagColor(tag);
+  if (color) pill.classList.add("colored"), pill.style.setProperty("--tag", color);
+  return pill;
+}
+/** The connection's status color as a small dot; "" when it has none. */
+function colorDot(c: Saved) {
+  const color = c.color && COLORS[c.color];
+  if (!color) return "";
+  const dot = el("span", { className: "color-dot", title: `${c.color} connection` });
+  dot.style.background = color;
+  return dot;
 }
 
 function hostOf(c: Saved) {
@@ -127,7 +143,9 @@ function hostOf(c: Saved) {
 
 async function refresh() {
   try {
-    saved = await invoke<Saved[]>("list_connections");
+    const all = await invoke<launcher.Launcher<Saved>>("launcher");
+    saved = all.connections;
+    launcher.setLauncher(all);
     setStatus("home-status", "");
   } catch (e) {
     setStatus("home-status", String(e), "error"); // e.g. an unreadable connections file, which is left untouched
@@ -135,34 +153,174 @@ async function refresh() {
   renderConns();
 }
 
+/** Reloads the list, then says what happened (refresh clears the status line). */
+const homeNote = async (text: string, error = false) => (await refresh(), setStatus("home-status", text, error ? "error" : "done"));
+const collapsed = new Set<string>(); // group names folded in the launcher, for this session
+
+/** The launcher list: Recent first (when not searching), then each group, then the ungrouped connections. */
 function renderConns() {
   const q = $<HTMLInputElement>("search").value.toLowerCase();
-  const shown = saved.filter((c) => [c.name, c.kind, c.tag, hostOf(c)].join(" ").toLowerCase().includes(q));
+  const shown = saved.filter((c) => [c.name, c.kind, c.tag, c.group ?? "", hostOf(c)].join(" ").toLowerCase().includes(q));
+  const by = settings.launcherSort;
+  const key = (c: Saved) => (by === "kind" ? engine(c.kind).label : by === "tag" ? c.tag || "\uffff" : "");
+  shown.sort((a, b) => key(a).localeCompare(key(b)) || a.name.localeCompare(b.name));
   $("no-conns").hidden = saved.length > 0;
-  $("conns").replaceChildren(
-    ...shown.map((c) => {
-      const edit = el("button", { className: "icon", textContent: "Edit", title: `Edit ${c.name}` });
-      const del = el("button", { className: "icon", textContent: "Delete", title: `Delete ${c.name}` });
-      edit.onclick = (e) => (e.stopPropagation(), openEditor(c.kind, c));
-      del.onclick = async (e) => {
-        e.stopPropagation();
-        if (!(await confirmDialog(`Delete "${c.name}"? Its keychain password is removed too.`, "Delete"))) return;
-        await invoke("delete_connection", { name: c.name });
-        refresh();
-      };
-      const li = el(
-        "li",
-        { tabIndex: 0 },
-        avatar(c.kind),
-        el("div", { className: "who" }, el("div", { className: "name" }, el("span", { textContent: c.name }), tagPill(c.tag)), el("div", { className: "host", textContent: hostOf(c) })),
-        el("div", { className: "actions" }, edit, del),
-      );
-      li.onclick = () => connect(c);
-      li.oncontextmenu = (e) => contextMenu(e, toolsMenu(c));
-      li.onkeydown = (e) => e.key === "Enter" && connect(c);
-      return li;
-    }),
+  const sections: HTMLElement[] = [];
+  const recent = q ? [] : launcher.recent().flatMap((n) => saved.filter((c) => c.name === n)).slice(0, 5);
+  if (recent.length && saved.length > 5) sections.push(section({ name: "", icon: "" }, "Recent", recent, false));
+  for (const g of launcher.groups) sections.push(section(g, g.name, shown.filter((c) => c.group === g.name), true));
+  const loose = shown.filter((c) => !c.group || !launcher.groups.some((g) => g.name === c.group));
+  if (loose.length || launcher.groups.length) sections.push(section({ name: "", icon: "" }, launcher.groups.length ? "Ungrouped" : "", loose, true));
+  $("conns").replaceChildren(...sections);
+}
+
+/** One heading (a group's is a drop target and has its own menu) and its connections. */
+function section(g: launcher.Group, title: string, conns: Saved[], dropTarget: boolean) {
+  const items = collapsed.has(title) ? [] : conns.map(connRow);
+  const out = el("li", { className: "conn-section" });
+  if (title) {
+    const head = el("div", { className: "conn-group", tabIndex: 0 },
+      el("span", { className: "fold", textContent: collapsed.has(title) ? "▸" : "▾" }),
+      g.icon ? el("span", { textContent: GROUP_ICONS[g.icon] ?? "" }) : "",
+      el("span", { className: "group-name", textContent: title }),
+      el("span", { className: "count", textContent: String(conns.length) }));
+    const fold = () => (collapsed.has(title) ? collapsed.delete(title) : collapsed.add(title), renderConns());
+    head.onclick = fold;
+    head.onkeydown = (e) => e.key === "Enter" && fold();
+    if (g.name) head.oncontextmenu = (e) => contextMenu(e, groupMenu(g));
+    if (dropTarget) head.dataset.group = g.name;
+    out.append(head);
+  }
+  out.append(el("ul", { className: "conns" }, ...items));
+  return out;
+}
+
+function groupMenu(g: launcher.Group): MenuItem[] {
+  return [
+    ["Edit Group…", async () => (await launcher.editGroup(g)) && refresh()],
+    ["Export Group…", () => launcher.exportConnections({ kind: "group", name: g.name }, `the group “${g.name}”`, homeNote)],
+    "-",
+    ["Delete Group", async () => {
+      if (!(await confirmDialog(`Delete the group "${g.name}"? Its connections stay, ungrouped.`, "Delete"))) return;
+      await invoke("delete_group", { name: g.name }).catch((e) => homeNote(String(e), true));
+      refresh();
+    }],
+  ];
+}
+
+function connRow(c: Saved) {
+  const edit = el("button", { className: "icon", textContent: "Edit", title: `Edit ${c.name}` });
+  const del = el("button", { className: "icon", textContent: "Delete", title: `Delete ${c.name}` });
+  edit.onclick = (e) => (e.stopPropagation(), openEditor(c.kind, c));
+  del.onclick = (e) => (e.stopPropagation(), deleteConn(c));
+  const li = el(
+    "li",
+    { tabIndex: 0 },
+    avatar(c.kind),
+    el("div", { className: "who" }, el("div", { className: "name" }, el("span", { textContent: c.name }), tagPill(c.tag)), el("div", { className: "host", textContent: hostOf(c) })),
+    el("div", { className: "actions" }, edit, del),
   );
+  if (c.color) li.style.setProperty("--conn-color", COLORS[c.color] ?? "transparent"), li.classList.add("colored");
+  li.onclick = () => !dragged && connect(c);
+  li.oncontextmenu = (e) => contextMenu(e, connMenu(c));
+  li.onkeydown = (e) => e.key === "Enter" && connect(c);
+  li.onpointerdown = (e) => e.button === 0 && dragToGroup(e, c);
+  return li;
+}
+
+async function deleteConn(c: Saved) {
+  if (!(await confirmDialog(`Delete "${c.name}"? Its keychain password is removed too.`, "Delete"))) return;
+  await invoke("delete_connection", { name: c.name });
+  refresh();
+}
+
+const moveTo = (c: Saved, group: string) => invoke("move_to_group", { names: [c.name], group }).then(refresh, (e) => homeNote(String(e), true));
+
+/** A launcher row's right-click: connection actions, Move to group, then the tools. */
+function connMenu(c: Saved): MenuItem[] {
+  const groupItems: MenuItem[] = launcher.groups.filter((g) => g.name !== c.group).map((g) => [`Move to “${g.name}”`, () => moveTo(c, g.name)]);
+  if (c.group) groupItems.push(["Remove from Group", () => moveTo(c, "")]);
+  return [
+    ["Connect", () => connect(c)],
+    ["Edit…", () => openEditor(c.kind, c)],
+    ["Duplicate", () => invoke<string>("duplicate_connection", { name: c.name }).then((n) => homeNote(`Duplicated as “${n}”.`), (e) => homeNote(String(e), true))],
+    ["Copy as URL", () => navigator.clipboard.writeText(launcher.connectionUrl(c)).then(() => homeNote("Copied the URL (without the password).")).catch((e) => homeNote(String(e), true))],
+    ["Export…", () => launcher.exportConnections({ kind: "connection", name: c.name }, `“${c.name}”`, homeNote)],
+    ...(groupItems.length ? ["-" as const, ...groupItems] : []),
+    "-",
+    ...toolsMenu(c),
+    "-",
+    ["Delete…", () => deleteConn(c)],
+  ];
+}
+
+let dragged = false; // set while a drag ends, so the row's click doesn't connect
+/** Drags a row onto a group heading (or Ungrouped) to move it there. Pointer events rather than HTML drag and drop,
+ *  which the app window's own file drop handling gets in the way of. */
+function dragToGroup(start: PointerEvent, c: Saved) {
+  let ghost: HTMLElement | null = null;
+  let over: HTMLElement | null = null;
+  const move = (e: PointerEvent) => {
+    if (!ghost && Math.hypot(e.clientX - start.clientX, e.clientY - start.clientY) < 6) return;
+    ghost ??= document.body.appendChild(el("div", { className: "drag-ghost", textContent: c.name }));
+    Object.assign(ghost.style, { left: `${e.clientX + 8}px`, top: `${e.clientY + 8}px` });
+    over?.classList.remove("drop");
+    over = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>("[data-group]") ?? null;
+    over?.classList.add("drop");
+  };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    if (!ghost) return;
+    ghost.remove();
+    over?.classList.remove("drop");
+    dragged = true;
+    setTimeout(() => (dragged = false));
+    if (over && over.dataset.group !== (c.group ?? "")) moveTo(c, over.dataset.group!);
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+}
+
+/** The launcher's ⋯ menu. */
+function launcherMenu(): MenuItem[] {
+  return [
+    ["New Connection…", openPicker],
+    ["New Group…", async () => (await launcher.editGroup()) && refresh()],
+    ["Manage Tags…", () => launcher.manageTags(refresh)],
+    "-",
+    ["Import from URL…", importFromUrl],
+    ["Import Connections…", () => launcher.importConnections(homeNote)],
+    ["Export All Connections…", () => launcher.exportConnections({ kind: "all" }, "all connections", homeNote)],
+  ];
+}
+$("launcher-menu").onclick = () => {
+  const r = $("launcher-menu").getBoundingClientRect();
+  contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), launcherMenu());
+};
+
+/** Opens a new connection's form filled from a URL or SQLite path; saving it is up to the user. */
+async function importFromUrl(text?: string) {
+  let error = "";
+  for (;;) {
+    const t = text ?? (await launcher.prompt({
+      title: "Import from URL", text: "Paste a connection URL or a SQLite file path.", ok: "Import", error,
+      placeholder: "postgresql://user@localhost:5432/database",
+    }));
+    if (t === null) return;
+    try {
+      return openFromUrl(launcher.parseConnectionUrl(t));
+    } catch (e) {
+      if (text !== undefined) return homeNote(String(e), true); // from Finder or a link: nothing to retype
+      error = String(e);
+    }
+  }
+}
+
+function openFromUrl(u: ReturnType<typeof launcher.parseConnectionUrl>) {
+  const c: Saved = { name: u.name, kind: u.kind, url: u.url, tag: "", safety: settings.safeLevel };
+  if (u.tls) c.tls = { ...TLS_DEFAULT, mode: u.tls };
+  openEditor(u.kind, c, true, u.password);
 }
 
 function confirmDialog(text: string, okLabel: string): Promise<boolean> {
@@ -215,9 +373,10 @@ function nextFromPicker() {
 let editing: Saved | null = null;
 let editingKind = "postgres";
 
-function openEditor(kind: string, existing?: Saved) {
+/** The form for a new connection, or for editing `existing`; `fresh` fills it from `existing` as a new one. */
+function openEditor(kind: string, existing?: Saved, fresh = false, password = "") {
   const e = engine(kind);
-  editing = existing ?? null;
+  editing = fresh ? null : existing ?? null;
   editingKind = kind;
   form.reset();
   $("editor-title").textContent = `${e.label} connection`;
@@ -248,14 +407,22 @@ function openEditor(kind: string, existing?: Saved) {
     field("database").placeholder = "Optional, choose one after connecting";
   }
   field("name").placeholder = d ? `${e.label} · ${d.host}` : e.label;
-  field("password").placeholder = existing ? "Unchanged (in keychain)" : "None";
-  field("passphrase").placeholder = existing ? "Unchanged (in keychain), if any" : "Only for SQLCipher-encrypted files";
+  field("password").placeholder = editing ? "Unchanged (in keychain)" : "None";
+  field("passphrase").placeholder = editing ? "Unchanged (in keychain), if any" : "Only for SQLCipher-encrypted files";
+  field("tag").replaceChildren(el("option", { value: "", textContent: "None" }), ...launcher.tags.map((t) => el("option", { value: t.name, textContent: tagLabel(t.name) })));
+  field("group").replaceChildren(el("option", { value: "", textContent: "None" }), ...launcher.groups.map((g) => el("option", { value: g.name, textContent: g.name })));
+  field("password_mode").value = existing?.password_mode ?? "keychain";
+  field("color").value = existing?.color ?? "";
+  if (existing?.tag && !launcher.tags.some((t) => t.name === existing.tag)) field("tag").append(el("option", { value: existing.tag, textContent: existing.tag }));
+  showPasswordMode();
   field("ssh_password").placeholder = existing?.ssh ? "Unchanged (in keychain)" : "None";
   field("safety").value = settings.safeLevel; // overwritten below when editing
 
   if (existing) {
     field("name").value = existing.name;
     field("tag").value = existing.tag;
+    field("group").value = existing.group ?? "";
+    field(kind === "sqlite" ? "passphrase" : "password").value = password;
     field("safety").value = existing.safety;
     if (existing.ssh) {
       field("ssh_host").value = existing.ssh.host;
@@ -280,6 +447,19 @@ function openEditor(kind: string, existing?: Saved) {
 }
 
 const val = (k: string) => field(k).value.trim() || field(k).placeholder;
+
+$("swatches").replaceChildren(...[["", "None"], ...Object.keys(COLORS).map((k) => [k, k])].map(([value, title]) => {
+  const input = el("input", { type: "radio", name: "color", value, title, ariaLabel: title });
+  if (value) input.style.setProperty("--swatch", COLORS[value]);
+  return input;
+}));
+
+/** The password field says where a typed password goes. */
+function showPasswordMode() {
+  const mode = field("password_mode").value;
+  field("password").placeholder = mode === "ask" ? "Asked when connecting (used here for Test)" : mode === "no_password" ? "None" : editing ? "Unchanged (in keychain)" : "None";
+}
+field("password_mode").addEventListener("change", showPasswordMode);
 /** The keychain-stored secret's input: the login password, or for SQLite the SQLCipher passphrase. */
 const secretField = () => field(editingKind === "sqlite" ? "passphrase" : "password");
 
@@ -354,6 +534,11 @@ function formToSaved(): Saved {
   const name = val("name");
   if (name !== editing?.name && saved.some((c) => c.name === name)) throw `A connection named "${name}" already exists.`;
   const conn: Saved = { name, kind: editingKind, url, tag: field("tag").value, safety: field("safety").value as Safety };
+  // Defaults are left out, as the backend writes them.
+  const mode = editingKind === "sqlite" ? "keychain" : (field("password_mode").value as Saved["password_mode"]);
+  if (mode !== "keychain") conn.password_mode = mode;
+  if (field("color").value) conn.color = field("color").value;
+  if (field("group").value) conn.group = field("group").value;
   const ssh = formSsh();
   if (ssh) conn.ssh = ssh; // omitted, not null: the backend refuses unknown or malformed fields
   const tls = formTls();
@@ -367,7 +552,7 @@ async function saveForm() {
   const conn = formToSaved();
   await invoke("save_connection", {
     conn,
-    password: secretField().value || null,
+    password: conn.password_mode ? null : secretField().value || null,
     sshPassword: field("ssh_password").value || null,
     previous: editing?.name ?? null,
   });
@@ -504,11 +689,14 @@ async function connect(c: Saved) {
   setStatus("home-status", `Connecting to ${c.name}…`, "busy");
   try {
     await docsReady; // kept tabs and history, read at startup
-    const i = await invoke<Info>("connect", { name: c.name });
+    const i = await launcher.withAskedPassword(c.name, () => invoke<Info>("connect", { name: c.name }));
+    if (!i) return setStatus("home-status", "");
+    launcher.addRecent(c.name);
     stashWorkspace();
     pane = newPane();
     ws = { conn: c, info: i, tables: i.tables, panes: [pane], pane, columns: new Map(), expanded: new Set(), lost: false, filter: "" };
     workspaces.push(ws);
+    rememberOpen();
     active = c;
     columnsCache = ws.columns;
     expanded = ws.expanded;
@@ -557,7 +745,7 @@ function applyInfo(i: Info) {
 /** The workspace header, the database button and the sidebar filter for the active connection. */
 function showHeader() {
   const c = active!;
-  $("where-conn").replaceChildren(avatar(c.kind), el("span", { textContent: c.name }), el("span", { className: "host", textContent: hostOf(c) }));
+  $("where-conn").replaceChildren(avatar(c.kind), colorDot(c), el("span", { textContent: c.name }), el("span", { className: "host", textContent: hostOf(c) }));
   document.body.dataset.env = c.tag; // production gets a red edge
   const btn = $("db-button");
   btn.hidden = !info?.can_switch;
@@ -1230,7 +1418,7 @@ function renderMain() {
   );
   $("tabs").querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 
-  const env = active?.tag ? `${TAGS[active.tag] ?? active.tag} | ` : "";
+  const env = active?.tag ? `${tagLabel(active.tag)} | ` : "";
   $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${info.database}` : ""} : ${tab.title}`;
   $("pill").className = `pill ${active?.tag ?? ""}`;
 
@@ -2068,8 +2256,9 @@ $("page-next").onclick = () => turnPage(1);
 /** Leaves the workspace and closes the server connection; the launcher comes back. */
 async function closeWorkspace() {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
-  if (active) invoke("disconnect", { name: active.name }).catch(() => {});
+  if (active) invoke("disconnect", { name: active.name }).catch(() => {}), launcher.forgetAskedPassword(active.name);
   workspaces = workspaces.filter((w) => w !== ws);
+  rememberOpen();
   ws = null;
   active = null;
   info = null;
@@ -2079,6 +2268,17 @@ async function closeWorkspace() {
   const next = workspaces.at(-1);
   if (next) showWorkspace(next);
   else show("home");
+}
+
+/** Notes the open workspaces, for reopening them at the next start, and refreshes Open Recent. */
+function rememberOpen() {
+  launcher.setOpenAtQuit(workspaces.map((w) => w.conn.name));
+  showRecent();
+}
+
+/** File › Open Recent. */
+function showRecent() {
+  setRecent(launcher.recent().flatMap((n) => saved.filter((c) => c.name === n)).map((c) => ({ label: c.name, run: () => connect(c) })));
 }
 
 // ---------- Settings (⌘,) ----------
@@ -2097,11 +2297,14 @@ type Settings = {
   keepTabs: boolean;
   /** Rebound shortcuts, command id → keys (see commands.ts); a missing id keeps its defaults. */
   shortcuts: Record<string, string[]>;
+  launcherSort: "name" | "kind" | "tag";
+  /** Reconnect, at startup, the workspaces open at quit. */
+  reopenWorkspaces: boolean;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
-  shortcuts: {},
+  shortcuts: {}, launcherSort: "name", reopenWorkspaces: false,
 };
 let settings: Settings = loadSettings();
 
@@ -2147,6 +2350,8 @@ function applySettings() {
   $<HTMLInputElement>("wrap-lines").checked = settings.wrapLines;
   $<HTMLInputElement>("show-invisibles").checked = settings.showInvisibles;
   $<HTMLInputElement>("keep-tabs").checked = settings.keepTabs;
+  $<HTMLInputElement>("reopen-workspaces").checked = settings.reopenWorkspaces;
+  $<HTMLSelectElement>("conn-sort").value = settings.launcherSort;
   editor.setDisplay(settings.wrapLines, settings.showInvisibles);
   setOverrides(settings.shortcuts);
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
@@ -2194,7 +2399,7 @@ $("add").onclick = openPicker;
 $("search").addEventListener("input", renderConns);
 $("search").addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
-  const first = $("conns").querySelector("li");
+  const first = $("conns").querySelector("li:not(.conn-section)");
   if (first) (first as HTMLElement).click();
 });
 $("engine-search").addEventListener("input", renderEngines);
@@ -2218,6 +2423,8 @@ $("format-sql").onclick = () => (formatSql(), editor.focus());
 $<HTMLInputElement>("wrap-lines").onchange = (e) => setSetting("wrapLines", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("show-invisibles").onchange = (e) => setSetting("showInvisibles", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("keep-tabs").onchange = (e) => setSetting("keepTabs", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("reopen-workspaces").onchange = (e) => setSetting("reopenWorkspaces", (e.target as HTMLInputElement).checked);
+$<HTMLSelectElement>("conn-sort").onchange = (e) => (setSetting("launcherSort", (e.target as HTMLSelectElement).value as Settings["launcherSort"]), renderConns());
 $<HTMLSelectElement>("param-format").onchange = (e) => setSetting("paramFormat", (e.target as HTMLSelectElement).value as Settings["paramFormat"]);
 $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));
@@ -2243,6 +2450,10 @@ addCommands([
   { id: "close-other-tabs", label: "Close Other Tabs", menu: "File", when: () => inWorkspace() && tabs.length > 1,
     run: () => closeOtherTabs(currentId) },
   { id: "rename-tab", label: "Rename Tab…", menu: "File", when: inWorkspace, run: () => renameTab(currentId) },
+  { id: "import-url", label: "Import Connection from URL…", menu: "File", sep: true, run: () => (newWorkspace(), importFromUrl()) },
+  { id: "import-connections", label: "Import Connections…", menu: "File", run: () => (newWorkspace(), launcher.importConnections(homeNote)) },
+  { id: "export-connections", label: "Export Connections…", menu: "File",
+    run: () => (newWorkspace(), launcher.exportConnections({ kind: "all" }, "all connections", homeNote)) },
   { id: "settings", label: "Settings…", menu: "File", keys: ["Mod+Comma"], overDialogs: true, sep: true, run: openSettings },
   { id: "run-current", label: "Run Current Query", menu: "Edit", keys: ["Mod+Enter"], when: onSqlTab, sep: true, run: runCurrent },
   { id: "run-all", label: "Run All Queries", menu: "Edit", keys: ["Mod+Shift+Enter"], when: onSqlTab, run: runAll },
@@ -2337,4 +2548,25 @@ showKeys();
 
 addEventListener("connections-moved", refresh); // Settings › Locations
 show("home");
-refresh();
+
+/** `.sqlite` files and database links opened from Finder or a browser, one form at a time. */
+async function openFromOs() {
+  const items = await invoke<string[]>("take_opened").catch(() => [] as string[]);
+  for (const item of items) {
+    await importFromUrl(item);
+    const d = $<HTMLDialogElement>("editor");
+    if (d.open) await new Promise((r) => d.addEventListener("close", r, { once: true }));
+  }
+}
+
+refresh().then(async () => {
+  showRecent();
+  if (settings.reopenWorkspaces) {
+    for (const name of launcher.openAtQuit()) {
+      const c = saved.find((c) => c.name === name);
+      if (c) await connect(c);
+    }
+  }
+  listen("opened", openFromOs).catch(() => {}); // no event bridge outside the app
+  openFromOs();
+});
