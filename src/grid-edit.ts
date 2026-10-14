@@ -9,6 +9,7 @@ import {
   type Kind, type Value,
 } from "./staging";
 import { hexDialog, sqlDialog, valueDialog } from "./cell-editors";
+import { indexOf, rowAt } from "./vgrid";
 import "./grid-edit.css"; // vite injects it
 
 type Column = { name: string; data_type: string; nullable: boolean; default: string | null; primary: boolean };
@@ -118,8 +119,10 @@ export function stage(tab: EditTab, ri: number, ci: number, v: Value) {
   host.render();
 }
 
-const cellAt = (ri: number, ci: number) =>
-  document.querySelector<HTMLTableSectionElement>("#out tbody")?.rows[ri]?.cells[ci + 1]; // +1: the row number
+function cellAt(ri: number, ci: number) {
+  const body = document.querySelector<HTMLTableSectionElement>("#out tbody");
+  return body ? rowAt(body, ri)?.cells[ci + 1] : undefined; // +1: the row number
+}
 
 function show(td: HTMLTableCellElement, v: Value) {
   if (v === null || typeof v === "string") return host.fill(td, v);
@@ -128,35 +131,39 @@ function show(td: HTMLTableCellElement, v: Value) {
   td.title = v.file;
 }
 
-/** Shows staged values, deleted and added rows on the rendered page, and wires double-click editing. */
+/** Draws row `ri`'s staged state into its row as the grid builds it: changed values, a deleted row, or (past the
+ *  page's rows) an added row, which is drawn whole here. */
+export function paintRow(tab: EditTab, tr: HTMLTableRowElement, ri: number) {
+  const n = pageRows(tab);
+  const s = tab.staged;
+  if (ri >= n) {
+    const row = s.added[ri - n];
+    tr.className = "added";
+    tr.append(el("td", { className: "rownum", textContent: "+" }));
+    tab.result?.columns.forEach((_, ci) => {
+      const td = tr.insertCell();
+      if (row?.has(ci)) (show(td, row.get(ci)!), td.classList.add("changed"));
+      else (td.textContent = "DEFAULT"), (td.className = "default");
+    });
+    return;
+  }
+  if (s.deleted.has(ri)) tr.classList.add("deleted");
+  for (const [ci, v] of s.edits.get(ri) ?? []) {
+    const td = tr.cells[ci + 1];
+    if (td) (show(td, v), td.classList.add("changed"));
+  }
+}
+
+/** Loads the enum values and wires double-click editing on the rendered page. */
 export function decorate(tab: EditTab) {
   const body = document.querySelector<HTMLTableSectionElement>("#out tbody");
   if (!body || !tab.result) return;
   loadEnums(tab);
-  const s = tab.staged;
-  if (!pageRows(tab) && s.added.length) body.replaceChildren(); // drop the "No rows." line
-  for (const [ri, cells] of s.edits) {
-    for (const [ci, v] of cells) {
-      const td = cellAt(ri, ci);
-      if (td) (show(td, v), td.classList.add("changed"));
-    }
-  }
-  for (const ri of s.deleted) body.rows[ri]?.classList.add("deleted");
-  for (const row of s.added) {
-    const tr = body.insertRow();
-    tr.className = "added";
-    tr.append(el("td", { className: "rownum", textContent: "+" }));
-    tab.result.columns.forEach((_, ci) => {
-      const td = tr.insertCell();
-      if (row.has(ci)) (show(td, row.get(ci)!), td.classList.add("changed"));
-      else (td.textContent = "DEFAULT"), (td.className = "default");
-    });
-  }
   if (!keyOf(tab)) return;
   body.ondblclick = (e) => {
     const td = (e.target as HTMLElement).closest("td");
-    const tr = td?.parentElement as HTMLTableRowElement | undefined;
-    if (td && tr && td.cellIndex > 0 && !td.querySelector("input, select")) editCell(tab, tr.sectionRowIndex, td.cellIndex - 1);
+    const ri = indexOf(td?.parentElement as HTMLTableRowElement | null);
+    if (td && ri !== null && td.cellIndex > 0 && !td.querySelector("input, select")) editCell(tab, ri, td.cellIndex - 1);
   };
 }
 
@@ -288,7 +295,8 @@ export function addRow(tab: EditTab) {
   if (!keyOf(tab)) return;
   tab.staged.change(() => tab.staged.added.push(new Map()));
   host.render();
-  document.querySelector("#out tbody tr:last-child")?.scrollIntoView({ block: "nearest" });
+  const out = document.getElementById("out");
+  if (out) out.scrollTop = out.scrollHeight; // the new row is last; scrolling draws it
 }
 
 /** Adds copies of `rows` as new rows. Keys with a default (serials, auto-increment) and binary values that only

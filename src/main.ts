@@ -19,6 +19,7 @@ import { openUsers } from "./users";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
 import { Staged } from "./staging";
 import * as grid from "./grid-edit";
+import * as vgrid from "./vgrid";
 import { syncRowDetail, toggleRowDetail } from "./rowdetail";
 import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
 import "./passcode"; // the lock screen, and its rows in Settings › Security
@@ -1631,7 +1632,7 @@ function renderMain() {
     };
     render(tab.result, from, {
       sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add), table: tab.table, menu: quickFilter,
-      resize: (column, width, done) => resizeColumn(tab, column, width, done),
+      resize: (column, width, done) => resizeColumn(tab, column, width, done), edit: tab,
     });
     grid.decorate(tab);
     paintSelection();
@@ -2010,7 +2011,7 @@ function showResults(tab: SqlTab) {
     else {
       render(rows, 0, {
         table: target.table,
-        menu: (ri, ci) => grid.cellMenu(target, ri, ci, selectedRows()),
+        menu: (ri, ci) => grid.cellMenu(target, ri, ci, selectedRows()), edit: target,
       });
       grid.decorate(target);
       paintSelection();
@@ -2019,6 +2020,7 @@ function showResults(tab: SqlTab) {
   } else {
     $("out").replaceChildren(...shown.map((r) =>
       el("section", { className: "appended" }, el("h4", { textContent: `${r.title} · ${rowsLabel(r.result)}`, title: r.sql }), gridTable(r.result, 0))));
+    vgrid.drawGrids($("out"));
     if (selection && !shown.some((r) => r.result === selection!.r)) selection = null;
   }
   for (const r of shown) {
@@ -2183,13 +2185,26 @@ type RenderOptions = {
   menu?: (row: number, col: number) => MenuItem[];
   /** Header drag: a new width while dragging, the final one when `done`; null resets to automatic. */
   resize?: (column: string, width: number | null, done: boolean) => void;
+  /** The staged edits drawn over the rows, when they can be edited. */
+  edit?: grid.EditTab;
 };
 
 /** Shows one result grid; see [`gridTable`]. */
 function render(r: QueryResult, offset: number, sorting?: RenderOptions) {
   $("out").replaceChildren(gridTable(r, offset, sorting));
   if (selection?.r !== r) selection = null; // a redraw of the same rows (after an edit) keeps it
+  vgrid.drawGrids($("out"));
 }
+
+// The grids draw the rows near the viewport (vgrid.ts); scrolling and resizing move that window.
+let drawQueued = false;
+const queueDraw = () => {
+  if (drawQueued) return;
+  drawQueued = true;
+  requestAnimationFrame(() => ((drawQueued = false), vgrid.drawGrids($("out"))));
+};
+$("out").addEventListener("scroll", queueDraw, { passive: true });
+new ResizeObserver(queueDraw).observe($("out"));
 
 /** The table each result was last drawn in, for painting the selection when several are on screen. */
 const drawn = new WeakMap<QueryResult, HTMLTableElement>();
@@ -2218,17 +2233,25 @@ function gridTable(r: QueryResult, offset: number, sorting?: RenderOptions): HTM
     head.append(th);
   }
   const body = table.createTBody();
-  // ponytail: plain table; switch to a virtualized grid when pages get much larger than 300 rows.
-  r.rows.forEach((row, i) => {
-    const tr = body.insertRow();
-    tr.append(el("td", { className: "rownum", textContent: String(offset + i + 1) }));
-    for (const v of row) fillCell(tr.insertCell(), v);
-  });
-  if (!r.rows.length) {
+  const edit = sorting?.edit;
+  const count = () => r.rows.length + (edit?.staged.added.length ?? 0);
+  const row = (i: number) => {
+    const tr = document.createElement("tr");
+    if (i < r.rows.length) {
+      tr.append(el("td", { className: "rownum", textContent: String(offset + i + 1) }));
+      for (const v of r.rows[i]) fillCell(tr.insertCell(), v);
+    }
+    if (edit) grid.paintRow(edit, tr, i); // staged values; an added row is drawn whole there
+    paintRow(tr, r, i);
+    return tr;
+  };
+  if (count()) {
+    vgrid.virtualize(table, count, row, () => vgrid.widestValues(r.rows, r.columns.length, offset + count()));
+    wireSelection(table, r, sorting);
+  } else {
     const tr = body.insertRow();
     tr.append(el("td", { className: "hint", colSpan: r.columns.length + 1, textContent: "No rows." }));
   }
-  if (r.rows.length) wireSelection(table, r, sorting);
   drawn.set(r, table);
   return table;
 }
@@ -2245,18 +2268,22 @@ function selectedBlock(sel: Selection) {
   return { r0, r1, c0, c1 };
 }
 
+/** Marks the selected cells of drawn row `ri` of `r`. */
+function paintRow(tr: HTMLTableRowElement, r: QueryResult, ri: number) {
+  const b = selection?.r === r ? selectedBlock(selection) : null;
+  const on = !!b && ri >= b.r0 && ri <= b.r1;
+  [...tr.cells].forEach((td, i) => td.classList.toggle("sel", on && i - 1 >= b!.c0 && i - 1 <= b!.c1)); // the row number comes first
+}
+
 function paintSelection() {
-  const block = selection && selectedBlock(selection);
-  const mine = selection && drawn.get(selection.r);
-  $("out").querySelectorAll("table").forEach((table) => {
-    const on = !!block && table === mine;
-    table.querySelectorAll("tbody tr").forEach((tr, ri) => {
-      [...tr.children].forEach((td, i) => {
-        const ci = i - 1; // the row number comes first
-        td.classList.toggle("sel", on && ci >= 0 && ri >= block.r0 && ri <= block.r1 && ci >= block.c0 && ci <= block.c1);
-      });
-    });
-  });
+  $("out").querySelectorAll("td.sel").forEach((td) => td.classList.remove("sel"));
+  const table = selection && drawn.get(selection.r);
+  if (selection && table?.isConnected) {
+    for (const tr of table.tBodies[0].rows) {
+      const ri = vgrid.indexOf(tr);
+      if (ri !== null) paintRow(tr, selection.r, ri);
+    }
+  }
   syncDetail();
 }
 
@@ -2391,9 +2418,8 @@ function copySelection(format: "plain" | "csv" | "markdown" | "insert") {
 function wireSelection(table: HTMLTableElement, r: QueryResult, options?: RenderOptions) {
   const cellOf = (target: EventTarget | null): [number, number] | null => {
     const td = (target as HTMLElement | null)?.closest?.("td");
-    const tr = td?.parentElement as HTMLTableRowElement | null;
-    if (!td || !tr || td.querySelector("input")) return null; // an open cell editor keeps its own clicks
-    const ri = tr.sectionRowIndex;
+    const ri = vgrid.indexOf(td?.parentElement as HTMLTableRowElement | null);
+    if (!td || ri === null || td.querySelector("input")) return null; // an open cell editor keeps its own clicks
     const ci = td.cellIndex - 1;
     return ci < 0 ? [ri, -1] : [ri, ci]; // -1: the row number
   };
@@ -2462,6 +2488,30 @@ document.addEventListener("keydown", (e) => {
     selection = { r, anchor: [0, 0], focus: [r.rows.length - 1, r.columns.length - 1], table };
     paintSelection();
   }
+});
+
+// Arrow keys move the selection (Shift extends it), Enter edits the focused cell.
+const MOVES: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+document.addEventListener("keydown", (e) => {
+  const sel = selection;
+  const table = sel && drawn.get(sel.r);
+  if (!sel || !table?.isConnected || e.metaKey || e.ctrlKey || e.altKey || typingSomewhere() || document.querySelector("dialog[open]")) return;
+  const tab = current();
+  if (e.key === "Enter") {
+    const rows = tab?.kind === "table" ? (tab.view === "data" ? tab : null) : resultTarget();
+    if (rows && rows.result === sel.r) (e.preventDefault(), grid.editCell(rows, ...sel.focus));
+    return;
+  }
+  const move = MOVES[e.key];
+  if (!move) return;
+  e.preventDefault();
+  const body = table.tBodies[0];
+  const ri = clamp(sel.focus[0] + move[0], 0, vgrid.rowCount(body) - 1);
+  const ci = clamp(sel.focus[1] + move[1], 0, sel.r.columns.length - 1);
+  sel.focus = [ri, ci];
+  if (!e.shiftKey) sel.anchor = [ri, ci];
+  vgrid.reveal($("out"), body, ri)?.cells[ci + 1]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  paintSelection();
 });
 
 // Space toggles the row detail; it's the grid's key only when nothing else has focus (a button would click).

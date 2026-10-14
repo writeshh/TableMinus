@@ -255,13 +255,14 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #ask-detail { flex: 1; min-width: 0; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes arrive { from { opacity: 0; transform: translateY(-4px); } }
 
-#out { flex: 1; min-height: 0; overflow: auto; background: var(--grid-bg); }
+#out { flex: 1; min-height: 0; overflow: auto; background: var(--grid-bg); scroll-padding: 28px 0 0 52px; } /* clear of the sticky header and row numbers */
 .empty { margin: 16px 12px; }
 table { border-collapse: separate; border-spacing: 0; font: var(--grid-size)/1.4 var(--grid-font); }
 th, td { padding: var(--grid-pad-y) var(--grid-pad-x); text-align: left; white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--grid-line); border-right: 1px solid var(--grid-line); }
 th { position: sticky; top: 0; z-index: 1; font: 600 11px/1.4 -apple-system, system-ui, sans-serif; letter-spacing: 0.02em; background: var(--grid-head); backdrop-filter: blur(12px) saturate(160%); -webkit-backdrop-filter: blur(12px) saturate(160%); }
-body.zebra tbody tr:nth-child(even) { background: var(--grid-zebra); }
-tbody tr:hover { background: var(--hover); }
+body.zebra tbody:not(.virtual) tr:nth-child(even), body.zebra tbody.virtual tr.alt { background: var(--grid-zebra); }
+tbody tr:not(.spacer):hover { background: var(--hover); }
+tr.spacer > td { padding: 0; border: 0; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.null { color: var(--grid-null); font-style: italic; }
 
