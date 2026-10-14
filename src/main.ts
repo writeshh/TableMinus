@@ -14,7 +14,8 @@ import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
 import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
-import { addCommands, bindings, isMac, onBindingsChanged } from "./commands";
+import { addCommands, bindings, commands, isMac, onBindingsChanged } from "./commands";
+import { openAnything, type Item as AnythingItem } from "./openanything";
 import { label } from "./keys";
 import "./workspace.css";
 
@@ -2245,6 +2246,8 @@ addCommands([
   { id: "font-smaller", label: "Decrease Font Size", menu: "View", keys: ["Mod+Minus"], when: inWorkspace, run: () => fontBy(settings.fontSize - 1) },
   { id: "font-reset", label: "Actual Font Size", menu: "View", keys: ["Mod+Digit0"], when: inWorkspace, run: () => fontBy(DEFAULT_SETTINGS.fontSize) },
   { id: "reload-tab", label: "Reload Current Tab", menu: "View", keys: ["Mod+KeyR"], when: inWorkspace, sep: true, run: reloadTab },
+  { id: "open-anything", label: "Open Anything", menu: "Navigate", keys: ["Mod+KeyP"], when: inWorkspace,
+    run: () => openAnything(anythingItems()) },
   { id: "go-back", label: "Go Back", menu: "Navigate", keys: ["Ctrl+Mod+ArrowLeft"], when: inWorkspace, run: () => goBack(false) },
   { id: "go-forward", label: "Go Forward", menu: "Navigate", keys: ["Ctrl+Mod+ArrowRight"], when: inWorkspace, run: () => goBack(true) },
   { id: "next-tab", label: "Select Next Tab", menu: "Window", keys: ["Mod+Shift+BracketRight", "Ctrl+Tab"], when: inWorkspace,
@@ -2253,7 +2256,7 @@ addCommands([
     when: inWorkspace, run: () => cycleTab(-1) },
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
     id: `tab-${n}`, label: n === 9 ? "Last Tab" : `Tab ${n}`, menu: "Window" as const, keys: [`Mod+Digit${n}`],
-    when: inWorkspace, run: () => selectTabAt(n), sep: n === 1,
+    when: inWorkspace, run: () => selectTabAt(n), sep: n === 1, hidden: true,
   })),
   { id: "open-database", label: "Open a Database…", menu: "Connection", keys: ["Mod+KeyK"], when: inWorkspace, run: openDbPicker },
   { id: "reconnect", label: "Reconnect", menu: "Connection", keys: ["Mod+Shift+KeyR"], when: inWorkspace, run: reconnect },
@@ -2273,6 +2276,22 @@ addCommands([
   { id: "previous-workspace", label: "Select Previous Workspace", menu: "Window", keys: ["Ctrl+Mod+BracketLeft"],
     when: () => workspaces.length > 1, run: () => cycleWorkspace(-1) },
 ]);
+
+/** What Open Anything searches: the workspace's items and SQL tabs, the other workspaces, and every command that
+ *  applies right now. */
+function anythingItems(): AnythingItem[] {
+  const sqlTabs = (ws?.panes ?? [pane]).flatMap((p) =>
+    (p === pane ? tabs : p.tabs).flatMap((t) => (t.kind === "sql" ? [{ p, t }] : [])),
+  );
+  return [
+    ...tables.map((t) => ({ label: t, kind: "table", run: () => openTable(t) })),
+    ...sqlTabs.map(({ p, t }) => ({ label: t.title, kind: "SQL tab", detail: t.path, run: () => (focusPane(p), select(t.id)) })),
+    ...workspaces.filter((w) => w !== ws).map((w) => ({ label: w.conn.name, kind: "workspace", run: () => showWorkspace(w) })),
+    ...commands
+      .filter((c) => c.id !== "open-anything" && !c.hidden && (!c.when || c.when()))
+      .map((c) => ({ label: c.label.replace(/…$/, ""), kind: "command", detail: keyLabel(c.id), run: c.run })),
+  ];
+}
 
 /** Shortcut hints next to buttons, kept in step with Settings › Shortcuts. */
 function showKeys() {
