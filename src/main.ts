@@ -27,6 +27,7 @@ import { openAnything, type Item as AnythingItem } from "./openanything";
 import { initMenu } from "./menu";
 import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, treeMenu } from "./sidebar";
 import { label } from "./keys";
+import "./console"; // the console log panel and its command
 import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, type QueryResult, type ResultTab, type Results } from "./results";
 import "./workspace.css";
 
