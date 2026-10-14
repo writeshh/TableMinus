@@ -1,0 +1,47 @@
+# cargo-deny: run with `npm run audit` (needs the network for the advisory database). See CLAUDE.md › Release.
+
+[graph]
+all-features = false
+
+[advisories]
+# Unmaintained or unsound crates show as warnings unless they're our direct dependencies.
+unmaintained = "workspace"
+ignore = [
+    # Marvin attack on RSA decryption timing. russh only signs with the user's own key during SSH sign-in, once per
+    # connection, which gives no attacker the many timed operations the attack needs. No fixed rsa release exists.
+    { id = "RUSTSEC-2023-0071", reason = "russh signs once per SSH sign-in; no fix released" },
+]
+
+[licenses]
+confidence-threshold = 0.9
+# Permissive licenses, plus MPL-2.0 (file-level copyleft; those crates are used unmodified).
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]
+
+# Our own crate isn't published, so it needs no license of its own.
+[licenses.private]
+ignore = true
+
+[bans]
+# Tauri's dependency tree carries several versions of many crates; that's not ours to fix.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

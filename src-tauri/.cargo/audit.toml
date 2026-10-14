@@ -1,0 +1,3 @@
+# cargo-audit, run by `npm run audit`. Keep in step with deny.toml's [advisories] ignore list, which says why.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

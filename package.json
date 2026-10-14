@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "check": "tsc --noEmit && node --test 'src/**/*.test.ts' && cd src-tauri && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked"
+    "check": "tsc --noEmit && node --test 'src/**/*.test.ts' && cd src-tauri && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked",
+    "audit": "cd src-tauri && cargo deny check && cargo audit"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
