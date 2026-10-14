@@ -55,12 +55,7 @@
               <option value="production">Production</option>
             </select>
           </label>
-          <label>Safe mode
-            <select name="confirm">
-              <option value="1">Confirm before changing data</option>
-              <option value="0">Silent: run everything</option>
-            </select>
-          </label>
+          <label>Safe mode <select name="safety"></select></label>
         </fieldset>
         <fieldset class="net">
           <div class="pair">
@@ -239,12 +234,9 @@
       <section data-pane="security" hidden>
         <div class="row">
           <span class="k">New connections</span>
-          <select id="safe-default">
-            <option value="1">Confirm before changing data</option>
-            <option value="0">Silent: run everything</option>
-          </select>
+          <select id="safe-default"></select>
         </div>
-        <p class="hint note">Safe mode asks before running any query it can't prove is read-only. Each connection can override this in its own settings.</p>
+        <p class="hint note">Each connection has its own level, set in its settings or with the lock in the toolbar. The Safe levels check the password saved for the connection.</p>
       </section>
       <footer>
         <button id="settings-reset">Restore defaults</button>

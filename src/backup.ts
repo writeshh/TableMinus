@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { el } from "./dom";
+import { guarded } from "./safety";
 
 export type Conn = { name: string; kind: string };
 export type Confirm = (text: string, okLabel: string) => Promise<boolean>;
@@ -175,7 +176,7 @@ export async function openRestore(c: Conn, database: string | null | undefined, 
     setStatus("Starting…", "busy");
     try {
       const request = { database: name, create, tools: tools?.value() ?? null, flags: flags.value, path: path.value };
-      const id = await invoke<number>("start_restore", { name: c.name, request, confirmed: true });
+      const id = await guarded(c.name, (a) => invoke<number>("start_restore", { name: c.name, request, confirmed: true, unlock: a.unlock }));
       d.close();
       addJob(id, `Restoring into ${lite ? c.name : name}`, fileName(path.value));
     } catch (e) {

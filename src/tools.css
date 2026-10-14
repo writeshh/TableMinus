@@ -18,5 +18,5 @@ dialog.processes { width: min(1100px, calc(100vw - 32px)); }
 .job-file, .job-meta { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .job-line { font: 11px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .job progress { width: 100%; }
-.job.finished .job-line { color: color-mix(in srgb, var(--ok) 80%, CanvasText); }
+.job.finished .job-line { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
 .job.failed .job-line { color: var(--danger); white-space: pre-wrap; max-height: 8em; overflow: auto; }

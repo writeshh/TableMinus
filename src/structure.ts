@@ -4,6 +4,7 @@
 
 /// <reference types="vite/client" />
 import { el } from "./dom";
+import { guarded } from "./safety";
 import "./structure.css"; // vite injects it
 
 export type ColumnInfo = {
@@ -284,7 +285,7 @@ export async function saveStructure(tabId: number, out: HTMLElement) {
   try {
     const statements = await host.call<string[]>("structure_sql", { name: conn.name, table, create: d.create, changes: list });
     if (!(await preview(d.create ? `Create ${table}` : `Change ${table}`, statements, d.create ? "Create" : "Apply", false))) return;
-    await host.call("run_ddl", { name: conn.name, statements, confirmed: true });
+    await runDdl(conn.name, statements);
   } catch (e) {
     d.error = String(e); // staged edits stay, so nothing typed is lost
     draw(out, tabId, d);
@@ -358,6 +359,10 @@ async function ask(title: string, fields: Field[], okLabel: string) {
 
 type MenuItem = [string, () => void] | "-";
 
+/** Runs previewed statements; the preview was the confirmation, but the Safe levels still want the password. */
+const runDdl = (name: string, statements: string[]) =>
+  guarded(name, (a) => host.call("run_ddl", { name, statements, confirmed: true, unlock: a.unlock }));
+
 /** Generates an operation's SQL, shows it, and runs it when confirmed. */
 async function runOp(title: string, op: Record<string, unknown>, okLabel: string, danger: boolean, after?: () => void) {
   const conn = host.conn();
@@ -365,7 +370,7 @@ async function runOp(title: string, op: Record<string, unknown>, okLabel: string
   try {
     const statements = await host.call<string[]>("table_op_sql", { name: conn.name, op });
     if (!(await preview(title, statements, okLabel, danger))) return;
-    await host.call("run_ddl", { name: conn.name, statements, confirmed: true });
+    await runDdl(conn.name, statements);
     host.note(`${title}: done`, "done");
     after?.();
     await host.refreshTables();

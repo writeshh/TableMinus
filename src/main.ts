@@ -13,6 +13,10 @@ import { dropDraft, initStructure, saveStructure, showStructure, sidebarMenu, st
 import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
+import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
+import "./passcode"; // the lock screen, and its rows in Settings › Security
+import { docEntry, docsReady, setDocEntry } from "./locations"; // also adds Settings › Locations
+import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
@@ -26,7 +30,7 @@ const OPTIONS_DEFAULT: Options = {
   startup_sql: "", startup_script: "", direct_tls: false, no_channel_binding: false, system_schemas: false,
   socket: "", sni: "", cleartext_auth: false,
 };
-type Saved = { name: string; kind: string; url: string; tag: string; confirm_writes: boolean; ssh?: Ssh; tls?: Tls; options?: Options };
+type Saved = { name: string; kind: string; url: string; tag: string; safety: Safety; ssh?: Ssh; tls?: Tls; options?: Options };
 type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number; truncated?: boolean };
 type Engine = {
   kind: string;
@@ -240,12 +244,12 @@ function openEditor(kind: string, existing?: Saved) {
   field("password").placeholder = existing ? "Unchanged (in keychain)" : "None";
   field("passphrase").placeholder = existing ? "Unchanged (in keychain), if any" : "Only for SQLCipher-encrypted files";
   field("ssh_password").placeholder = existing?.ssh ? "Unchanged (in keychain)" : "None";
-  field("confirm").value = settings.safeDefault ? "1" : "0"; // overwritten below when editing
+  field("safety").value = settings.safeLevel; // overwritten below when editing
 
   if (existing) {
     field("name").value = existing.name;
     field("tag").value = existing.tag;
-    field("confirm").value = existing.confirm_writes ? "1" : "0";
+    field("safety").value = existing.safety;
     if (existing.ssh) {
       field("ssh_host").value = existing.ssh.host;
       field("ssh_port").value = existing.ssh.port?.toString() ?? "";
@@ -342,7 +346,7 @@ function formToSaved(): Saved {
   }
   const name = val("name");
   if (name !== editing?.name && saved.some((c) => c.name === name)) throw `A connection named "${name}" already exists.`;
-  const conn: Saved = { name, kind: editingKind, url, tag: field("tag").value, confirm_writes: field("confirm").value === "1" };
+  const conn: Saved = { name, kind: editingKind, url, tag: field("tag").value, safety: field("safety").value as Safety };
   const ssh = formSsh();
   if (ssh) conn.ssh = ssh; // omitted, not null: the backend refuses unknown or malformed fields
   const tls = formTls();
@@ -487,6 +491,7 @@ document.addEventListener("keydown", (e) => e.key === "Escape" && ($("conn-info"
 async function connect(c: Saved) {
   setStatus("home-status", `Connecting to ${c.name}…`, "busy");
   try {
+    await docsReady; // kept tabs and history, read at startup
     const i = await invoke<Info>("connect", { name: c.name });
     active = c;
     $("lost").hidden = true;
@@ -497,6 +502,7 @@ async function connect(c: Saved) {
     applyInfo(i);
     showSide("items");
     renderHistory();
+    showSafety(c);
     status(`Connected · ${i.server}`, "done");
     // Connected without a database: go straight to choosing one.
     if (i.can_switch && !i.database) openDbPicker();
@@ -532,24 +538,16 @@ function applyInfo(i: Info) {
 // ---------- SQL tabs kept per connection ----------
 
 type KeptTab = { title: string; sql: string; path?: string };
-const keptKey = () => `sql-tabs:${active?.name}`;
 
 function loadSqlTabs(): KeptTab[] {
-  try {
-    const kept = JSON.parse(localStorage.getItem(keptKey()) ?? "[]");
-    return Array.isArray(kept) ? kept.filter((k) => typeof k?.title === "string" && typeof k?.sql === "string") : [];
-  } catch {
-    return [];
-  }
+  const kept = active && docEntry<KeptTab[]>("sql_tabs", active.name);
+  return Array.isArray(kept) ? kept.filter((k) => typeof k?.title === "string" && typeof k?.sql === "string") : [];
 }
 
 function saveSqlTabs() {
   if (!active || !settings.keepTabs) return;
   const kept: KeptTab[] = tabs.flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql, path: t.path }] : []));
-  try {
-    if (kept.length) localStorage.setItem(keptKey(), JSON.stringify(kept));
-    else localStorage.removeItem(keptKey());
-  } catch {} // unavailable storage: the tabs just aren't reopened next time
+  setDocEntry("sql_tabs", active.name, kept.length ? kept : undefined);
 }
 
 // ---------- .sql files (⌘O, ⌘S, ⌘⇧S on SQL tabs) ----------
@@ -748,24 +746,18 @@ function showSide(which: "items" | "history") {
   $("side-history").hidden = which !== "history";
 }
 
-// History lives per connection on this machine, newest first.
-// ponytail: localStorage capped at 500 entries; move to a file when it needs to be bigger or synced.
+// History lives per connection in history.json (Settings › Locations), newest first, 500 per connection.
 type HistoryEntry = { sql: string; at: number; db: string | null };
-const historyKey = () => `history:${active?.name}`;
 
 function loadHistory(): HistoryEntry[] {
-  try {
-    return JSON.parse(localStorage.getItem(historyKey()) ?? "[]");
-  } catch {
-    return [];
-  }
+  const list = active && docEntry<HistoryEntry[]>("history", active.name);
+  return Array.isArray(list) ? list : [];
 }
 
 function addHistory(sql: string) {
+  if (!active) return;
   const list = [{ sql: sql.trim(), at: Date.now(), db: info?.database ?? null }, ...loadHistory()].slice(0, 500);
-  try {
-    localStorage.setItem(historyKey(), JSON.stringify(list));
-  } catch {}
+  setDocEntry("history", active.name, list);
   renderHistory();
 }
 
@@ -1047,7 +1039,7 @@ function editCell(tab: TableTab, ri: number, ci: number) {
   };
 }
 
-async function saveEdits(confirmed = false) {
+async function saveEdits() {
   const tab = current();
   if (tab?.kind === "table" && tab.view === "structure") return saveStructure(tab.id, $("out"));
   if (tab?.kind !== "table" || !tab.edits.size || !active) return;
@@ -1059,15 +1051,14 @@ async function saveEdits(confirmed = false) {
   }));
   const n = pendingCount(tab);
   try {
-    const rows = await call<number>("update_rows", { name: active.name, table: tab.table, edits, confirmed });
+    const conn = active;
+    const rows = await guarded(conn.name, (a) => call<number>("update_rows", { name: conn.name, table: tab.table, edits, ...a }),
+      () => confirmDialog(`Save ${n} change${n === 1 ? "" : "s"} to ${tab.table} on "${conn.name}"?`, "Save"));
     tab.edits.clear();
     tab.message = [`Saved ${n} change${n === 1 ? "" : "s"} (${rows} row${rows === 1 ? "" : "s"})`, "done"];
     await loadTable(tab);
   } catch (e) {
-    if (e === "CONFIRM") {
-      if (await confirmDialog(`Save ${n} change${n === 1 ? "" : "s"} to ${tab.table} on "${active.name}"?`, "Save")) return saveEdits(true);
-      return;
-    }
+    if (e === CANCELLED) return;
     tab.message = [String(e), "error"]; // edits stay staged so nothing typed is lost
     renderMain();
   }
@@ -1242,7 +1233,7 @@ const fmt = (n: number) => n.toLocaleString();
 const rowLimit = () => settings.sqlLimit || null;
 
 /** Runs SQL from the current SQL tab; the result and status stay with that tab. */
-async function run(sql: string, confirmed = false) {
+async function run(sql: string) {
   const tab = current();
   if (!active || tab?.kind !== "sql" || !sql.trim()) return;
   const say = (text: string, kind: StatusKind) => {
@@ -1252,7 +1243,9 @@ async function run(sql: string, confirmed = false) {
   say("Running…", "busy");
   const t0 = performance.now();
   try {
-    const r = await call<QueryResult>("run_query", { name: active.name, sql, confirmed, maxRows: rowLimit() });
+    const conn = active;
+    const r = await guarded(conn.name, (a) => call<QueryResult>("run_query", { name: conn.name, sql, ...a, maxRows: rowLimit() }),
+      () => (say("", ""), ask(conn.safety === "alert1" ? `Run this on "${conn.name}"?` : `This may change data on "${conn.name}".`, sql.trim(), "Run anyway")));
     tab.result = r;
     tab.ran = sql;
     if (tab.id === currentId) render(r, 0);
@@ -1261,10 +1254,7 @@ async function run(sql: string, confirmed = false) {
     say(r.columns.length ? `${fmt(r.rows.length)} rows${limited} · ${ms} ms` : `${fmt(r.affected)} rows affected · ${ms} ms`, "done");
     addHistory(sql);
   } catch (e) {
-    if (e !== "CONFIRM") return say(String(e), "error");
-    say("", "");
-    if (await ask(`This may change data on "${active.name}".`, sql.trim(), "Run anyway")) return run(sql, true);
-    say("Cancelled", "");
+    say(e === CANCELLED ? "Cancelled" : String(e), e === CANCELLED ? "" : "error");
   }
 }
 
@@ -1330,13 +1320,13 @@ async function runAll() {
     if (tab.id === currentId) status(text, kind);
   };
   const t0 = performance.now();
-  let confirmed = false;
+  let approved = NOT_APPROVED; // asked once, then kept for the rest
   let affected = 0;
   for (let i = 0; i < statements.length; i++) {
     const sql = statements[i].text;
     say(`Running ${i + 1} of ${statements.length}…`, "busy");
     try {
-      const r = await call<QueryResult>("run_query", { name: active.name, sql, confirmed, maxRows: rowLimit() });
+      const r = await call<QueryResult>("run_query", { name: active.name, sql, ...approved, maxRows: rowLimit() });
       affected += r.affected;
       if (r.columns.length || i === statements.length - 1) {
         tab.result = r;
@@ -1345,14 +1335,13 @@ async function runAll() {
       }
       addHistory(sql);
     } catch (e) {
-      if (e !== "CONFIRM" || confirmed) return say(`Statement ${i + 1} of ${statements.length} failed: ${e}`, "error");
+      if (!isSafetyStop(e) || (e === "CONFIRM" && approved.confirmed)) return say(`Statement ${i + 1} of ${statements.length} failed: ${e}`, "error");
       say("", "");
       const rest = statements.slice(i).map((x) => x.text).join(";\n");
-      if (!(await ask(`These statements may change data on "${active.name}".`, rest, "Run anyway"))) {
-        return say(`Cancelled before statement ${i + 1}`, "");
-      }
-      confirmed = true;
-      i--; // run this statement again, confirmed
+      const next = await approval(e, active.name, () => ask(`Run these statements on "${active!.name}"?`, rest, "Run anyway"));
+      if (!next) return say(`Cancelled before statement ${i + 1}`, "");
+      approved = next;
+      i--; // run this statement again, approved
     }
   }
   const ms = Math.round(performance.now() - t0);
@@ -1780,7 +1769,8 @@ document.addEventListener("keydown", (e) => {
 
 type Settings = {
   theme: "auto" | "light" | "dark"; zebra: boolean; fontSize: number; lineHeight: number; indent: "tab" | "2" | "4";
-  safeDefault: boolean; queryTimeout: number; keepAlive: boolean;
+  /** Safe mode level for new connections. */
+  safeLevel: Safety; queryTimeout: number; keepAlive: boolean;
   /** Most rows an editor query shows; 0 = no limit. */
   sqlLimit: number;
   formatStyle: FormatStyle;
@@ -1791,7 +1781,7 @@ type Settings = {
   keepTabs: boolean;
 };
 const DEFAULT_SETTINGS: Settings = {
-  theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeDefault: true, queryTimeout: 300, keepAlive: true,
+  theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
 };
 let settings: Settings = loadSettings();
@@ -1799,7 +1789,10 @@ let settings: Settings = loadSettings();
 // ponytail: settings live in the webview's localStorage (per machine); move to a file if they need syncing.
 function loadSettings(): Settings {
   try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem("settings") ?? "{}") };
+    const stored = JSON.parse(localStorage.getItem("settings") ?? "{}");
+    if (typeof stored.safeDefault === "boolean" && !stored.safeLevel) stored.safeLevel = stored.safeDefault ? "alert2" : "silent"; // before levels
+    delete stored.safeDefault;
+    return { ...DEFAULT_SETTINGS, ...stored };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -1815,7 +1808,7 @@ function setSetting<K extends keyof Settings>(key: K, value: Settings[K]) {
 
 function applySettings() {
   const root = document.documentElement;
-  root.style.colorScheme = settings.theme === "auto" ? "" : settings.theme;
+  applyTheme(settings.theme);
   root.style.setProperty("--editor-size", `${settings.fontSize}px`);
   root.style.setProperty("--editor-line", String(settings.lineHeight));
   document.body.classList.toggle("zebra", settings.zebra);
@@ -1826,7 +1819,7 @@ function applySettings() {
   $<HTMLInputElement>("line-height").value = String(settings.lineHeight);
   $<HTMLSelectElement>("indent").value = settings.indent;
   editor.setIndent(settings.indent === "tab" ? "\t" : " ".repeat(Number(settings.indent)));
-  $<HTMLSelectElement>("safe-default").value = settings.safeDefault ? "1" : "0";
+  $<HTMLSelectElement>("safe-default").value = settings.safeLevel;
   $<HTMLInputElement>("query-timeout").value = String(settings.queryTimeout);
   $<HTMLInputElement>("keep-alive").checked = settings.keepAlive;
   $<HTMLSelectElement>("row-limit").value = String(settings.sqlLimit);
@@ -1860,7 +1853,9 @@ $<HTMLInputElement>("line-height").onchange = (e) => setSetting("lineHeight", cl
 $<HTMLSelectElement>("indent").onchange = (e) => setSetting("indent", (e.target as HTMLSelectElement).value as Settings["indent"]);
 $<HTMLInputElement>("query-timeout").onchange = (e) => setSetting("queryTimeout", clamp(Math.round(Number((e.target as HTMLInputElement).value) || 0), 0, 86400));
 $<HTMLInputElement>("keep-alive").onchange = (e) => setSetting("keepAlive", (e.target as HTMLInputElement).checked);
-$<HTMLSelectElement>("safe-default").onchange = (e) => setSetting("safeDefault", (e.target as HTMLSelectElement).value === "1");
+fillLevels($("safe-default"));
+fillLevels(field("safety"));
+$<HTMLSelectElement>("safe-default").onchange = (e) => setSetting("safeLevel", (e.target as HTMLSelectElement).value as Safety);
 $("settings-reset").onclick = () => {
   settings = { ...DEFAULT_SETTINGS };
   setSetting("theme", settings.theme); // persists and re-applies everything
@@ -1918,5 +1913,6 @@ $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle",
 $("keys-all").textContent = navigator.userAgent.includes("Mac") ? "⌘⇧↵" : "Ctrl+Shift+↵";
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));
 
+addEventListener("connections-moved", refresh); // Settings › Locations
 show("home");
 refresh();

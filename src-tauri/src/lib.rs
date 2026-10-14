@@ -691,6 +691,33 @@ mod tests {
     }
 
     #[test]
+    fn guard_should_apply_the_open_connections_level() {
+        use crate::safety::{Safety, Unlock};
+        tauri::async_runtime::block_on(async {
+            let mut l = live(Engine::Sqlite, ":memory:").await;
+            l.saved.safety = Safety::Safe2;
+            l.password = Some("pw".into());
+            let open = super::Open::default();
+            open.0.lock().await.insert("t".into(), l);
+            let reads = |sql: &'static str| move |kind| crate::readonly::is_read_only(kind, sql);
+            assert!(super::guard(&open, "t", reads("select 1"), false, None).await.is_ok());
+            let write = super::guard(&open, "t", reads("delete from x"), true, None).await;
+            assert!(matches!(write, Err(Error::PasswordRequired)), "confirming isn't enough at Safe 2");
+            let wrong = Unlock::Password("nope".into());
+            assert!(matches!(
+                super::guard(&open, "t", reads("delete from x"), true, Some(&wrong)).await,
+                Err(Error::WrongPassword)
+            ));
+            let right = Unlock::Password("pw".into());
+            assert!(super::guard(&open, "t", reads("delete from x"), true, Some(&right)).await.is_ok());
+            assert!(matches!(
+                super::guard(&open, "gone", reads("select 1"), true, None).await,
+                Err(Error::NotConnected)
+            ));
+        });
+    }
+
+    #[test]
     fn text_files_should_round_trip_and_refuse_huge_or_binary_ones() {
         tauri::async_runtime::block_on(async {
             let dir = std::env::temp_dir().join(format!("dbmanager-{}-files", std::process::id()));
