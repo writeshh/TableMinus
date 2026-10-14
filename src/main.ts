@@ -36,6 +36,9 @@ import "./console"; // the console log panel and its command
 import { addFavorite, initFavorites, render as renderFavorites } from "./favorites"; // also adds the sidebar's Queries tab
 import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, searchRows, type QueryResult, type ResultTab, type Results } from "./results";
 import "./workspace.css";
+import { chartPanel } from "./charts";
+import { guessSpec } from "./chartdata";
+import { openBoard, type BoardCtx } from "./metrics";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -1785,7 +1788,10 @@ function toolsMenu(c: Saved, database?: string | null): MenuItem[] {
 }
 $("tools-button").onclick = () => {
   const r = $("tools-button").getBoundingClientRect(); // under the button, also when opened from the keyboard
-  if (active) contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), toolsMenu(active, info?.database));
+  if (active) {
+    const items: MenuItem[] = [...toolsMenu(active, info?.database), "-", ["Metrics Board", () => openBoard(boardCtx())]];
+    contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), items);
+  }
 };
 
 /** A small context menu at the pointer; any click or Esc closes it. */
@@ -1976,6 +1982,9 @@ function showResults(tab: SqlTab) {
   search.hidden = append || !shown.length;
   search.value = res.search ?? "";
   const target = shown.length === 1 && !append ? editable(shown[0]) : null;
+  const chart = $("result-chart");
+  chart.hidden = append || shown.length !== 1 || !shown[0].result.columns.length;
+  chart.setAttribute("aria-pressed", String(!chart.hidden && !!shown[0].charted));
   showResultEdits(target);
   $("result-found").textContent = "";
   tab.result = shown[0]?.result;
@@ -1984,7 +1993,12 @@ function showResults(tab: SqlTab) {
     const r = shown[0];
     const rows = searchRows(r.result, search.value);
     tab.result = rows;
-    if (!target) render(rows, 0);
+    if (r.charted) {
+      $("out").replaceChildren(chartPanel(rows, (r.chart ??= guessSpec(rows)), {
+        change: (s) => (r.chart = s),
+        add: (s) => openBoard(boardCtx(), { kind: s.kind, title: "", sql: r.sql, chart: { x: s.x, y: s.y } }),
+      }));
+    } else if (!target) render(rows, 0);
     else {
       render(rows, 0, {
         table: target.table,
@@ -2011,6 +2025,7 @@ function showResults(tab: SqlTab) {
  *  table's, the table's key is among them, and no search hides rows. */
 function editable(r: ResultTab) {
   const e = r.edit;
+  if (r.charted) return null;
   const columns = e && columnsCache.get(e.table);
   if (!e || !columns || (current() as SqlTab).out?.search?.trim()) return null;
   const names = new Set(columns.map((c) => c.name));
@@ -2504,6 +2519,26 @@ $("result-add-row").onclick = () => {
   const t = resultTarget();
   if (t) grid.addRow(t);
 };
+$("result-chart").onclick = () => {
+  const tab = current();
+  const r = tab?.kind === "sql" ? tab.out?.tabs.find((x) => x.id === tab.out!.shown) : undefined;
+  if (tab?.kind !== "sql" || !r) return;
+  r.charted = !r.charted;
+  showResults(tab);
+};
+
+/** What a metrics board needs from the workspace on screen; see metrics.ts. */
+function boardCtx(): BoardCtx {
+  const session = (w: Workspace) => ({
+    key: w.key, label: w.info?.database ? `${w.conn.name} · ${w.info.database}` : w.conn.name, dialect: w.conn.kind as Dialect,
+  });
+  return {
+    conn: active!.name, session: session(ws!), sessions: () => workspaces.map(session),
+    format: settings.paramFormat === "off" ? "colon" : settings.paramFormat,
+    confirm: confirmDialog, transfer: transferCtx,
+  };
+}
+
 $("result-search").addEventListener("input", (e) => {
   const tab = current();
   if (tab?.kind !== "sql" || !tab.out) return;
@@ -2929,6 +2964,7 @@ addCommands([
   { id: "restore", label: "Restore…", menu: "Tools", when: hasTools, run: () => openRestore(active!, info?.database, confirmDialog) },
   { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && active!.kind !== "sqlite",
     sep: true, run: () => openProcesses(active!, confirmDialog) },
+  { id: "metrics-board", label: "Metrics Board", menu: "Tools", sep: true, when: hasTools, run: () => openBoard(boardCtx()) },
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
 ]);
 initMenu();
