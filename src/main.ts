@@ -665,6 +665,8 @@ $("return-workspace").onclick = () => ws && showWorkspace(ws);
 // render each pane live once the grid and editor can draw into more than one place.
 const live = () => $("live");
 
+let nextShot = 1;
+
 /** A still copy of the live pane: same look, no ids, nothing focusable. Clicking it focuses that pane. */
 function snapshot(p: Pane): HTMLElement {
   const shot = live().cloneNode(true) as HTMLElement;
@@ -674,6 +676,10 @@ function snapshot(p: Pane): HTMLElement {
     n.removeAttribute("contenteditable");
   }
   shot.classList.add("shot");
+  // The column layout sheet targets #out; scoped to this copy, it neither leaks into the live grid nor goes stale.
+  const scope = `shot-${nextShot++}`;
+  shot.classList.add(scope);
+  for (const st of shot.querySelectorAll("style")) st.textContent = (st.textContent ?? "").replaceAll("#out", `.${scope} [data-id="out"]`);
   shot.onpointerdown = (e) => {
     e.preventDefault();
     const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-tab]")?.dataset.tab;
