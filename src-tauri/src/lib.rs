@@ -11,6 +11,7 @@ mod jobs;
 mod mcp;
 mod processes;
 mod readonly;
+mod rows;
 mod ssh;
 mod store;
 mod structure;
@@ -242,24 +243,6 @@ async fn reconnect(app: AppHandle, open: State<'_, Open>, name: String) -> Resul
         let _ = switch_database(&mut live, &db).await;
     }
     info(open.entry(name).or_insert(live)).await
-}
-
-/// Saves inline grid edits. Safe mode applies: [`Error::ConfirmRequired`] until resent with `confirmed: true`.
-#[tauri::command]
-async fn update_rows(
-    open: State<'_, Open>,
-    name: String,
-    table: String,
-    edits: Vec<db::RowEdit>,
-    confirmed: bool,
-) -> Result<u64> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    if live.saved.confirm_writes && !confirmed {
-        return Err(Error::ConfirmRequired);
-    }
-    let r = live.conn.update_rows(&table, &edits).await;
-    live.check(r)
 }
 
 /// Drops the live connection; the next connect opens a fresh one.
@@ -564,7 +547,6 @@ pub fn run() -> tauri::Result<()> {
             use_database,
             columns,
             disconnect,
-            update_rows,
             run_query,
             browse,
             schema,
@@ -575,6 +557,10 @@ pub fn run() -> tauri::Result<()> {
             table_op_sql,
             run_ddl,
             table_ddl,
+            rows::save_rows,
+            rows::rows_sql,
+            rows::cell_bytes,
+            rows::enum_values,
             backup::backup_setup,
             backup::start_backup,
             backup::start_restore,

@@ -67,14 +67,6 @@ pub async fn run_startup_script(script: &str) -> Result<()> {
     }))
 }
 
-/// One row's edits: the primary-key values that find it, and the new values (None = NULL).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RowEdit {
-    pub key: Vec<(String, String)>,
-    pub set: Vec<(String, Option<String>)>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct Column {
     pub name: String,
@@ -705,51 +697,6 @@ impl Conn {
         self.dialect().table_ident(table)
     }
 
-    /// Applies cell edits in one transaction, each row found by its primary key.
-    /// Values are bound as text parameters; the server converts them to the column type.
-    /// Rolls back everything if any statement fails or one key matches more than one row.
-    // ponytail: MySQL reports rows changed, not matched, so a vanished row is not detected there;
-    // set CLIENT_FOUND_ROWS on the connection if that matters.
-    pub async fn update_rows(&mut self, table: &str, edits: &[RowEdit]) -> Result<u64> {
-        if edits.iter().any(|e| e.key.is_empty() || e.set.is_empty()) {
-            return Err(Error::Invalid("every edit needs a primary key and at least one value"));
-        }
-        let statements: Vec<(String, Vec<Option<&str>>)> = edits
-            .iter()
-            .map(|e| {
-                let mut n = 0;
-                let mut next = |col: &str| {
-                    n += 1;
-                    format!("{} = {}", self.ident(col), self.param(n))
-                };
-                let set: Vec<String> = e.set.iter().map(|(c, _)| next(c)).collect();
-                let key: Vec<String> = e.key.iter().map(|(c, _)| next(c)).collect();
-                let sql =
-                    format!("update {} set {} where {}", self.table_ident(table), set.join(", "), key.join(" and "));
-                let params = e.set.iter().map(|(_, v)| v.as_deref()).chain(e.key.iter().map(|(_, v)| Some(v.as_str())));
-                (sql, params.collect())
-            })
-            .collect();
-        self.query(if matches!(self, Conn::My(_)) { "start transaction" } else { "begin" }).await?;
-        let mut total = 0;
-        for (sql, params) in &statements {
-            let outcome = match self.execute_with(sql, params).await {
-                Ok(n) if n > 1 => Err(Error::Invalid("a key matched more than one row; nothing was saved")),
-                other => other,
-            };
-            match outcome {
-                Ok(n) => total += n,
-                Err(e) => {
-                    // The edit's own error is the useful one; a failed rollback ends with the session anyway.
-                    let _ = self.query("rollback").await;
-                    return Err(e);
-                }
-            }
-        }
-        self.query("commit").await?;
-        Ok(total)
-    }
-
     /// Columns of `table` (`schema.table` for Postgres) in definition order.
     pub async fn columns(&mut self, table: &str) -> Result<Vec<Column>> {
         let (sql, params) = match self {
@@ -818,7 +765,7 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
-    use super::{Conn, Engine, RowEdit};
+    use super::{Conn, Engine};
     use crate::tls::Tls;
 
     async fn open(engine: Engine, url: &str) -> Conn {
@@ -848,53 +795,6 @@ mod tests {
             let cols = c.columns("it's").await.unwrap();
             assert_eq!((cols[0].name.as_str(), cols[0].primary, cols[1].nullable), ("id", true, false));
             assert_eq!(cols[1].default.as_deref(), Some("'x'"));
-        });
-    }
-
-    #[test]
-    fn update_rows_saves_quotes_and_rolls_back_on_failure() {
-        tauri::async_runtime::block_on(async {
-            let mut c = open(Engine::Sqlite, ":memory:").await;
-            c.query("create table t(id integer primary key, v text not null)").await.unwrap();
-            c.query("insert into t(id, v) values (1, 'a'), (2, 'b')").await.unwrap();
-            let edit = |id: &str, v: Option<&str>| RowEdit {
-                key: vec![("id".into(), id.into())],
-                set: vec![("v".into(), v.map(String::from))],
-            };
-            assert_eq!(
-                c.update_rows("t", &[edit("1", Some("O'Brien \\ ;--")), edit("2", Some("z"))]).await.unwrap(),
-                2
-            );
-            let r = c.query("select v from t order by id").await.unwrap();
-            assert_eq!(r.rows, [vec![Some("O'Brien \\ ;--".into())], vec![Some("z".into())]]);
-
-            assert!(c.update_rows("t", &[edit("1", Some("kept?")), edit("2", None)]).await.is_err()); // v is NOT NULL
-            let r = c.query("select v from t order by id").await.unwrap();
-            assert_eq!(r.rows[0], vec![Some("O'Brien \\ ;--".into())], "the first update must be rolled back");
-        });
-    }
-
-    #[test]
-    fn update_rows_refuses_a_key_that_matches_several_rows() {
-        tauri::async_runtime::block_on(async {
-            let mut c = open(Engine::Sqlite, ":memory:").await;
-            c.query("create table dup(k integer, v text)").await.unwrap();
-            c.query("insert into dup values (1, 'a'), (1, 'b')").await.unwrap();
-            let e = RowEdit { key: vec![("k".into(), "1".into())], set: vec![("v".into(), None)] };
-            let err = c.update_rows("dup", &[e]).await.unwrap_err();
-            assert_eq!(err.to_string(), "a key matched more than one row; nothing was saved");
-            let r = c.query("select count(*) from dup where v is null").await.unwrap();
-            assert_eq!(r.rows[0][0].as_deref(), Some("0"));
-        });
-    }
-
-    #[test]
-    fn update_rows_rejects_edits_without_a_key() {
-        tauri::async_runtime::block_on(async {
-            let mut c = open(Engine::Sqlite, ":memory:").await;
-            let e = RowEdit { key: vec![], set: vec![("v".into(), None)] };
-            let err = c.update_rows("t", &[e]).await.unwrap_err();
-            assert_eq!(err.to_string(), "every edit needs a primary key and at least one value");
         });
     }
 
@@ -1058,9 +958,13 @@ mod tests {
             assert!(my.columns("user").await.unwrap().iter().any(|c| c.name == "Host" && c.primary));
             my.query("create temporary table dbm_edit(id int primary key, note text)").await.unwrap();
             my.query("insert into dbm_edit values (1, 'x')").await.unwrap();
-            let edit =
-                RowEdit { key: vec![("id".into(), "1".into())], set: vec![("note".into(), Some("a\\b'c".into()))] };
-            assert_eq!(my.update_rows("dbm_edit", &[edit]).await.unwrap(), 1);
+            let edit = crate::rows::Update {
+                key: vec![("id".into(), "1".into())],
+                id: None,
+                set: vec![("note".into(), crate::rows::Value::Text(Some("a\\b'c".into())))],
+            };
+            let changes = crate::rows::Changes { updates: vec![edit], ..Default::default() };
+            assert_eq!(my.save_rows("dbm_edit", &changes).await.unwrap(), 1);
             let r = my.query("select note from dbm_edit").await.unwrap();
             assert_eq!(r.rows[0][0].as_deref(), Some("a\\b'c"), "backslashes and quotes stored as typed");
 
@@ -1075,9 +979,10 @@ mod tests {
             .await
             .unwrap();
             pg.query("insert into dbm_edit values (1, false, '2026-01-01', 1.5, 'x')").await.unwrap();
-            let set = |c: &str, v: Option<&str>| (c.to_string(), v.map(String::from));
-            let edit = RowEdit {
+            let set = |c: &str, v: Option<&str>| (c.to_string(), crate::rows::Value::Text(v.map(String::from)));
+            let edit = crate::rows::Update {
                 key: vec![("id".into(), "1".into())],
+                id: None,
                 set: vec![
                     set("ok", Some("t")),
                     set("at", Some("2026-10-13 09:30:00")),
@@ -1085,7 +990,8 @@ mod tests {
                     set("note", None),
                 ],
             };
-            assert_eq!(pg.update_rows("pg_temp.dbm_edit", &[edit]).await.unwrap(), 1);
+            let changes = crate::rows::Changes { updates: vec![edit], ..Default::default() };
+            assert_eq!(pg.save_rows("pg_temp.dbm_edit", &changes).await.unwrap(), 1);
             let r = pg.query("select ok, at, n, note from dbm_edit").await.unwrap();
             assert_eq!(
                 r.rows[0],

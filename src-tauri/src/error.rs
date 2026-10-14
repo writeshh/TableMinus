@@ -76,6 +76,9 @@ pub enum Error {
     Statement { n: u64, source: Box<Error> },
     #[error("not a JSON array of objects: {0}")]
     JsonImport(serde_json::Error),
+    /// An update or delete would hit several rows. The UI matches this exact text and offers row identity.
+    #[error("a key matched more than one row; nothing was saved")]
+    SeveralRows,
     #[error("the SSH server could not reach {host}:{port}: {reason}")]
     SshForward { host: String, port: u16, reason: String },
 }
