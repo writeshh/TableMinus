@@ -53,7 +53,7 @@ pub enum Error {
     /// A request the UI should not have sent, such as an edit with no key.
     #[error("{0}")]
     Invalid(&'static str),
-    #[error(transparent)]
+    #[error("{}", postgres_message(.0))]
     Postgres(#[from] tokio_postgres::Error),
     #[error(transparent)]
     MySql(#[from] mysql_async::Error),
@@ -124,3 +124,47 @@ impl serde::Serialize for Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// tokio-postgres's own message leaves out the cause ("db error", "error connecting to server"). A server error shows
+/// as the server wrote it (severity, message, detail, hint); anything else gets its chain of causes.
+fn postgres_message(e: &tokio_postgres::Error) -> String {
+    if let Some(db) = e.as_db_error() {
+        return db.to_string();
+    }
+    let mut message = e.to_string();
+    let mut cause = std::error::Error::source(e);
+    while let Some(c) = cause {
+        message.push_str(": ");
+        message.push_str(&c.to_string());
+        cause = c.source();
+    }
+    message
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn a_postgres_connect_error_should_say_why() {
+        tauri::async_runtime::block_on(async {
+            // Port 1 is closed, so the connect fails at once with the OS's reason as the cause.
+            let e = tokio_postgres::connect("host=127.0.0.1 port=1 user=x", tokio_postgres::NoTls).await.err().unwrap();
+            let message = Error::Postgres(e).to_string();
+            assert!(message.starts_with("error connecting to server: "), "{message}");
+            assert!(message.len() > "error connecting to server: ".len(), "{message}");
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local Postgres"]
+    fn a_postgres_server_error_should_show_the_servers_message() {
+        tauri::async_runtime::block_on(async {
+            let url = "postgres://postgres@127.0.0.1:5432/postgres";
+            let (client, conn) = tokio_postgres::connect(url, tokio_postgres::NoTls).await.unwrap();
+            tauri::async_runtime::spawn(conn);
+            let e = client.simple_query("select 1/0").await.unwrap_err();
+            assert_eq!(Error::Postgres(e).to_string(), "ERROR: division by zero");
+        });
+    }
+}
