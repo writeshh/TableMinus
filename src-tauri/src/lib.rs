@@ -2,6 +2,7 @@
 
 mod backup;
 mod browse;
+mod catalog;
 mod db;
 mod ddl;
 mod error;
@@ -531,6 +532,45 @@ async fn table_ddl(open: State<'_, Open>, name: String, table: String) -> Result
     live.check(r)
 }
 
+/// The sidebar's items other than tables: schemas, views, functions, sequences, types.
+#[tauri::command]
+async fn items(open: State<'_, Open>, name: String) -> Result<Vec<catalog::Item>> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let system = live.saved.options.system_schemas;
+    let r = live.conn.items(system).await;
+    live.check(r)
+}
+
+/// "Search in database", one table at a time so the UI can stop between tables and other commands get the
+/// connection in between: how many rows match, up to [`catalog::SEARCH_CAP`].
+#[tauri::command]
+async fn search_table(
+    open: State<'_, Open>,
+    prefs: State<'_, Prefs>,
+    name: String,
+    table: String,
+    mode: catalog::SearchMode,
+    text: String,
+) -> Result<u64> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = with_limit(live, query_limit(&prefs), move |c| {
+        Box::pin(async move { c.search_count(&table, mode, &text).await })
+    })
+    .await;
+    live.check(r)
+}
+
+/// Rows and size of a table or view, for the sidebar's Overview.
+#[tauri::command]
+async fn item_overview(open: State<'_, Open>, name: String, table: String) -> Result<catalog::Overview> {
+    let mut open = open.0.lock().await;
+    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let r = live.conn.overview(&table).await;
+    live.check(r)
+}
+
 /// Starts the app. Returns only when it quits.
 ///
 /// # Errors
@@ -575,6 +615,9 @@ pub fn run() -> tauri::Result<()> {
             table_op_sql,
             run_ddl,
             table_ddl,
+            items,
+            search_table,
+            item_overview,
             backup::backup_setup,
             backup::start_backup,
             backup::start_restore,
