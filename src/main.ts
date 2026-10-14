@@ -572,9 +572,10 @@ let ws: Workspace | null = null; // the one on screen (or last on screen, while 
 /** Every tab of the workspace on screen, in all its panes. */
 const allTabs = () => (ws?.panes ?? [pane]).flatMap((p) => (p === pane ? tabs : p.tabs));
 
-/** Writes the on-screen state back into its workspace before another takes the screen. */
+/** Writes the on-screen state back into its workspace before another takes the screen. Off screen (the launcher
+ *  is showing) it was written when the launcher came up, and may have changed since (Reconnect All). */
 function stashWorkspace() {
-  if (!ws) return;
+  if (!ws || $("workspace").hidden) return;
   stashEditor();
   Object.assign(pane, { tabs, currentId });
   Object.assign(ws, {
@@ -583,7 +584,7 @@ function stashWorkspace() {
 }
 
 function showWorkspace(w: Workspace) {
-  if (w !== ws || $("workspace").hidden) stashWorkspace();
+  stashWorkspace();
   ws = w;
   ({ conn: active, info, tables, pane, columns: columnsCache, expanded } = w);
   ({ tabs, currentId } = pane);
@@ -623,6 +624,7 @@ async function reconnectAll() {
     try {
       w.info = await invoke<Info>("reconnect", { name: w.conn.name });
       Object.assign(w, { tables: w.info.tables, columns: new Map(), lost: false });
+      forgetItems(w.conn.name);
     } catch (e) {
       status(`${w.conn.name}: ${e}`, "error");
     }
