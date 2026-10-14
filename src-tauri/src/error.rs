@@ -9,6 +9,17 @@ pub enum Error {
     /// with `unlock`.
     #[error("PASSWORD")]
     PasswordRequired,
+    /// The connection asks for its password every time and none was given yet. The UI matches this exact text, asks,
+    /// then hands it over with `set_session_password` and connects again.
+    #[error("ASK PASSWORD")]
+    AskPassword,
+    /// An exported connections file is password-protected. The UI matches this exact text and asks for it.
+    #[error("FILE PASSWORD")]
+    FilePasswordRequired,
+    #[error("wrong password, or the file is damaged")]
+    FileUnsealFailed,
+    #[error("encryption: {0}")]
+    Crypto(String),
     /// The UI matches this exact text and asks again.
     #[error("WRONG PASSWORD")]
     WrongPassword,

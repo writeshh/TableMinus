@@ -50,6 +50,7 @@ subtle = "2"
 getrandom = "0.3"
 dirs = "7"
 argon2 = "0.6"
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 robius-authentication = "0.3.1"

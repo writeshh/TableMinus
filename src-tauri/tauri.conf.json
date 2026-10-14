@@ -31,6 +31,19 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "sqlite",
+          "sqlite3",
+          "db",
+          "db3"
+        ],
+        "name": "SQLite database",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
     ]
   }
 }

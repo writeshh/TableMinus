@@ -9,6 +9,7 @@ mod error;
 mod export;
 mod import;
 mod jobs;
+mod launcher;
 mod locations;
 mod mcp;
 mod passcode;
@@ -127,7 +128,7 @@ async fn open_saved(open: &Open, dir: &std::path::Path, name: &str) -> Result<Li
         .into_iter()
         .find(|c| c.name == name)
         .ok_or_else(|| Error::NoSuchConnection(name.to_string()))?;
-    let password = store::stored(store::Secret::Database, &saved.name)?;
+    let password = store::password_for(&saved)?;
     let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
     let (conn, tunnel) = open_db(&saved, password.as_ref(), ssh_secret).await?;
     Ok(Live { url: saved.url.clone(), saved, password, conn, tunnel })
@@ -645,6 +646,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(backup::Jobs::default())
         .manage(processes::Sessions::default())
         .manage(jobs::Jobs::default())
+        .manage(launcher::Opened::default())
         .setup(|app| {
             tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
             tauri::async_runtime::spawn(passcode::lock_at_startup(open.clone()));
@@ -712,9 +714,22 @@ pub fn run() -> tauri::Result<()> {
             jobs::start_import,
             jobs::start_sql_import,
             jobs::preview_import,
-            jobs::cancel_job
+            jobs::cancel_job,
+            launcher::launcher,
+            launcher::duplicate_connection,
+            launcher::move_to_group,
+            launcher::save_group,
+            launcher::delete_group,
+            launcher::save_tag,
+            launcher::delete_tag,
+            launcher::set_session_password,
+            launcher::export_connections,
+            launcher::import_connections,
+            launcher::take_opened
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())?
+        .run(launcher::on_event);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -745,6 +760,9 @@ mod tests {
             ssh: None,
             tls: Tls::default(),
             options: Options::default(),
+            password_mode: crate::store::PasswordMode::Keychain,
+            color: None,
+            group: String::new(),
         };
         let conn = Conn::open(engine, url, None, &saved.tls, &saved.options, None).await.unwrap();
         Live { url: url.into(), saved, password: None, conn, tunnel: None }

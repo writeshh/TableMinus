@@ -22,6 +22,12 @@
         <div class="search-row">
           <button id="add" class="round" title="New connection" aria-label="New connection">+</button>
           <input id="search" type="search" placeholder="Search connections" autocomplete="off" />
+          <select id="conn-sort" title="Sort connections" aria-label="Sort connections">
+            <option value="name">By name</option>
+            <option value="kind">By driver</option>
+            <option value="tag">By tag</option>
+          </select>
+          <button id="launcher-menu" class="round" title="Groups, tags, import and export" aria-label="More">⋯</button>
         </div>
         <ul id="conns" class="conns"></ul>
         <p id="no-conns" class="hint center" hidden>No connections yet.<br />Create one to get started.</p>
@@ -47,15 +53,9 @@
       <form id="form" autocomplete="off">
         <fieldset>
           <label>Name <input name="name" /></label>
-          <label>Environment
-            <select name="tag">
-              <option value="">None</option>
-              <option value="local">Local</option>
-              <option value="development">Development</option>
-              <option value="staging">Staging</option>
-              <option value="production">Production</option>
-            </select>
-          </label>
+          <label>Tag <select name="tag"></select></label>
+          <div class="opt-row"><span>Color</span><div class="swatches" id="swatches" role="radiogroup" aria-label="Status color"></div></div>
+          <label>Group <select name="group"></select></label>
           <label>Safe mode <select name="safety"></select></label>
         </fieldset>
         <fieldset class="net">
@@ -64,7 +64,14 @@
             <label class="port">Port <input name="port" inputmode="numeric" /></label>
           </div>
           <label>User <input name="user" placeholder="user name" /></label>
-          <label>Password <input name="password" type="password" placeholder="Stored in the keychain" /></label>
+          <div class="pair pw-row">
+            <label>Password <input name="password" type="password" placeholder="Stored in the keychain" /></label>
+            <select name="password_mode" aria-label="Password storage" title="Where the password is kept">
+              <option value="keychain">Store in keychain</option>
+              <option value="ask">Ask every time</option>
+              <option value="no_password">No password</option>
+            </select>
+          </div>
           <label>Database <input name="database" placeholder="database name" /></label>
           <label>SSL mode <select name="ssl"></select></label>
           <div class="tls-files">
@@ -184,6 +191,10 @@
         <div class="row">
           <span class="k">Connections</span>
           <label class="check"><input type="checkbox" id="keep-alive" /> Keep connections alive</label>
+        </div>
+        <div class="row">
+          <span class="k">Startup</span>
+          <label class="check"><input type="checkbox" id="reopen-workspaces" /> Reopen the workspaces that were open at quit</label>
         </div>
         <p class="hint note">A query that runs past the timeout is stopped on the server. Keep-alive pings every open connection every 30 seconds, so idle ones aren't closed and a lost one shows up straight away.</p>
       </section>

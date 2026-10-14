@@ -44,6 +44,10 @@ async function build() {
     // On macOS Settings lives in the app menu; elsewhere it stays in File.
     let items = entries(name).filter((e) => !(isMac && "id" in e && e.id === "settings"));
     if (name === "Edit") items = [...edit, ...(items.length ? [sep] : []), ...items];
+    if (name === "File") {
+      const open: Entry[] = recent.length ? recent.map((r) => ({ text: r.label, action: r.run })) : [{ text: "No Recent Connections", enabled: false }];
+      items = [{ text: "Open Recent", items: open }, sep, ...items];
+    }
     if (name === "Window") items = [...window, ...items];
     return { text: name, items };
   });
@@ -52,10 +56,20 @@ async function build() {
 }
 
 let pending = Promise.resolve();
+let rebuild = () => {};
 /** Builds the menu now and again whenever a shortcut changes. */
 export function initMenu() {
   if (!("__TAURI_INTERNALS__" in window)) return;
-  const rebuild = () => (pending = pending.then(build).catch((e) => console.warn("menu bar:", e)));
+  rebuild = () => void (pending = pending.then(build).catch((e) => console.warn("menu bar:", e)));
   rebuild();
   onBindingsChanged(rebuild);
+}
+
+type Recent = { label: string; run: () => void };
+let recent: Recent[] = [];
+/** File › Open Recent's connections, most recent first. */
+export function setRecent(list: Recent[]) {
+  if (JSON.stringify(list.map((r) => r.label)) === JSON.stringify(recent.map((r) => r.label))) return void (recent = list);
+  recent = list;
+  rebuild();
 }
