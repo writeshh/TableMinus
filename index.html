@@ -26,6 +26,7 @@
         <ul id="conns" class="conns"></ul>
         <p id="no-conns" class="hint center" hidden>No connections yet.<br />Create one to get started.</p>
         <p id="home-status" class="status"></p>
+        <button id="return-workspace" class="ghost" hidden>Back to the open workspaces</button>
       </div>
     </section>
 
@@ -175,6 +176,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z" /></svg>
           Security
         </button>
+        <button role="tab" data-tab="shortcuts">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h1M11 10h1M15 10h2M7 14h10" /></svg>
+          Shortcuts
+        </button>
       </nav>
       <section data-pane="general">
         <div class="row">
@@ -246,6 +251,7 @@
         </div>
         <p class="hint note">Safe mode asks before running any query it can't prove is read-only. Each connection can override this in its own settings.</p>
       </section>
+      <section data-pane="shortcuts" id="shortcuts-pane" hidden></section>
       <footer>
         <button id="settings-reset">Restore defaults</button>
         <span class="spacer"></span>
@@ -272,12 +278,25 @@
           </button>
         </div>
         <div class="seg side-tabs" role="tablist">
-          <button data-side="items">Items</button><button data-side="history">History</button>
+          <button data-side="items">Items</button><button data-side="history">History</button><button data-side="search" title="Search in database">Search</button>
         </div>
         <div id="side-items" class="side-pane">
+          <select id="schema-picker" title="Schema" hidden></select>
           <input id="filter" type="search" placeholder="Search tables" />
           <ul id="tables" class="tree"></ul>
           <p id="no-tables" class="hint"></p>
+        </div>
+        <div id="side-search" class="side-pane" hidden>
+          <input id="db-search-text" type="search" placeholder="Find text in every table" autocomplete="off" />
+          <div class="db-search-row">
+            <select id="db-search-mode" title="How each column is compared">
+              <option value="contains">Contains</option><option value="not_contains">Doesn't contain</option>
+              <option value="starts_with">Starts with</option><option value="ends_with">Ends with</option>
+            </select>
+            <button id="db-search-go">Search</button>
+          </div>
+          <p id="db-search-status" class="hint"></p>
+          <div id="db-search-results"></div>
         </div>
         <div id="side-history" class="side-pane" hidden>
           <input id="history-search" type="search" placeholder="Search history" />
@@ -287,7 +306,7 @@
       </aside>
       <main>
         <header id="where">
-          <span id="where-conn" class="where-conn"></span>
+          <span id="where-conn" class="where-conn" role="button" tabindex="0" title="Workspaces"></span>
           <span class="spacer"></span>
           <span id="pill" class="pill" role="button" tabindex="0" title="Connection info"></span>
           <button id="db-button" class="ghost" title="Open a database"></button>
@@ -307,6 +326,7 @@
           <button id="reconnect" class="primary">Reconnect</button>
           <span class="hint inline" id="reconnect-key"></span>
         </div>
+        <div id="panes" class="panes"><div id="live" class="pane">
         <nav id="tabs" class="tabs" role="tablist"></nav>
         <div id="sql-pane" class="sql-pane">
           <div id="sql" class="editor"></div>
@@ -354,6 +374,7 @@
           <button id="page-prev" class="ghost" title="Previous page" aria-label="Previous page">‹</button>
           <button id="page-next" class="ghost" title="Next page" aria-label="Next page">›</button>
         </footer>
+        </div></div>
       </main>
     </section>
   </body>

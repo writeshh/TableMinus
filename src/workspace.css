@@ -1,0 +1,67 @@
+/* Workspace extras: tab renaming, split panes, workspace switcher, Open Anything, sidebar sections, shortcuts. */
+.tab-rename { width: 140px; padding: 1px 4px; font: inherit; border: 1px solid var(--accent); border-radius: 4px; }
+#return-workspace { margin-top: 8px; }
+
+/* Workspaces: the connection name in the header opens the switcher. */
+.where-conn { cursor: default; border-radius: 6px; padding: 2px 4px; }
+.where-conn:hover { background: var(--hover); }
+.ws-count { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--hover); color: var(--muted); }
+.ws-count.lost { background: var(--danger); color: white; }
+
+/* Split panes: side by side, the focused one live, the others still copies. */
+.panes { flex: 1; min-height: 0; display: flex; }
+.pane { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.panes.split .pane + .pane { border-left: 1px solid var(--line); }
+.panes.split #live { box-shadow: inset 0 2px 0 var(--accent); }
+.pane.shot { opacity: 0.75; cursor: default; }
+.shot [data-id="out"] { flex: 1; min-height: 0; overflow: hidden; }
+
+/* Open Anything */
+dialog.anything { width: min(620px, calc(100vw - 32px)); padding: 10px; margin-top: 12vh; }
+dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
+.anything-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: min(56vh, 460px); overflow: auto; }
+.anything-list li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 7px; cursor: default; }
+.anything-list li[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.anything-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.anything-list .name b { color: var(--accent); }
+.anything-list .detail { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.anything-list .kind { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Sidebar sections, schema picker, search in database, overview */
+#schema-picker { width: calc(100% - 16px); margin: 0 8px 6px; }
+.tree .section { margin-top: 4px; }
+.section-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 4px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: left; }
+.section-head::before { content: "›"; display: inline-block; font-size: 13px; transition: transform 120ms ease-out; }
+.section-head[aria-expanded="true"]::before { transform: rotate(90deg); }
+.section-head .count { font-weight: 400; }
+.chevron-gap { width: 16px; flex: none; }
+.item-icon { flex: none; width: 13px; height: 11px; border-radius: 3px; border: 1.5px solid color-mix(in srgb, var(--accent) 70%, transparent); }
+.item-icon.view, .item-icon.matview { border-style: dashed; }
+.item-icon.function, .item-icon.procedure { border-radius: 50%; }
+.item-icon.sequence { border-radius: 1px; border-width: 1.5px 0; }
+.item-icon.type { transform: rotate(45deg) scale(0.8); }
+.db-search-row { display: flex; gap: 6px; margin: 0 8px 6px; }
+.db-search-row select { flex: 1; min-width: 0; }
+#db-search-text { width: calc(100% - 16px); margin: 0 8px 6px; }
+#db-search-status { margin: 0 8px 6px; }
+#db-search-results { overflow: auto; flex: 1; }
+#db-search-results .found { display: flex; width: 100%; gap: 8px; border: 0; background: none; padding: 4px 8px; border-radius: 6px; text-align: left; }
+#db-search-results .found:hover { background: var(--hover); }
+#db-search-results .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.overview { width: 260px; }
+.overview h4 { margin: 0 0 8px; overflow-wrap: anywhere; }
+.overview dl { margin: 0; }
+
+/* Settings › Shortcuts */
+#shortcuts-pane { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; }
+#shortcuts-pane[hidden] { display: none; }
+.shortcut-head { display: flex; gap: 8px; }
+.shortcut-search { flex: 1; }
+.shortcut-list { overflow: auto; min-height: 0; flex: 1; }
+.shortcut-row { display: grid; grid-template-columns: 82px 1fr auto auto auto; gap: 6px; align-items: center; padding: 3px 0; }
+.shortcut-row .menu-name { color: var(--muted); font-size: 11px; }
+.shortcut-row .keys { min-width: 96px; display: flex; gap: 4px; justify-content: center; font-size: 12px; }
+.shortcut-row .keys.recording { border-color: var(--accent); color: var(--accent); }
+.shortcut-row kbd { font: 12px var(--mono); }
+.shortcut-row kbd.clash { color: var(--danger); }
+.shortcut-row button.ghost { font-size: 12px; padding: 2px 6px; }
