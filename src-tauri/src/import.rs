@@ -564,7 +564,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn file(name: &str, text: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("dbmanager-{}-import", std::process::id()));
+        let d = std::env::temp_dir().join(format!("tableminus-{}-import", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let p = d.join(name);
         std::fs::write(&p, text).unwrap();

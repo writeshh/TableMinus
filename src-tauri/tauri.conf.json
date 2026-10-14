@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DB Manager",
+  "productName": "Table Minus",
   "version": "0.1.0",
   "identifier": "dev.ritesh.dbmanager",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "DB Manager",
+        "title": "Table Minus",
         "width": 1200,
         "height": 800
       }

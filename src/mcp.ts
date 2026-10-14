@@ -22,7 +22,7 @@ type McpEvent =
 const PANE = `
 <div class="row">
   <span class="k">Server</span>
-  <span><label class="check"><input type="checkbox" id="mcp-enabled" /> Let AI agents use DB Manager over MCP</label></span>
+  <span><label class="check"><input type="checkbox" id="mcp-enabled" /> Let AI agents use Table Minus over MCP</label></span>
 </div>
 <div class="row">
   <span class="k">Port</span>
@@ -143,7 +143,7 @@ function renderTokens() {
     ...(status?.tokens ?? []).map((t) => {
       const reach = t.connections === null ? "Any open connection" : t.connections.join(", ") || "No connections";
       const access = t.read_only ? "Read-only" : "Read and write";
-      const about = t.bridge ? "Used by the dbmanager-mcp bridge; revoking it makes a new one" : `Created ${new Date(t.created).toLocaleDateString()}`;
+      const about = t.bridge ? "Used by the tableminus-mcp bridge; revoking it makes a new one" : `Created ${new Date(t.created).toLocaleDateString()}`;
       const revoke = el("button", { className: "ghost", textContent: "Revoke" });
       revoke.onclick = async () => {
         try {
@@ -168,13 +168,13 @@ function renderSetup() {
   const which = $<HTMLSelectElement>("mcp-agent").value;
   const quoted = JSON.stringify(bridge);
   $("mcp-setup").textContent =
-    which === "claude" ? `claude mcp add dbmanager -- ${quoted}`
-    : which === "json" ? JSON.stringify({ mcpServers: { dbmanager: { command: bridge } } }, null, 2)
-    : `claude mcp add --transport http dbmanager http://127.0.0.1:${port}/mcp \\\n  --header "Authorization: Bearer YOUR_TOKEN"`;
+    which === "claude" ? `claude mcp add tableminus -- ${quoted}`
+    : which === "json" ? JSON.stringify({ mcpServers: { tableminus: { command: bridge } } }, null, 2)
+    : `claude mcp add --transport http tableminus http://127.0.0.1:${port}/mcp \\\n  --header "Authorization: Bearer YOUR_TOKEN"`;
   $("mcp-setup-hint").textContent =
     which === "http" ? "Any agent that speaks streamable HTTP can connect with a token made above. The URL changes if the preferred port is taken."
-    : !status.bridge_exists ? "The bridge isn't next to the app yet: build it with cargo build --bin dbmanager-mcp."
-    : "The bridge uses its own token (above). To give an agent less, create a token and add \"env\": {\"DBMANAGER_MCP_TOKEN\": \"…\"} to its entry. Cursor reads ~/.cursor/mcp.json.";
+    : !status.bridge_exists ? "The bridge isn't next to the app yet: build it with cargo build --bin tableminus-mcp."
+    : "The bridge uses its own token (above). To give an agent less, create a token and add \"env\": {\"TABLEMINUS_MCP_TOKEN\": \"…\"} to its entry. Cursor reads ~/.cursor/mcp.json.";
 }
 
 function renderActivity(log: Activity[]) {

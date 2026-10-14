@@ -1,10 +1,10 @@
 [package]
-name = "db-manager"
+name = "table-minus"
 version = "0.1.0"
 description = "Personal database client: Postgres, MySQL/MariaDB and SQLite"
 authors = ["Ritesh Shrestha"]
 edition = "2024"
-default-run = "db-manager"
+default-run = "table-minus"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,7 +12,7 @@ default-run = "db-manager"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "db_manager_lib"
+name = "table_minus_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

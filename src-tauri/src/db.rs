@@ -860,7 +860,7 @@ mod tests {
     #[test]
     fn sqlcipher_key_should_unlock_only_with_the_right_passphrase() {
         tauri::async_runtime::block_on(async {
-            let path = std::env::temp_dir().join(format!("dbmanager-{}-cipher.db", std::process::id()));
+            let path = std::env::temp_dir().join(format!("tableminus-{}-cipher.db", std::process::id()));
             let _ = std::fs::remove_file(&path);
             let path = path.to_str().unwrap();
             let opts = super::Options::default();

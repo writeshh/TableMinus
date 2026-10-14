@@ -194,7 +194,7 @@ async fn write_item(conn: &mut Conn, export: &Export, item: &Item, job: &Job, pr
 /// Where a file is written before it is complete.
 fn temp_path(path: &Path) -> PathBuf {
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".dbmanager-tmp");
+    tmp.push(".tableminus-tmp");
     tmp.into()
 }
 
@@ -402,7 +402,7 @@ mod tests {
     }
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("dbmanager-{}-export-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("tableminus-{}-export-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

@@ -389,7 +389,7 @@ pub struct Status {
 fn status(shared: &Shared) -> Status {
     let config = lock(&shared.config).clone();
     let bridge = std::env::current_exe()
-        .map(|exe| exe.with_file_name(format!("dbmanager-mcp{}", std::env::consts::EXE_SUFFIX)))
+        .map(|exe| exe.with_file_name(format!("tableminus-mcp{}", std::env::consts::EXE_SUFFIX)))
         .unwrap_or_default();
     Status {
         enabled: config.enabled,

@@ -1,4 +1,4 @@
-//! DB Manager's Tauri commands: the only surface the UI can call.
+//! Table Minus's Tauri commands: the only surface the UI can call.
 
 mod backup;
 mod browse;
@@ -451,7 +451,7 @@ async fn read_text_file(path: std::path::PathBuf) -> Result<String> {
 async fn write_text_file(path: std::path::PathBuf, text: String) -> Result<()> {
     let failed = |source| Error::File { path: path.display().to_string(), source };
     let mut tmp = path.clone().into_os_string();
-    tmp.push(".dbmanager-tmp");
+    tmp.push(".tableminus-tmp");
     std::fs::write(&tmp, text).map_err(failed)?;
     std::fs::rename(&tmp, &path).map_err(failed)
 }
@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn text_files_should_round_trip_and_refuse_huge_or_binary_ones() {
         tauri::async_runtime::block_on(async {
-            let dir = std::env::temp_dir().join(format!("dbmanager-{}-files", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("tableminus-{}-files", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("q.sql");
             super::write_text_file(path.clone(), "select 'é';\n".into()).await.unwrap();

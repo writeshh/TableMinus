@@ -531,7 +531,7 @@ mod tests {
     fn save_rows_should_load_a_file_as_bytes() {
         tauri::async_runtime::block_on(async {
             let mut c = sqlite("create table b(id integer primary key, data blob)").await;
-            let path = std::env::temp_dir().join(format!("dbmanager-{}-cell.bin", std::process::id()));
+            let path = std::env::temp_dir().join(format!("tableminus-{}-cell.bin", std::process::id()));
             std::fs::write(&path, [0u8, 0xff, b'\'']).unwrap();
             let changes = Changes {
                 inserts: vec![vec![("data".into(), Value::File(super::FileValue { file: path.clone() }))]],
@@ -548,7 +548,7 @@ mod tests {
     fn save_rows_should_refuse_a_file_over_the_cap() {
         tauri::async_runtime::block_on(async {
             let mut c = sqlite("create table b(id integer primary key, data blob)").await;
-            let path = std::env::temp_dir().join(format!("dbmanager-{}-big.bin", std::process::id()));
+            let path = std::env::temp_dir().join(format!("tableminus-{}-big.bin", std::process::id()));
             std::fs::File::create(&path).unwrap().set_len(super::MAX_CELL_FILE + 1).unwrap();
             let changes = Changes {
                 inserts: vec![vec![("data".into(), Value::File(super::FileValue { file: path.clone() }))]],
@@ -637,7 +637,7 @@ mod tests {
                 c.use_database(&db).await?;
                 c.query("create table t(id int auto_increment primary key, mood enum('ok','it''s'), b blob)").await?;
                 c.query("insert into t(mood) values ('ok'), ('ok')").await?;
-                let path = std::env::temp_dir().join(format!("dbmanager-{}-my.bin", std::process::id()));
+                let path = std::env::temp_dir().join(format!("tableminus-{}-my.bin", std::process::id()));
                 std::fs::write(&path, [0u8, 0xff])?;
                 let changes = Changes {
                     deletes: vec![Row { key: key("2"), id: None }],

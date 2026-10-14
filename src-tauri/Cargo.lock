@@ -1056,44 +1056,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
-name = "db-manager"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "bytes",
- "dirs",
- "flate2",
- "futures-util",
- "getrandom 0.3.4",
- "http-body-util",
- "hyper",
- "hyper-util",
- "keyring",
- "mysql_async",
- "native-tls",
- "postgres-native-tls",
- "rmcp",
- "robius-authentication",
- "rusqlite",
- "russh",
- "russh-config",
- "secrecy",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sqlparser",
- "subtle",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "thiserror 2.0.21",
- "tokio",
- "tokio-postgres",
- "url",
-]
-
-[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5560,6 +5522,44 @@ dependencies = [
  "pkg-config",
  "toml 0.8.2",
  "version-compare",
+]
+
+[[package]]
+name = "table-minus"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "bytes",
+ "dirs",
+ "flate2",
+ "futures-util",
+ "getrandom 0.3.4",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "keyring",
+ "mysql_async",
+ "native-tls",
+ "postgres-native-tls",
+ "rmcp",
+ "robius-authentication",
+ "rusqlite",
+ "russh",
+ "russh-config",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlparser",
+ "subtle",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "url",
 ]
 
 [[package]]

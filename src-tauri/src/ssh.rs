@@ -246,7 +246,7 @@ mod tests {
     const KEY_B: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFCZxOLLXSW1+tNRkqLg+JLnjZAkM3bOKuyxf8PMWTd2";
 
     fn check(test: &str) -> HostKeyCheck {
-        let dir = std::env::temp_dir().join(format!("dbmanager-{}-{test}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tableminus-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         HostKeyCheck { host: "db.example.com".into(), port: 2222, known_hosts: dir.join("known_hosts") }
     }

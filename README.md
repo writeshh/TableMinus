@@ -1,4 +1,4 @@
-# DB Manager
+# Table Minus
 
 Personal database client for macOS and Linux: Tauri 2, a Rust core, a plain TypeScript UI.
 

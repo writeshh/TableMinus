@@ -203,7 +203,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_dir(test: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("dbmanager-{}-loc-{test}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tableminus-{}-loc-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -20,6 +20,7 @@ pub enum Secret {
 
 impl Secret {
     fn service(self) -> &'static str {
+        // Named for the app before it became Table Minus; renaming would orphan saved passwords.
         match self {
             Secret::Database => "dev.ritesh.dbmanager",
             Secret::Ssh => "dev.ritesh.dbmanager.ssh",
@@ -188,7 +189,7 @@ mod tests {
 
     /// A fresh folder for one test, removed first in case a previous run left it behind.
     fn temp_dir(test: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("dbmanager-{}-{test}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tableminus-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

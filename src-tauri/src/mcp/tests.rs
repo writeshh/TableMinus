@@ -40,7 +40,7 @@ fn saved(name: &str, url: &str) -> store::Saved {
 
 /// A server whose "lite" connection is open on an in-memory database with table `t` (one row).
 async fn server(test: &str) -> Server {
-    let dir = std::env::temp_dir().join(format!("dbmanager-{}-mcp-{test}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tableminus-{}-mcp-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir); // left over from an earlier run, or not there at all
     for c in [saved("lite", ":memory:"), saved("other", ":memory:")] {
         store::save(&dir, c, None, None, None).unwrap();

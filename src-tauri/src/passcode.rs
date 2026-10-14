@@ -10,6 +10,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::time::Duration;
 use tauri::AppHandle;
 
+// The pre-rename name, kept so an existing passcode still unlocks.
 const SERVICE: &str = "dev.ritesh.dbmanager.passcode";
 const ACCOUNT: &str = "app";
 const MIN_LEN: usize = 4;
@@ -88,7 +89,7 @@ pub async fn unlock(passcode: SecretString) -> Result<()> {
 
 #[tauri::command]
 pub async fn unlock_with_touch_id() -> Result<()> {
-    crate::safety::touch_id("unlock DB Manager").await
+    crate::safety::touch_id("unlock Table Minus").await
 }
 
 /// The way out for a forgotten passcode. On macOS the Mac's own login (Touch ID or password) removes it. Elsewhere it
@@ -96,7 +97,7 @@ pub async fn unlock_with_touch_id() -> Result<()> {
 #[tauri::command]
 pub async fn forgot_passcode(app: AppHandle) -> Result<()> {
     if cfg!(target_os = "macos") {
-        crate::safety::touch_id("remove the DB Manager passcode").await?;
+        crate::safety::touch_id("remove the Table Minus passcode").await?;
     } else {
         let dir = crate::dir(&app)?;
         blocking(move || crate::store::load(&dir)?.iter().try_for_each(|c| crate::store::forget_secrets(&c.name)))

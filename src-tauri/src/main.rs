@@ -2,10 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() -> std::process::ExitCode {
-    match db_manager_lib::run() {
+    match table_minus_lib::run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("DB Manager could not start: {e}");
+            eprintln!("Table Minus could not start: {e}");
             std::process::ExitCode::FAILURE
         }
     }
