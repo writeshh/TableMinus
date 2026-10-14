@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { el } from "./dom";
+import { connName, el } from "./dom";
 import { guarded } from "./safety";
 import { fileName, matchColumns } from "./transfer";
 
@@ -97,7 +97,7 @@ async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<strin
   bar.removeAttribute("value"); // indeterminate until a total arrives
   try {
     const id = await guarded(ctx.conn, (a) => invoke<number>(cmd, { ...args, name: ctx.conn, ...a }),
-      () => ctx.confirm(`${label} on "${ctx.conn}"? It may change data.`, "Go ahead"));
+      () => ctx.confirm(`${label} on "${connName(ctx.conn)}"? It may change data.`, "Go ahead"));
     button.onclick = () => ((button.disabled = true), invoke("cancel_job", { id }));
     shown.set(id, show);
     const done = early.get(id);
@@ -199,7 +199,7 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
     if (typeof dir !== "string") return;
     const ext = prefs.format + (prefs.gzip ? ".gz" : "");
     const now = new Date();
-    const path = (table: string) => `${dir}/${fileName(prefs.pattern, { connection: ctx.conn, database: ctx.database, table, now }, ext)}`;
+    const path = (table: string) => `${dir}/${fileName(prefs.pattern, { connection: connName(ctx.conn), database: ctx.database, table, now }, ext)}`;
     const items =
       source.kind === "tables" ? tables.map((t) => ({ path: path(t), source: { table: t } }))
       : source.kind === "rows" ? [{ path: path(source.request.table), source: { rows: { request: source.request, page: rows.value === "page" } } }]
@@ -235,7 +235,7 @@ async function sqlWizard(ctx: Ctx, path: string) {
   const cancel = el("button", { type: "button", textContent: "Cancel" });
   cancel.onclick = () => d.close();
   d.append(
-    el("p", { className: "hint", textContent: `Every statement runs on "${ctx.conn}", one after another, stopping at the first error.` }),
+    el("p", { className: "hint", textContent: `Every statement runs on "${connName(ctx.conn)}", one after another, stopping at the first error.` }),
     pre, el("footer", {}, cancel, el("span", { className: "spacer" }), run),
   );
   run.onclick = () => {

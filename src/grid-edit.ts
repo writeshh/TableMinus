@@ -3,7 +3,7 @@
 
 import { CANCELLED, guarded, type Approval } from "./safety";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { el } from "./dom";
+import { connName, el } from "./dom";
 import {
   Staged, boolValues, changesFor, columnKind, isBlobPlaceholder, nativeValue, parseTsv, pasteCells, same, sameJson,
   type Kind, type Value,
@@ -360,7 +360,7 @@ export async function save(tab: EditTab, confirmed = false, byIdentity = false):
       host.call<number>("save_rows", {
         name: conn.name, table: tab.table, changes: changes(tab, byIdentity), confirmed: confirmed || a.confirmed, unlock: a.unlock,
       });
-    const rows = await guarded(conn.name, send, () => host.confirm(`Save ${plural(n, "change")} to ${tab.table} on "${conn.name}"?`, "Save"));
+    const rows = await guarded(conn.name, send, () => host.confirm(`Save ${plural(n, "change")} to ${tab.table} on "${connName(conn.name)}"?`, "Save"));
     tab.staged.clear();
     tab.message = [`Saved ${plural(n, "change")} (${plural(rows, "row")})`, "done"];
     await host.reload(tab);
@@ -386,7 +386,7 @@ export async function preview(tab: EditTab) {
   if (!conn || !tab.staged.count || !tab.result) return;
   try {
     const statements = await host.call<string[]>("rows_sql", { name: conn.name, table: tab.table, changes: changes(tab, false) });
-    if (await sqlDialog(`Changes to ${tab.table}`, statements, `"${conn.name}"`)) await save(tab, true);
+    if (await sqlDialog(`Changes to ${tab.table}`, statements, `"${connName(conn.name)}"`)) await save(tab, true);
   } catch (e) {
     tab.message = [String(e), "error"];
     host.render();

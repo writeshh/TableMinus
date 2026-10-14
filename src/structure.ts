@@ -3,8 +3,8 @@
 // Everything here asks before it acts: the preview dialog is the confirmation, also for safe mode.
 
 /// <reference types="vite/client" />
-import { el } from "./dom";
-import { guarded } from "./safety";
+import { connName, el } from "./dom";
+import { CANCELLED, guarded } from "./safety";
 import "./structure.css"; // vite injects it
 
 export type ColumnInfo = {
@@ -328,7 +328,7 @@ async function preview(title: string, statements: string[], okLabel: string, dan
   const conn = host.conn();
   const note = kind() === "mysql" && statements.length > 1
     ? "MySQL commits each statement as it runs; if one fails, the ones before it stay applied."
-    : `Runs in one transaction on ${conn?.name}.`;
+    : `Runs${statements.length > 1 ? " in one transaction" : ""} on ${connName(conn?.name ?? "")}.`;
   const pre = el("pre", { className: "sql-preview", textContent: sqlText(statements) });
   const picked = await modal(title, [pre, el("p", { className: "hint", textContent: note })],
     [["Cancel", ""], ["Copy", ""], [okLabel, danger ? "danger" : "primary"]], true);
@@ -378,6 +378,59 @@ async function runOp(title: string, op: Record<string, unknown>, okLabel: string
     host.note(String(e), "error");
   }
 }
+
+// ---------- Database operations (the Open database window, ⌘K) ----------
+
+/** Previews a database operation and runs it once confirmed. False when the user cancels; errors are thrown, for
+ *  the window to show. */
+async function runDatabaseOp(title: string, op: Record<string, unknown>, okLabel: string, danger: boolean) {
+  const name = host.conn()!.name;
+  const statements = await host.call<string[]>("database_sql", { name, op });
+  if (!(await preview(title, statements, okLabel, danger))) return false;
+  try {
+    await runDdl(name, statements);
+  } catch (e) {
+    if (e === CANCELLED) return false;
+    throw e;
+  }
+  return true;
+}
+
+type DbOptions = { encodings: string[]; collations: [string, string][] };
+
+/** Asks for a new database's name, encoding and collation (the server's defaults when left), then creates it.
+ *  Resolves with its name, or null when cancelled. */
+export async function newDatabase(): Promise<string | null> {
+  const options = await host.call<DbOptions>("database_options", { name: host.conn()!.name });
+  const option = (value: string, text = value) => el("option", { value, textContent: text });
+  const name = el("input", { spellcheck: false });
+  const encoding = el("select", {}, option("", "Default"), ...options.encodings.map((e) => option(e)));
+  const collation = el("select");
+  // MySQL's collations belong to a character set; Postgres's locales go with any encoding (theirs is blank).
+  const fill = () => collation.replaceChildren(option("", "Default"),
+    ...options.collations.filter(([, e]) => !e || !encoding.value || e === encoding.value).map(([c]) => option(c)));
+  encoding.onchange = fill;
+  fill();
+  const mysql = kind() === "mysql";
+  const form = el("form", { method: "dialog" }, el("label", { className: "field" }, "Name", name),
+    el("label", { className: "field" }, mysql ? "Character set" : "Encoding", encoding),
+    el("label", { className: "field" }, mysql ? "Collation" : "Collation (locale)", collation));
+  form.onsubmit = (e) => (e.preventDefault(), (form.closest("dialog")!.querySelector("footer button:last-child") as HTMLElement).click());
+  if ((await modal("New database", [form], [["Cancel", ""], ["Create…", "primary"]])) !== "Create…" || !name.value.trim()) return null;
+  const op = { op: "create", name: name.value.trim(), encoding: encoding.value || null, collation: collation.value || null };
+  return (await runDatabaseOp(`Create database ${op.name}`, op, "Create", false)) ? op.name : null;
+}
+
+/** Asks for a new name and renames the database; resolves with the new name, or null when cancelled. */
+export async function renameDatabase(db: string): Promise<string | null> {
+  const v = await ask(`Rename database ${db}`, [{ key: "to", label: "New name", value: db }], "Rename…");
+  const to = String(v?.to ?? "");
+  if (!to || to === db) return null;
+  return (await runDatabaseOp(`Rename database ${db}`, { op: "rename", name: db, to }, "Rename", false)) ? to : null;
+}
+
+/** Drops the database after its preview; true once dropped. */
+export const dropDatabase = (db: string) => runDatabaseOp(`Drop database ${db}`, { op: "drop", name: db }, "Drop", true);
 
 async function viewDdl(table: string) {
   try {

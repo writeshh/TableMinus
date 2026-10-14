@@ -8,6 +8,23 @@
 .ws-count { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--hover); color: var(--muted); }
 .ws-count.lost { background: var(--danger); color: white; }
 
+/* Database tabs: one per open workspace above the header, marked with its connection's tag colour. */
+.db-tabs { display: flex; gap: 2px; padding: 5px 8px 0; background: var(--side); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; }
+.db-tab { --tag: color-mix(in srgb, var(--muted) 60%, transparent); display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 260px; padding: 4px 6px 5px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0; background: none; color: var(--muted); white-space: nowrap; }
+.db-tab:hover { color: var(--fg); }
+.db-tab[aria-selected="true"] { background: var(--bg); color: var(--fg); border-color: var(--line); margin-bottom: -1px; box-shadow: inset 0 2px 0 var(--tag); }
+.db-tab.local { --tag: var(--ok); }
+.db-tab.development { --tag: var(--accent); }
+.db-tab.staging { --tag: var(--warn); }
+.db-tab.production { --tag: var(--danger); }
+.db-tab .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--tag); }
+.db-tab .label { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.db-tab .conn { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--muted); }
+.db-tab .lost-mark { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--danger); color: white; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
+.db-tab .close { flex: none; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 4px; opacity: 0; font-size: 13px; }
+.db-tab:hover .close, .db-tab[aria-selected="true"] .close { opacity: 0.7; }
+.db-tab .close:hover { opacity: 1; background: var(--press); }
+
 /* Split panes: side by side, the focused one live, the others still copies. */
 .panes { flex: 1; min-height: 0; display: flex; }
 .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }

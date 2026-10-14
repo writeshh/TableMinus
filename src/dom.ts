@@ -12,3 +12,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   n.append(...kids);
   return n;
 }
+
+/** The saved connection's name in a workspace's session key: the backend keys a further tab on the same connection
+ *  as name + "\u001f" + n (`Open` in lib.rs), and that suffix is never shown. */
+export const connName = (key: string) => key.split("\u001f")[0];

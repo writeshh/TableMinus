@@ -146,8 +146,12 @@
       <ul id="dbs" class="dbs" role="listbox"></ul>
       <p id="db-status" class="status"></p>
       <footer>
-        <button id="db-cancel">Cancel</button>
+        <button id="db-new" class="ghost" title="Create a database">New…</button>
+        <button id="db-rename" class="ghost" title="Rename the selected database">Rename…</button>
+        <button id="db-drop" class="ghost" title="Drop the selected database">Drop…</button>
         <span class="spacer"></span>
+        <button id="db-cancel">Cancel</button>
+        <button id="db-open-tab" title="Open in a new database tab (⌘↩)">New Tab</button>
         <button id="db-open" class="primary">Open</button>
       </footer>
     </dialog>
@@ -297,6 +301,7 @@
         </div>
       </aside>
       <main>
+        <nav id="db-tabs" class="db-tabs" role="tablist" aria-label="Open databases" hidden></nav>
         <header id="where">
           <span id="where-conn" class="where-conn" role="button" tabindex="0" title="Workspaces"></span>
           <span class="spacer"></span>
