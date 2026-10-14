@@ -199,6 +199,63 @@ impl tokio_postgres::types::ToSql for PgText<'_> {
 
 /// A MySQL row as text cells, the way the text protocol would show them. Prepared statements return typed
 /// values, so dates and times are formatted from the column's type and fractional-second digits.
+/// The file a `LOAD DATA [LOW_PRIORITY | CONCURRENT] LOCAL INFILE '…'` statement names, when `sql` starts with one.
+/// The server, not the statement, says which file it wants, so this is the only file the client will send.
+fn local_infile(sql: &str) -> Option<String> {
+    fn keyword<'a>(s: &'a str, word: &str) -> Option<&'a str> {
+        let (head, rest) = (s.get(..word.len())?, s.get(word.len()..)?);
+        let ends = !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_');
+        (head.eq_ignore_ascii_case(word) && ends).then(|| rest.trim_start())
+    }
+    let s = keyword(keyword(sql.trim_start(), "load")?, "data")?;
+    let s = keyword(s, "low_priority").or_else(|| keyword(s, "concurrent")).unwrap_or(s);
+    let s = keyword(keyword(s, "local")?, "infile")?;
+    // A MySQL string literal: backslash escapes, and a doubled quote stands for one.
+    let mut chars = s.chars().peekable();
+    let quote = chars.next().filter(|q| matches!(q, '\'' | '"'))?;
+    let mut path = String::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => path.push(match chars.next()? {
+                'n' => '\n',
+                't' => '\t',
+                '0' => '\0',
+                other => other,
+            }),
+            q if q == quote && chars.peek() == Some(&quote) => {
+                chars.next();
+                path.push(quote);
+            }
+            q if q == quote => return Some(path),
+            other => path.push(other),
+        }
+    }
+    None
+}
+
+/// Streams `file` to the server in 64 KiB pieces, for one LOAD DATA LOCAL request.
+fn infile_data(
+    file: std::fs::File,
+) -> impl Future<Output = mysql_async::Result<mysql_async::InfileData>> + Send + Sync {
+    let file = tokio::fs::File::from_std(file);
+    async move {
+        use tokio::io::AsyncReadExt;
+        let chunks = futures_util::stream::unfold(Some(file), |file| async move {
+            let mut file = file?;
+            let mut buf = vec![0; 64 * 1024];
+            match file.read(&mut buf).await {
+                Ok(0) => None,
+                Ok(n) => {
+                    buf.truncate(n);
+                    Some((Ok(bytes::Bytes::from(buf)), Some(file)))
+                }
+                Err(e) => Some((Err(e), None)), // the error ends the stream
+            }
+        });
+        Ok(Box::pin(chunks) as mysql_async::InfileData)
+    }
+}
+
 fn my_row(row: mysql_async::Row) -> Vec<Option<String>> {
     let columns = row.columns();
     row.unwrap().into_iter().zip(columns.iter()).map(|(v, col)| my_cell(v, col)).collect()
@@ -416,6 +473,16 @@ impl Conn {
         }
     }
 
+    /// Statements that make the database itself refuse writes, then undo that: a read-only transaction (rolled
+    /// back), or SQLite's `query_only`. They catch what the read-only parse can't see, such as a function that writes.
+    pub fn read_only_bounds(&self) -> (&'static str, &'static str) {
+        match self {
+            Conn::Pg(_) => ("begin read only", "rollback"),
+            Conn::My(_) => ("start transaction read only", "rollback"),
+            Conn::Lite(_) => ("pragma query_only = on", "pragma query_only = off"),
+        }
+    }
+
     /// Runs SQL typed by the user and returns the last result set as text cells (None = NULL).
     pub async fn query(&mut self, sql: &str) -> Result<QueryResult> {
         self.query_limited(sql, None).await
@@ -452,6 +519,12 @@ impl Conn {
             }
             Conn::My(c) => {
                 use mysql_async::prelude::Queryable;
+                // With no handler the driver refuses LOCAL INFILE requests; this one answers once, with the file the
+                // statement names, whatever the server asked for.
+                if let Some(path) = local_infile(sql) {
+                    let file = std::fs::File::open(&path).map_err(|source| Error::File { path, source })?;
+                    c.set_infile_handler(infile_data(file));
+                }
                 let mut res = c.query_iter(sql).await?;
                 r.columns = res.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
                 while let Some(row) = res.next().await? {
@@ -765,6 +838,36 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn read_only_bounds_should_make_sqlite_refuse_writes_until_ended() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            c.query("create table t (a int)").await.unwrap();
+            let (start, end) = c.read_only_bounds();
+            c.query(start).await.unwrap();
+            assert!(c.query("insert into t values (1)").await.is_err());
+            c.query(end).await.unwrap();
+            c.query("insert into t values (1)").await.unwrap();
+        });
+    }
+
+    #[test]
+    fn local_infile_should_find_the_file_a_load_data_local_statement_names() {
+        use super::local_infile;
+        assert_eq!(local_infile("LOAD DATA LOCAL INFILE '/tmp/a.csv' INTO TABLE t").as_deref(), Some("/tmp/a.csv"));
+        assert_eq!(local_infile("  load data concurrent local infile \"x\" into table t").as_deref(), Some("x"));
+        assert_eq!(local_infile(r"load data local infile 'it''s\\a\'b' into table t").as_deref(), Some(r"it's\a'b"));
+    }
+
+    #[test]
+    fn local_infile_should_ignore_other_statements() {
+        use super::local_infile;
+        assert_eq!(local_infile("load data infile '/srv/a.csv' into table t"), None, "server-side file");
+        assert_eq!(local_infile("select 'load data local infile'"), None);
+        assert_eq!(local_infile("load data local infile '/tmp/unterminated"), None);
+        assert_eq!(local_infile("load database local infile 'x'"), None);
+    }
+
     use super::{Conn, Engine};
     use crate::tls::Tls;
 
@@ -922,6 +1025,26 @@ mod tests {
             assert_ne!(local_mysql_cipher(TlsMode::Require).await.unwrap(), "", "Require: no certificate check");
             let err = local_mysql_cipher(TlsMode::VerifyCa).await.unwrap_err();
             println!("VerifyCa refused as expected: {err}");
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local MySQL with local_infile on; creates and drops a scratch database"]
+    fn local_mysql_load_data_local_sends_the_named_file() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Mysql, "mysql://root@127.0.0.1:3306").await;
+            c.query("create database if not exists tm_infile").await.unwrap();
+            c.query("create table if not exists tm_infile.t (a int, b text)").await.unwrap();
+            let path = std::env::temp_dir().join(format!("tableminus-{}-infile.csv", std::process::id()));
+            std::fs::write(&path, "1,one\n2,two\n").unwrap();
+            let sql =
+                format!("load data local infile '{}' into table tm_infile.t fields terminated by ','", path.display());
+            let r = c.query_limited(&sql, None).await;
+            let n = c.scalar("select count(*) from tm_infile.t").await;
+            c.query("drop database tm_infile").await.unwrap();
+            let _ = std::fs::remove_file(&path);
+            r.unwrap();
+            assert_eq!(n.unwrap().as_deref(), Some("2"));
         });
     }
 

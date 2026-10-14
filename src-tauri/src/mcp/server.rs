@@ -296,8 +296,7 @@ impl Tools {
     /// Read-only tokens may only run read-only SQL. A query waits for the user's Allow when approval is on and it
     /// may write, or when the connection's safe mode level asks for it (Alert 1 and Safe 1 ask even for reads; Safe
     /// levels want the password with the Allow).
-    // ponytail: "read-only" is readonly::is_read_only's parse, so a SELECT calling a side-effect function passes;
-    // run read-only tokens' queries in a read-only transaction if that matters.
+    /// A read-only token's query also runs where the database refuses writes, which catches a function that writes.
     async fn run_query(&self, token: &Token, args: &Args) -> Done {
         let name = need(args.connection.as_ref(), "connection")?;
         let sql = need(args.sql.as_ref(), "sql")?.to_string();
@@ -319,11 +318,23 @@ impl Tools {
             n => usize::try_from(n).unwrap_or(MAX_ROWS).min(MAX_ROWS),
         };
         let mut live = self.0.open.get(name).await?;
+        let (start, end) = live.conn.read_only_bounds();
+        if token.read_only {
+            let r = live.conn.query(start).await;
+            live.check(r)?;
+        }
         let timeout = crate::query_limit(&self.0.prefs);
+        // The time limit covers only the query, so the end below still runs after a stopped one.
         let r = crate::with_limit(&mut live, timeout, move |c| {
             Box::pin(async move { c.query_limited(&sql, Some(limit)).await })
         })
         .await;
+        if token.read_only {
+            let ended = live.conn.query(end).await;
+            if r.is_ok() {
+                live.check(ended)?;
+            }
+        }
         let result = live.check(r)?;
         let outcome = if result.columns.is_empty() {
             format!("{} rows affected", result.affected)
