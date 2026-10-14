@@ -4,7 +4,7 @@ import { Decoration, ViewPlugin, highlightWhitespace, keymap, placeholder, type 
 import { indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { MariaSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
-import { tags as t } from "@lezer/highlight";
+import { highlightCode, tags as t } from "@lezer/highlight";
 import { statementAt, splitStatements, type Dialect, type Statement } from "./statements";
 import { formatDialect, mariadb, mysql, postgresql, sqlite } from "sql-formatter";
 
@@ -44,6 +44,21 @@ const theme = EditorView.theme({
   ".cm-placeholder": { color: "var(--muted)" },
   ".cm-current-statement": { backgroundColor: "color-mix(in srgb, var(--accent) 7%, transparent)" },
 });
+
+/** SQL as highlighted text, for places that show SQL without editing it (the console, messages). */
+export function highlightSql(text: string, kind: string): HTMLElement {
+  const code = document.createElement("code");
+  const parser = sql({ dialect: DIALECTS[kind as keyof typeof DIALECTS] ?? StandardSQL }).language.parser;
+  const put = (part: string, classes: string) => {
+    if (!classes) return void code.append(part);
+    const span = document.createElement("span");
+    span.className = classes;
+    span.textContent = part;
+    code.append(span);
+  };
+  highlightCode(text, parser.parse(text), highlight, put, () => code.append("\n"));
+  return code;
+}
 
 /** Table name → column names, as the backend's `schema` command lists them (Postgres tables are schema.table). */
 export type Schema = Map<string, string[]>;

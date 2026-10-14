@@ -13,7 +13,8 @@ export type BrowseRequest = Record<string, unknown> & { table: string };
 export type ExportSource =
   | { kind: "tables"; tables: string[] }
   | { kind: "rows"; request: BrowseRequest; pageRows: number }
-  | { kind: "query"; sql: string };
+  /** Editor results, each run again by its statement; `name` fills {table} in the file name. */
+  | { kind: "query"; queries: { sql: string; name: string }[] };
 
 /** What the dialogs need from the workspace. */
 export type Ctx = {
@@ -132,7 +133,7 @@ function loadPrefs(): ExportPrefs {
 export function exportDialog(ctx: Ctx, source: ExportSource) {
   const p = loadPrefs();
   const what =
-    source.kind === "query" ? "the query's result"
+    source.kind === "query" ? source.queries.length === 1 ? "the query's result" : `${source.queries.length} results`
     : source.kind === "rows" ? source.request.table
     : source.tables.length === 1 ? source.tables[0] : `${source.tables.length} tables`;
   const d = modal(`Export ${what}`);
@@ -203,7 +204,7 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
     const items =
       source.kind === "tables" ? tables.map((t) => ({ path: path(t), source: { table: t } }))
       : source.kind === "rows" ? [{ path: path(source.request.table), source: { rows: { request: source.request, page: rows.value === "page" } } }]
-      : [{ path: path("query"), source: { query: { sql: source.sql, table: insertInto.value.trim() || "table_name" } } }];
+      : source.queries.map((q) => ({ path: path(q.name), source: { query: { sql: q.sql, table: insertInto.value.trim() || "table_name" } } }));
     const fmtOpts =
       prefs.format === "csv" ? { csv: { delimiter: prefs.delimiter, quote_all: prefs.quoteAll, crlf: prefs.crlf, header: prefs.header, null_empty: prefs.nullEmpty } }
       : prefs.format === "sql" ? { sql: { structure: prefs.structure, drop: prefs.drop, content: prefs.content } }

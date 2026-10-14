@@ -27,6 +27,7 @@ import { openAnything, type Item as AnythingItem } from "./openanything";
 import { initMenu } from "./menu";
 import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, treeMenu } from "./sidebar";
 import { label } from "./keys";
+import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, type QueryResult, type ResultTab, type Results } from "./results";
 import "./workspace.css";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
@@ -41,7 +42,6 @@ const OPTIONS_DEFAULT: Options = {
   socket: "", sni: "", cleartext_auth: false,
 };
 type Saved = { name: string; kind: string; url: string; tag: string; safety: Safety; ssh?: Ssh; tls?: Tls; options?: Options };
-type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number; truncated?: boolean };
 type Engine = {
   kind: string;
   label: string;
@@ -1019,11 +1019,13 @@ function renderHistory() {
 // ---------- Tabs: SQL editors and table browsers ----------
 
 type SqlTab = {
-  id: number; kind: "sql"; title: string; sql: string; state?: EditorState; result?: QueryResult; status?: [string, StatusKind];
+  id: number; kind: "sql"; title: string; sql: string; state?: EditorState; status?: [string, StatusKind];
   /** The .sql file the tab was opened from or saved to. */
   path?: string;
-  /** The statement behind `result`, for exporting it. */
-  ran?: string;
+  /** What the last run returned (results.ts). */
+  out?: Results;
+  /** The result on screen, for select-all. */
+  result?: QueryResult;
 };
 type Sort = { column: string; desc: boolean };
 type TableTab = {
@@ -1245,11 +1247,11 @@ function renderMain() {
     }
     updateCursor();
     status(...(tab.status ?? ["", ""]));
-    if (tab.result) render(tab.result, 0);
-    else $("out").replaceChildren(el("p", { className: "hint empty", textContent: "Run a query to see results here." }));
+    showResults(tab);
     syncDetail();
     return;
   }
+  $("result-strip").hidden = true;
   for (const b of $("view-seg").querySelectorAll<HTMLElement>("button")) b.setAttribute("aria-pressed", String(b.dataset.view === tab.view));
   const from = tab.page * PAGE;
   const shown = tab.result?.rows.length ?? 0;
@@ -1516,30 +1518,155 @@ async function loadSchema() {
 const fmt = (n: number) => n.toLocaleString();
 const rowLimit = () => settings.sqlLimit || null;
 
-/** Runs SQL from the current SQL tab; the result and status stay with that tab. */
-async function run(sql: string) {
+type Ran = { results: QueryResult[]; read_only: boolean };
+let nextResultId = 1;
+
+/** Runs statements from the current SQL tab, one after another; results and status stay with that tab. Each result
+ *  set gets a result tab (pinned ones from earlier runs stay), each statement a line in Messages. Safe mode asks
+ *  once for the lot. A failed statement stops the rest when Stop on error is on. */
+async function execute(statements: string[]) {
   const tab = current();
-  if (!active || tab?.kind !== "sql" || !sql.trim()) return;
+  statements = statements.filter((s) => s.trim());
+  if (!active || tab?.kind !== "sql" || !statements.length) return;
+  const conn = active;
   const say = (text: string, kind: StatusKind) => {
     tab.status = [text, kind];
     if (tab.id === currentId) status(text, kind);
   };
-  say("Running…", "busy");
+  const res: Results = { tabs: (tab.out?.tabs ?? []).filter((r) => r.pinned), messages: [], shown: MESSAGES };
+  tab.out = res;
+  const many = statements.length > 1;
+  const t0 = performance.now();
+  let approved = NOT_APPROVED; // asked once, then kept for the rest
+  let [done, failed, affected, shown] = [0, 0, 0, 0];
+  let stopped = "";
+  for (let i = 0; i < statements.length; i++) {
+    const sql = statements[i];
+    say(many ? `Running ${i + 1} of ${statements.length}…` : "Running…", "busy");
+    const started = performance.now();
+    const took = () => Math.round(performance.now() - started);
+    try {
+      const ran = await call<Ran>("run_query", { name: conn.name, sql, ...approved, maxRows: rowLimit() });
+      ran.results.forEach((result, index) => {
+        if (!result.columns.length) return void (affected += result.affected);
+        const r: ResultTab = { id: nextResultId++, title: `Result ${res.tabs.length + 1}`, sql, index, result, pinned: false, readOnly: ran.read_only };
+        res.tabs.push(r);
+        shown = r.id; // the last new result shows, as before there were tabs
+      });
+      res.messages.push({ sql, text: ran.results.map(rowsText).join(" · "), error: false, ms: took(), at: Date.now() });
+      done++;
+      addHistory(sql);
+    } catch (e) {
+      if (isSafetyStop(e) && !(e === "CONFIRM" && approved.confirmed)) {
+        say("", "");
+        const rest = statements.slice(i).join(";\n");
+        const question =
+          many ? `Run these statements on "${conn.name}"?`
+          : conn.safety === "alert1" ? `Run this on "${conn.name}"?` : `This may change data on "${conn.name}".`;
+        const next = await approval(e, conn.name, () => ask(question, rest.trim(), "Run anyway"));
+        if (!next) {
+          stopped = i ? `Cancelled before statement ${i + 1}` : "Cancelled";
+          break;
+        }
+        approved = next;
+        i--; // run this statement again, approved
+        continue;
+      }
+      failed++;
+      res.messages.push({ sql, text: String(e), error: true, ms: took(), at: Date.now() });
+      if (!many || settings.stopOnError) {
+        stopped = many ? `Statement ${i + 1} of ${statements.length} failed: ${e}` : String(e);
+        break;
+      }
+    } finally {
+      if (tab.id === currentId) showResults(tab); // results appear as they come
+    }
+  }
+  res.shown = failed ? MESSAGES : shown || MESSAGES;
+  if (tab.id === currentId) showResults(tab);
+  const ms = Math.round(performance.now() - t0);
+  const only = res.tabs.find((r) => r.id === shown)?.result;
+  if (stopped) say(stopped, failed ? "error" : "");
+  else if (!many && only) {
+    const limited = only.truncated ? ` (first ${fmt(only.rows.length)}; Load more, or raise the row limit)` : "";
+    say(`${fmt(only.rows.length)} rows${limited} · ${ms} ms`, "done");
+  } else if (!many) say(`${fmt(affected)} rows affected · ${ms} ms`, "done");
+  else say(`${done} of ${statements.length} statements${failed ? ` · ${failed} failed` : ""} · ${fmt(affected)} rows affected · ${ms} ms`, failed ? "error" : "done");
+}
+
+/** One result's line in Messages. */
+const rowsText = (r: QueryResult) =>
+  r.columns.length ? `${fmt(r.rows.length)} row${r.rows.length === 1 ? "" : "s"}${r.truncated ? " (more not loaded)" : ""}` : `${fmt(r.affected)} rows affected`;
+
+/** A SQL tab's results under the editor: the strip, then the result, every result (in append mode), or Messages. */
+function showResults(tab: SqlTab) {
+  const res = tab.out;
+  $("result-strip").hidden = !res;
+  if (!res) {
+    tab.result = undefined;
+    return void $("out").replaceChildren(el("p", { className: "hint empty", textContent: "Run a query to see results here." }));
+  }
+  const append = settings.resultsMode === "append";
+  const valid = res.shown === MESSAGES || (append ? res.shown === ALL && res.tabs.length > 0 : res.tabs.some((r) => r.id === res.shown));
+  if (!valid) res.shown = !res.tabs.length ? MESSAGES : append ? ALL : res.tabs.at(-1)!.id;
+  renderStrip($("result-tabs"), res, append, {
+    show: (id) => ((res.shown = id), showResults(tab)),
+    menu: (e, r) => contextMenu(e, resultMenu(tab, r)),
+    togglePin: (r) => ((r.pinned = !r.pinned), showResults(tab)),
+  });
+  const shown = res.shown === ALL ? res.tabs : res.tabs.filter((r) => r.id === res.shown);
+  tab.result = shown[0]?.result;
+  if (!shown.length) return renderMessages($("out"), res.messages, active?.kind ?? "");
+  if (!append) render(shown[0].result, 0);
+  else {
+    $("out").replaceChildren(...shown.map((r) =>
+      el("section", { className: "appended" }, el("h4", { textContent: `${r.title} · ${rowsLabel(r.result)}`, title: r.sql }), gridTable(r.result, 0))));
+    if (selection && !shown.some((r) => r.result === selection!.r)) selection = null;
+  }
+  for (const r of shown) {
+    if (!r.result.truncated || !r.readOnly) continue;
+    const more = el("button", { className: "ghost load-more", textContent: `Load ${fmt(rowLimit() ?? 1000)} more rows` });
+    more.onclick = () => loadMore(tab, r);
+    (drawn.get(r.result)?.parentElement ?? $("out")).append(more);
+  }
+}
+
+function resultMenu(tab: SqlTab, r: ResultTab): MenuItem[] {
+  const res = tab.out!;
+  return [
+    [r.pinned ? "Unpin" : "Pin (keep when the tab runs again)", () => ((r.pinned = !r.pinned), showResults(tab))],
+    ...(r.result.truncated && r.readOnly ? [["Load more rows", () => loadMore(tab, r)] as MenuItem] : []),
+    ["Export…", () => exportResults([r])],
+    ["Copy SQL", () => copyText(r.sql, "SQL")],
+    "-",
+    ["Close", () => ((res.tabs = res.tabs.filter((x) => x !== r)), showResults(tab))],
+    ["Close others", () => ((res.tabs = [r]), (res.shown = r.id), showResults(tab))],
+  ];
+}
+
+/** Runs a result's statement again with room for more rows. Only offered for statements that just read. */
+async function loadMore(tab: SqlTab, r: ResultTab) {
+  if (!active) return;
+  const conn = active;
+  const maxRows = r.result.rows.length + (rowLimit() ?? 1000);
+  status("Loading more rows…", "busy");
   const t0 = performance.now();
   try {
-    const conn = active;
-    const r = await guarded(conn.name, (a) => call<QueryResult>("run_query", { name: conn.name, sql, ...a, maxRows: rowLimit() }),
-      () => (say("", ""), ask(conn.safety === "alert1" ? `Run this on "${conn.name}"?` : `This may change data on "${conn.name}".`, sql.trim(), "Run anyway")));
-    tab.result = r;
-    tab.ran = sql;
-    if (tab.id === currentId) render(r, 0);
-    const ms = Math.round(performance.now() - t0);
-    const limited = r.truncated ? ` (first ${fmt(r.rows.length)}; raise the row limit to see more)` : "";
-    say(r.columns.length ? `${fmt(r.rows.length)} rows${limited} · ${ms} ms` : `${fmt(r.affected)} rows affected · ${ms} ms`, "done");
-    addHistory(sql);
+    const ran = await guarded(conn.name, (a) => call<Ran>("run_query", { name: conn.name, sql: r.sql, ...a, maxRows }),
+      () => ask(`Run this on "${conn.name}" again?`, r.sql.trim(), "Run"));
+    const next = ran.results[r.index];
+    if (next?.columns.length) r.result = next;
+    tab.status = [`${fmt(r.result.rows.length)} rows${r.result.truncated ? " (more not loaded)" : ""} · ${Math.round(performance.now() - t0)} ms`, "done"];
   } catch (e) {
-    say(e === CANCELLED ? "Cancelled" : String(e), e === CANCELLED ? "" : "error");
+    tab.status = [e === CANCELLED ? "Cancelled" : String(e), e === CANCELLED ? "" : "error"];
   }
+  if (tab.id === currentId) (status(...tab.status), showResults(tab));
+}
+
+/** Exports result tabs; each one's statement runs again on the export's own connection. */
+function exportResults(list: ResultTab[]) {
+  const name = (r: ResultTab) => r.title.toLowerCase().replace(/\s+/g, "-");
+  exportDialog(transferCtx(), { kind: "query", queries: list.map((r) => ({ sql: r.sql, name: name(r) })) });
 }
 
 // ---------- Query parameters ----------
@@ -1587,50 +1714,13 @@ async function withParams(statements: string[]): Promise<string[] | null> {
 
 const runCurrent = async () => {
   const filled = await withParams([editor.current()]);
-  if (filled) run(filled[0]);
+  if (filled) execute(filled);
 };
 
-/** Runs each statement in turn, stopping at the first error; the last result is shown. Safe mode asks once. */
+/** Runs every statement (in the selection, or the whole tab) in turn. */
 async function runAll() {
-  const tab = current();
-  const texts = editor.all().map((s) => s.text);
-  if (!active || tab?.kind !== "sql" || !texts.length) return;
-  const filled = await withParams(texts);
-  if (!filled) return;
-  const statements = filled.map((text) => ({ text }));
-  if (statements.length === 1) return run(statements[0].text);
-  const say = (text: string, kind: StatusKind) => {
-    tab.status = [text, kind];
-    if (tab.id === currentId) status(text, kind);
-  };
-  const t0 = performance.now();
-  let approved = NOT_APPROVED; // asked once, then kept for the rest
-  let affected = 0;
-  for (let i = 0; i < statements.length; i++) {
-    const sql = statements[i].text;
-    say(`Running ${i + 1} of ${statements.length}…`, "busy");
-    try {
-      const r = await call<QueryResult>("run_query", { name: active.name, sql, ...approved, maxRows: rowLimit() });
-      affected += r.affected;
-      if (r.columns.length || i === statements.length - 1) {
-        tab.result = r;
-        tab.ran = sql;
-        if (tab.id === currentId) render(r, 0);
-      }
-      addHistory(sql);
-    } catch (e) {
-      if (!isSafetyStop(e) || (e === "CONFIRM" && approved.confirmed)) return say(`Statement ${i + 1} of ${statements.length} failed: ${e}`, "error");
-      say("", "");
-      const rest = statements.slice(i).map((x) => x.text).join(";\n");
-      const next = await approval(e, active.name, () => ask(`Run these statements on "${active!.name}"?`, rest, "Run anyway"));
-      if (!next) return say(`Cancelled before statement ${i + 1}`, "");
-      approved = next;
-      i--; // run this statement again, approved
-    }
-  }
-  const ms = Math.round(performance.now() - t0);
-  const cut = tab.result?.truncated ? ` · last result cut at ${fmt(tab.result.rows.length)} rows` : "";
-  say(`${statements.length} statements · ${fmt(affected)} rows affected${cut} · ${ms} ms`, "done");
+  const filled = await withParams(editor.all().map((s) => s.text));
+  if (filled) execute(filled);
 }
 
 const numeric = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i;
@@ -1646,9 +1736,18 @@ type RenderOptions = {
   resize?: (column: string, width: number | null, done: boolean) => void;
 };
 
-/** Result grid with row numbers starting after `offset`. With options, headers sort the rows when clicked. */
+/** Shows one result grid; see [`gridTable`]. */
 function render(r: QueryResult, offset: number, sorting?: RenderOptions) {
-  if (!r.columns.length) return $("out").replaceChildren(el("p", { className: "hint empty", textContent: `${r.affected} rows affected.` }));
+  $("out").replaceChildren(gridTable(r, offset, sorting));
+  if (selection?.r !== r) selection = null; // a redraw of the same rows (after an edit) keeps it
+}
+
+/** The table each result was last drawn in, for painting the selection when several are on screen. */
+const drawn = new WeakMap<QueryResult, HTMLTableElement>();
+
+/** Result grid with row numbers starting after `offset`. With options, headers sort the rows when clicked. */
+function gridTable(r: QueryResult, offset: number, sorting?: RenderOptions): HTMLElement {
+  if (!r.columns.length) return el("p", { className: "hint empty", textContent: `${r.affected} rows affected.` });
   const table = el("table");
   const head = table.createTHead().insertRow();
   head.append(el("th", { className: "rownum" }));
@@ -1679,9 +1778,9 @@ function render(r: QueryResult, offset: number, sorting?: RenderOptions) {
     const tr = body.insertRow();
     tr.append(el("td", { className: "hint", colSpan: r.columns.length + 1, textContent: "No rows." }));
   }
-  $("out").replaceChildren(table);
-  if (selection?.r !== r) selection = null; // a redraw of the same rows (after an edit) keeps it
   if (r.rows.length) wireSelection(table, r, sorting);
+  drawn.set(r, table);
+  return table;
 }
 
 // ---------- Selection and copying ----------
@@ -1698,10 +1797,14 @@ function selectedBlock(sel: Selection) {
 
 function paintSelection() {
   const block = selection && selectedBlock(selection);
-  $("out").querySelectorAll("tbody tr").forEach((tr, ri) => {
-    [...tr.children].forEach((td, i) => {
-      const ci = i - 1; // the row number comes first
-      td.classList.toggle("sel", !!block && ci >= 0 && ri >= block.r0 && ri <= block.r1 && ci >= block.c0 && ci <= block.c1);
+  const mine = selection && drawn.get(selection.r);
+  $("out").querySelectorAll("table").forEach((table) => {
+    const on = !!block && table === mine;
+    table.querySelectorAll("tbody tr").forEach((tr, ri) => {
+      [...tr.children].forEach((td, i) => {
+        const ci = i - 1; // the row number comes first
+        td.classList.toggle("sel", on && ci >= 0 && ri >= block.r0 && ri <= block.r1 && ci >= block.c0 && ci <= block.c1);
+      });
     });
   });
   syncDetail();
@@ -2056,11 +2159,14 @@ $("export-table").onclick = () => {
   const source: ExportSource = { kind: "rows", request, pageRows: tab.result?.rows.length ?? 0 };
   exportDialog(transferCtx(), source);
 };
-$("export-result").onclick = () => {
+$("export-result").onclick = (e) => {
   const tab = current();
   if (tab?.kind !== "sql" || !active) return;
-  if (!tab.ran || !tab.result?.columns.length) return status("Run a query first; its result is exported by running it again.", "error");
-  exportDialog(transferCtx(), { kind: "query", sql: tab.ran });
+  const list = tab.out?.tabs ?? [];
+  if (!list.length) return status("Run a query first; its result is exported by running it again.", "error");
+  const on = list.find((r) => r.id === tab.out!.shown) ?? list.at(-1)!;
+  if (list.length === 1) return exportResults(list);
+  contextMenu(e, [[`Export ${on.title}…`, () => exportResults([on])], [`Export all ${list.length} results…`, () => exportResults(list)]]);
 };
 $("columns-button").onclick = () => (menuClose ? menuClose() : showColumnsMenu());
 $("page-prev").onclick = () => turnPage(-1);
@@ -2095,13 +2201,17 @@ type Settings = {
   showInvisibles: boolean;
   /** Save each connection's SQL tabs and reopen them on connect. */
   keepTabs: boolean;
+  /** Several result sets: a tab each, or all appended in one. */
+  resultsMode: "tabs" | "append";
+  /** Running several statements stops at the first that fails. */
+  stopOnError: boolean;
   /** Rebound shortcuts, command id → keys (see commands.ts); a missing id keeps its defaults. */
   shortcuts: Record<string, string[]>;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
-  shortcuts: {},
+  resultsMode: "tabs", stopOnError: true, shortcuts: {},
 };
 let settings: Settings = loadSettings();
 
@@ -2147,6 +2257,10 @@ function applySettings() {
   $<HTMLInputElement>("wrap-lines").checked = settings.wrapLines;
   $<HTMLInputElement>("show-invisibles").checked = settings.showInvisibles;
   $<HTMLInputElement>("keep-tabs").checked = settings.keepTabs;
+  $<HTMLSelectElement>("results-mode").value = settings.resultsMode;
+  $<HTMLInputElement>("stop-on-error").checked = settings.stopOnError;
+  const tab = current();
+  if (tab?.kind === "sql" && !$("workspace").hidden) showResults(tab);
   editor.setDisplay(settings.wrapLines, settings.showInvisibles);
   setOverrides(settings.shortcuts);
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
@@ -2212,12 +2326,14 @@ $("explain").onclick = async () => {
   if (!sql.trim() || !active) return;
   const prefix = active.kind === "sqlite" ? "explain query plan " : "explain ";
   const filled = await withParams([prefix + sql]);
-  if (filled) run(filled[0]);
+  if (filled) execute(filled);
 };
 $("format-sql").onclick = () => (formatSql(), editor.focus());
 $<HTMLInputElement>("wrap-lines").onchange = (e) => setSetting("wrapLines", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("show-invisibles").onchange = (e) => setSetting("showInvisibles", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("keep-tabs").onchange = (e) => setSetting("keepTabs", (e.target as HTMLInputElement).checked);
+$<HTMLSelectElement>("results-mode").onchange = (e) => setSetting("resultsMode", (e.target as HTMLSelectElement).value as Settings["resultsMode"]);
+$<HTMLInputElement>("stop-on-error").onchange = (e) => setSetting("stopOnError", (e.target as HTMLInputElement).checked);
 $<HTMLSelectElement>("param-format").onchange = (e) => setSetting("paramFormat", (e.target as HTMLSelectElement).value as Settings["paramFormat"]);
 $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));

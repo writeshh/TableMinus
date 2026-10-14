@@ -232,6 +232,14 @@
           <label class="check"><input type="checkbox" id="keep-tabs" /> Reopen each connection's SQL tabs</label>
         </div>
         <div class="row">
+          <span class="k">Several results</span>
+          <select id="results-mode"><option value="tabs">A tab for each</option><option value="append">All in one tab</option></select>
+        </div>
+        <div class="row">
+          <span class="k">Run all</span>
+          <label class="check"><input type="checkbox" id="stop-on-error" /> Stop at the first statement that fails</label>
+        </div>
+        <div class="row">
           <span class="k">Indent with</span>
           <select id="indent"><option value="tab">Tab</option><option value="2">2 spaces</option><option value="4">4 spaces</option></select>
         </div>
@@ -344,6 +352,7 @@
             <button id="ask-ok" class="danger"></button>
           </div>
         </div>
+        <nav id="result-strip" class="result-strip" hidden><div id="result-tabs" class="result-tabs" role="tablist"></div></nav>
         <div id="filters" class="filters" hidden></div>
         <style id="column-layout"></style>
         <div class="grid-area">
