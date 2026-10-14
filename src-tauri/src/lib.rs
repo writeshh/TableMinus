@@ -6,6 +6,7 @@ mod catalog;
 mod console;
 mod db;
 mod ddl;
+mod diagram;
 mod error;
 mod export;
 mod import;
@@ -699,6 +700,14 @@ async fn item_overview(open: State<'_, Open>, name: String, table: String) -> Re
     live.check(r)
 }
 
+/// A schema's tables, columns and foreign keys for the ER diagram; `schema` is Postgres's (None: the current one).
+#[tauri::command]
+async fn diagram(open: State<'_, Open>, name: String, schema: Option<String>) -> Result<diagram::Diagram> {
+    let mut live = open.get(&name).await?;
+    let r = live.conn.diagram(schema.as_deref()).await;
+    live.check(r)
+}
+
 /// Starts the app. Returns only when it quits.
 ///
 /// # Errors
@@ -754,6 +763,8 @@ pub fn run() -> tauri::Result<()> {
             items,
             search_table,
             item_overview,
+            diagram,
+            diagram::write_image,
             console::console_log,
             console::console_clear,
             set_safety,
