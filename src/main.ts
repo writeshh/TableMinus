@@ -16,6 +16,7 @@ import "./mcp"; // adds Settings › MCP before the settings tabs are wired belo
 import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
 import { addCommands, bindings, commands, isMac, onBindingsChanged } from "./commands";
 import { openAnything, type Item as AnythingItem } from "./openanything";
+import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, treeMenu } from "./sidebar";
 import { label } from "./keys";
 import "./workspace.css";
 
@@ -524,6 +525,7 @@ function applyInfo(i: Info) {
   columnsCache.clear();
   expanded.clear();
   $<HTMLInputElement>("filter").value = "";
+  forgetItems(active!.name);
   showHeader();
   editor.setDialect(active!.kind, new Map(tables.map((t) => [t, []]))); // before the new tab's state is created
   loadSchema();
@@ -895,59 +897,62 @@ async function loadColumns(table: string) {
   return cache.get(table)!;
 }
 
+/** The sidebar tree (sidebar.ts), drawing table rows with `tableRow`. */
 function renderTables() {
-  const q = $<HTMLInputElement>("filter").value.toLowerCase();
-  const shown = tables.filter((t) => t.toLowerCase().includes(q));
-  const open = current()?.kind === "table" ? (current() as TableTab).table : null;
-  $("tables").replaceChildren(
-    ...shown.map((t) => {
-      const isOpen = expanded.has(t);
-      const chevron = el("button", { className: "chevron", textContent: "›", title: isOpen ? "Hide columns" : "Show columns" });
-      chevron.setAttribute("aria-expanded", String(isOpen));
-      chevron.onclick = async (e) => {
-        e.stopPropagation();
-        if (isOpen) expanded.delete(t);
-        else {
-          expanded.add(t);
-          try {
-            await loadColumns(t);
-          } catch (err) {
-            expanded.delete(t);
-            status(String(err), "error");
-          }
-        }
-        renderTables();
-      };
-      const row = el("div", { className: "tree-row", title: t }, chevron, el("span", { className: "tbl-icon" }), el("span", { className: "label", textContent: t }));
-      row.classList.toggle("active", t === open);
-      row.onclick = () => openTable(t);
-      row.oncontextmenu = (e) => (e.stopPropagation(), contextMenu(e, [...tableMenu(t), "-", ...transferMenu(t)]));
-      const li = el("li", {}, row);
-      if (isOpen)
-        li.append(
-          el("ul", { className: "cols" }, ...(columnsCache.get(t) ?? []).map((c) =>
-            el("li", { title: `${c.name} ${c.data_type}${c.nullable ? "" : " not null"}` },
-              el("span", { className: c.primary ? "key" : "nokey", textContent: c.primary ? "⚿" : "", title: c.primary ? "Primary key" : "" }),
-              el("span", { className: "label", textContent: c.name }),
-              el("span", { className: "type", textContent: c.data_type }),
-            ),
-          )),
-        );
-      return li;
-    }),
-  );
+  const shown = active ? renderTree($("tables"), $<HTMLInputElement>("filter").value) : 0;
   const hint = $("no-tables");
-  hint.hidden = shown.length > 0;
+  hint.hidden = shown > 0;
   hint.textContent =
     info?.can_switch && !info.database ? `No database selected. Press ${keyLabel("open-database")} to choose one.`
     : tables.length ? "No tables match."
     : "This database has no tables.";
 }
 
-function showSide(which: "items" | "history") {
+/** A table's row in the sidebar: click opens it, the chevron shows its columns. `extra` joins its menu. */
+function tableRow(t: string, label: string, extra: MenuItem[]) {
+  const open = current()?.kind === "table" ? (current() as TableTab).table : null;
+  const isOpen = expanded.has(t);
+  const chevron = el("button", { className: "chevron", textContent: "›", title: isOpen ? "Hide columns" : "Show columns" });
+  chevron.setAttribute("aria-expanded", String(isOpen));
+  chevron.onclick = async (e) => {
+    e.stopPropagation();
+    if (isOpen) expanded.delete(t);
+    else {
+      expanded.add(t);
+      try {
+        await loadColumns(t);
+      } catch (err) {
+        expanded.delete(t);
+        status(String(err), "error");
+      }
+    }
+    renderTables();
+  };
+  const row = el("div", { className: "tree-row", title: t }, chevron, el("span", { className: "tbl-icon" }), el("span", { className: "label", textContent: label }));
+  row.classList.toggle("active", t === open);
+  row.onclick = () => openTable(t);
+  row.oncontextmenu = (e) => (e.stopPropagation(), contextMenu(e, [...tableMenu(t), "-", ...transferMenu(t), ...extra]));
+  const li = el("li", {}, row);
+  if (isOpen)
+    li.append(
+      el("ul", { className: "cols" }, ...(columnsCache.get(t) ?? []).map((c) =>
+        el("li", { title: `${c.name} ${c.data_type}${c.nullable ? "" : " not null"}` },
+          el("span", { className: c.primary ? "key" : "nokey", textContent: c.primary ? "⚿" : "", title: c.primary ? "Primary key" : "" }),
+          el("span", { className: "label", textContent: c.name }),
+          el("span", { className: "type", textContent: c.data_type }),
+        ),
+      )),
+    );
+  return li;
+}
+
+type Side = "items" | "history" | "search";
+function showSide(which: Side) {
   for (const b of document.querySelectorAll<HTMLElement>(".side-tabs button")) b.setAttribute("aria-pressed", String(b.dataset.side === which));
   $("side-items").hidden = which !== "items";
   $("side-history").hidden = which !== "history";
+  $("side-search").hidden = which !== "search";
+  if (which === "search") $("db-search-text").focus();
 }
 
 // History lives per connection on this machine, newest first.
@@ -1548,6 +1553,7 @@ function ask(text: string, detail: string, okLabel: string): Promise<boolean> {
 /** The sidebar's items again (new or dropped tables), with columns and autocomplete reloaded. */
 async function reloadItems() {
   const i = await call<Info>("connect", { name: active!.name }); // reuses the open connection
+  forgetItems(active!.name);
   info = i;
   tables = i.tables;
   columnsCache.clear();
@@ -1968,7 +1974,7 @@ function updateCursor() {
 }
 
 $("new-sql").onclick = () => (openSqlTab(), editor.focus());
-for (const b of document.querySelectorAll<HTMLElement>(".side-tabs button")) b.onclick = () => showSide(b.dataset.side as "items" | "history");
+for (const b of document.querySelectorAll<HTMLElement>(".side-tabs button")) b.onclick = () => showSide(b.dataset.side as Side);
 $("history-search").addEventListener("input", renderHistory);
 for (const b of $("view-seg").querySelectorAll<HTMLElement>("button"))
   b.onclick = async () => {
@@ -1990,7 +1996,26 @@ $("discard-edits").onclick = () => {
   if (tab?.kind === "table") (tab.edits.clear(), dropDraft(tab.id), renderMain());
 };
 $("toggle-filters").onclick = () => toggleFilters();
-$("side-items").oncontextmenu = (e) => active && contextMenu(e, sidebarMenu());
+$("side-items").oncontextmenu = (e) => active && contextMenu(e, [...sidebarMenu(), "-", ...treeMenu()]);
+initSidebar({
+  conn: () => active,
+  tables: () => tables,
+  call,
+  tableRow,
+  openTable: (t) => openTable(t),
+  openFound(table, mode, text) {
+    openTable(table);
+    const tab = current();
+    if (tab?.kind !== "table" || tab.table !== table) return;
+    tab.filters = [{ ...blankFilter(), op: mode, value: text }];
+    tab.filtersShown = true;
+    filtersDrawnFor = 0;
+    applyFilters(tab);
+  },
+  menu: contextMenu,
+  redraw: () => renderTables(),
+});
+initSearch();
 initStructure({
   call,
   conn: () => active,
@@ -2248,6 +2273,9 @@ addCommands([
   { id: "reload-tab", label: "Reload Current Tab", menu: "View", keys: ["Mod+KeyR"], when: inWorkspace, sep: true, run: reloadTab },
   { id: "open-anything", label: "Open Anything", menu: "Navigate", keys: ["Mod+KeyP"], when: inWorkspace,
     run: () => openAnything(anythingItems()) },
+  { id: "find-items", label: "Find Items in Sidebar…", menu: "Navigate", keys: ["Mod+Shift+KeyF"], when: inWorkspace,
+    run: () => (showSide("items"), $("filter").focus()) },
+  { id: "search-database", label: "Search in Database…", menu: "Navigate", when: inWorkspace, run: () => showSide("search") },
   { id: "go-back", label: "Go Back", menu: "Navigate", keys: ["Ctrl+Mod+ArrowLeft"], when: inWorkspace, run: () => goBack(false) },
   { id: "go-forward", label: "Go Forward", menu: "Navigate", keys: ["Ctrl+Mod+ArrowRight"], when: inWorkspace, run: () => goBack(true) },
   { id: "next-tab", label: "Select Next Tab", menu: "Window", keys: ["Mod+Shift+BracketRight", "Ctrl+Tab"], when: inWorkspace,
@@ -2277,14 +2305,22 @@ addCommands([
     when: () => workspaces.length > 1, run: () => cycleWorkspace(-1) },
 ]);
 
+const ITEM_KINDS = { schema: "schema", view: "view", matview: "materialized view", function: "function", procedure: "procedure", sequence: "sequence", type: "type" };
+
 /** What Open Anything searches: the workspace's items and SQL tabs, the other workspaces, and every command that
  *  applies right now. */
 function anythingItems(): AnythingItem[] {
+  const sideItems = active ? loadedItems(active.name) : [];
+  const kinds = new Set(sideItems.map((i) => i.name));
   const sqlTabs = (ws?.panes ?? [pane]).flatMap((p) =>
     (p === pane ? tabs : p.tabs).flatMap((t) => (t.kind === "sql" ? [{ p, t }] : [])),
   );
   return [
-    ...tables.map((t) => ({ label: t, kind: "table", run: () => openTable(t) })),
+    ...tables.filter((t) => !kinds.has(t)).map((t) => ({ label: t, kind: "table", run: () => openTable(t) })),
+    ...sideItems.filter((i) => i.kind !== "schema").map((i) => ({
+      label: i.name, kind: ITEM_KINDS[i.kind],
+      run: () => (i.kind === "view" || i.kind === "matview" ? openTable(i.name) : navigator.clipboard.writeText(i.name).then(() => note(`Copied ${i.name}`, "done"), () => {})),
+    })),
     ...sqlTabs.map(({ p, t }) => ({ label: t.title, kind: "SQL tab", detail: t.path, run: () => (focusPane(p), select(t.id)) })),
     ...workspaces.filter((w) => w !== ws).map((w) => ({ label: w.conn.name, kind: "workspace", run: () => showWorkspace(w) })),
     ...commands

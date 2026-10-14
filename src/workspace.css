@@ -26,3 +26,28 @@ dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
 .anything-list .name b { color: var(--accent); }
 .anything-list .detail { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
 .anything-list .kind { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Sidebar sections, schema picker, search in database, overview */
+#schema-picker { width: calc(100% - 16px); margin: 0 8px 6px; }
+.tree .section { margin-top: 4px; }
+.section-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 4px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: left; }
+.section-head::before { content: "›"; display: inline-block; font-size: 13px; transition: transform 120ms ease-out; }
+.section-head[aria-expanded="true"]::before { transform: rotate(90deg); }
+.section-head .count { font-weight: 400; }
+.chevron-gap { width: 16px; flex: none; }
+.item-icon { flex: none; width: 13px; height: 11px; border-radius: 3px; border: 1.5px solid color-mix(in srgb, var(--accent) 70%, transparent); }
+.item-icon.view, .item-icon.matview { border-style: dashed; }
+.item-icon.function, .item-icon.procedure { border-radius: 50%; }
+.item-icon.sequence { border-radius: 1px; border-width: 1.5px 0; }
+.item-icon.type { transform: rotate(45deg) scale(0.8); }
+.db-search-row { display: flex; gap: 6px; margin: 0 8px 6px; }
+.db-search-row select { flex: 1; min-width: 0; }
+#db-search-text { width: calc(100% - 16px); margin: 0 8px 6px; }
+#db-search-status { margin: 0 8px 6px; }
+#db-search-results { overflow: auto; flex: 1; }
+#db-search-results .found { display: flex; width: 100%; gap: 8px; border: 0; background: none; padding: 4px 8px; border-radius: 6px; text-align: left; }
+#db-search-results .found:hover { background: var(--hover); }
+#db-search-results .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.overview { width: 260px; }
+.overview h4 { margin: 0 0 8px; overflow-wrap: anywhere; }
+.overview dl { margin: 0; }

@@ -273,12 +273,25 @@
           </button>
         </div>
         <div class="seg side-tabs" role="tablist">
-          <button data-side="items">Items</button><button data-side="history">History</button>
+          <button data-side="items">Items</button><button data-side="history">History</button><button data-side="search" title="Search in database">Search</button>
         </div>
         <div id="side-items" class="side-pane">
+          <select id="schema-picker" title="Schema" hidden></select>
           <input id="filter" type="search" placeholder="Search tables" />
           <ul id="tables" class="tree"></ul>
           <p id="no-tables" class="hint"></p>
+        </div>
+        <div id="side-search" class="side-pane" hidden>
+          <input id="db-search-text" type="search" placeholder="Find text in every table" autocomplete="off" />
+          <div class="db-search-row">
+            <select id="db-search-mode" title="How each column is compared">
+              <option value="contains">Contains</option><option value="not_contains">Doesn't contain</option>
+              <option value="starts_with">Starts with</option><option value="ends_with">Ends with</option>
+            </select>
+            <button id="db-search-go">Search</button>
+          </div>
+          <p id="db-search-status" class="hint"></p>
+          <div id="db-search-results"></div>
         </div>
         <div id="side-history" class="side-pane" hidden>
           <input id="history-search" type="search" placeholder="Search history" />
