@@ -15,6 +15,7 @@ import {
 } from "./structure";
 import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
+import { openUsers } from "./users";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
 import { Staged } from "./staging";
 import * as grid from "./grid-edit";
@@ -1786,8 +1787,14 @@ function toolsMenu(c: Saved, database?: string | null): MenuItem[] {
 }
 $("tools-button").onclick = () => {
   const r = $("tools-button").getBoundingClientRect(); // under the button, also when opened from the keyboard
-  if (active) contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), toolsMenu(active, info?.database));
+  if (!active) return;
+  const items = toolsMenu(active, info?.database);
+  if (active.kind !== "sqlite") items.push(["Users…", showUsers]); // needs the workspace's connection, so not on launcher rows
+  contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), items);
 };
+
+/** The user manager on the workspace's session (users.ts). */
+const showUsers = () => active && openUsers({ conn: { name: sessionKey(), kind: active.kind }, call, confirm: confirmDialog });
 
 /** A small context menu at the pointer; any click or Esc closes it. */
 function contextMenu(e: MouseEvent, items: MenuItem[]) {
@@ -2940,6 +2947,7 @@ addCommands([
   { id: "diagram", label: "Show Diagram", menu: "Tools", when: hasTools, run: () => showDiagram() },
   { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && active!.kind !== "sqlite",
     sep: true, run: () => openProcesses(active!, confirmDialog) },
+  { id: "users", label: "Users…", menu: "Tools", when: () => hasTools() && active!.kind !== "sqlite", run: () => showUsers() },
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
 ]);
 initMenu();

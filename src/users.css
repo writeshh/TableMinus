@@ -1,0 +1,26 @@
+/* The user manager window (users.ts). */
+dialog.users { width: min(1000px, calc(100vw - 32px)); }
+.users-body { display: grid; grid-template-columns: 220px 1fr; gap: 14px; height: min(64vh, 620px); }
+.user-side { display: grid; grid-template-rows: 1fr auto; gap: 8px; min-height: 0; }
+.user-list { overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; display: grid; align-content: start; gap: 1px; }
+.user-list button { text-align: left; border: 0; background: none; padding: 5px 8px; border-radius: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-list button:hover { background: var(--raised); }
+.user-list button.selected { background: var(--accent); color: white; }
+.user-editor { overflow: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 10px; }
+.user-editor > * { flex: none; }
+.user-editor h4 { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.user-editor .hint { margin: 0; font-size: 11px; color: var(--muted); }
+.user-fields, .user-limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px 14px; }
+.user-editor label.field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; color: var(--muted); align-content: start; }
+.user-editor label.field input, .user-editor label.field select { color: var(--fg); min-width: 0; }
+.user-editor label.check { display: flex; gap: 6px; align-items: center; }
+.user-flags { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 14px; }
+.user-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 14px; max-height: 140px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.privilege-rows { display: grid; gap: 8px; margin-top: 6px; }
+.privilege-row { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; display: grid; gap: 6px; }
+.privilege-head { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.privilege-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.privilege-kind { font-size: 11px; color: var(--muted); }
+.privilege-boxes { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+.privilege-add { display: flex; gap: 6px; margin-top: 8px; }
+.privilege-add select { flex: 1; min-width: 0; }
