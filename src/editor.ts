@@ -4,7 +4,7 @@ import { Decoration, ViewPlugin, highlightWhitespace, keymap, placeholder, type 
 import { indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { MariaSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
-import { tags as t } from "@lezer/highlight";
+import { highlightCode, tags as t } from "@lezer/highlight";
 import { statementAt, splitStatements, type Dialect, type Statement } from "./statements";
 import { formatDialect, mariadb, mysql, postgresql, sqlite } from "sql-formatter";
 
@@ -44,6 +44,33 @@ const theme = EditorView.theme({
   ".cm-placeholder": { color: "var(--muted)" },
   ".cm-current-statement": { backgroundColor: "color-mix(in srgb, var(--accent) 7%, transparent)" },
 });
+
+/** SQL as highlighted text, for places that show SQL without editing it (the console, messages). */
+export function highlightSql(text: string, kind: string): HTMLElement {
+  const code = document.createElement("code");
+  const parser = sql({ dialect: DIALECTS[kind as keyof typeof DIALECTS] ?? StandardSQL }).language.parser;
+  const put = (part: string, classes: string) => {
+    if (!classes) return void code.append(part);
+    const span = document.createElement("span");
+    span.className = classes;
+    span.textContent = part;
+    code.append(span);
+  };
+  highlightCode(text, parser.parse(text), highlight, put, () => code.append("\n"));
+  return code;
+}
+
+/** A saved query offered as a completion when its keyword is typed. */
+export type Snippet = { keyword: string; name: string; sql: string };
+let snippets: Snippet[] = [];
+
+/** Completes saved-query keywords. Typed loosely: @codemirror/autocomplete isn't a direct dependency. */
+function snippetSource(cx: { matchBefore(re: RegExp): { from: number; to: number } | null; explicit: boolean }) {
+  const word = cx.matchBefore(/\w+/);
+  if (!snippets.length || !word || (word.from === word.to && !cx.explicit)) return null;
+  const options = snippets.map((s) => ({ label: s.keyword, detail: s.name, info: s.sql, apply: s.sql, type: "text", boost: 50 }));
+  return { from: word.from, options, validFor: /^\w*$/ };
+}
 
 /** Table name → column names, as the backend's `schema` command lists them (Postgres tables are schema.table). */
 export type Schema = Map<string, string[]>;
@@ -102,6 +129,7 @@ export function createEditor(
     syntaxHighlighting(highlight),
     placeholder("Write SQL here. Run runs the statement under the cursor (or the selection); Run all runs every statement."),
     theme,
+    EditorState.languageData.of(() => [{ autocomplete: snippetSource }]),
     EditorView.updateListener.of((u) => {
       if (u.docChanged) on.change(u.state.doc.toString());
       if (u.docChanged || u.selectionSet) on.cursor();
@@ -163,6 +191,10 @@ export function createEditor(
     all(): Statement[] {
       const { from, to } = view.state.selection.main;
       return splitStatements(from === to ? view.state.doc.toString() : view.state.sliceDoc(from, to), dialect);
+    },
+    /** Saved queries whose keyword completes to their SQL. */
+    setSnippets(list: Snippet[]) {
+      snippets = list;
     },
     /** Soft-wraps long lines; shows spaces and tabs. */
     setDisplay(wrap: boolean, invisibles: boolean) {

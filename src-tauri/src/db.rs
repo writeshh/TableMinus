@@ -85,6 +85,61 @@ pub struct QueryResult {
     pub truncated: bool,
 }
 
+/// The most results one call keeps; statements after that still run, but their results are dropped.
+pub const MAX_RESULTS: usize = 100;
+
+/// Gathers the results of one call, keeping at most `left` rows across them and [`MAX_RESULTS`] results.
+#[derive(Default)]
+struct Results {
+    done: Vec<QueryResult>,
+    current: Option<QueryResult>,
+    left: usize,
+}
+
+impl Results {
+    /// A statement's result starts.
+    fn begin(&mut self, columns: Vec<String>) {
+        self.current = Some(QueryResult { columns, ..QueryResult::default() });
+    }
+
+    /// Whether to keep the row that just arrived; when not, its result is marked cut short.
+    fn keep(&mut self) -> bool {
+        let full = self.done.len() >= MAX_RESULTS;
+        let Some(r) = self.current.as_mut().filter(|_| !full) else { return false };
+        if self.left == 0 {
+            r.truncated = true;
+            return false;
+        }
+        self.left -= 1;
+        true
+    }
+
+    fn push(&mut self, row: Vec<Option<String>>) {
+        if let Some(r) = &mut self.current {
+            r.rows.push(row);
+        }
+    }
+
+    /// A statement finished; one that returned no rows has no `begin`.
+    fn end(&mut self, affected: u64) {
+        let mut r = self.current.take().unwrap_or_default();
+        r.affected = affected;
+        if self.done.len() < MAX_RESULTS {
+            self.done.push(r);
+        }
+    }
+
+    fn finish(mut self) -> Vec<QueryResult> {
+        if self.current.is_some() {
+            self.end(0);
+        }
+        if self.done.is_empty() {
+            self.done.push(QueryResult::default()); // e.g. only a comment
+        }
+        self.done
+    }
+}
+
 /// A way to stop a running query from outside its connection.
 pub enum Stopper {
     /// Sends Postgres's cancel request on a separate socket.
@@ -415,6 +470,7 @@ impl Conn {
 
     /// Runs one or more statements, discarding any results.
     async fn batch(&mut self, sql: &str) -> Result<()> {
+        crate::console::record(sql);
         match self {
             Conn::Pg(c) => c.batch_execute(sql).await?,
             Conn::My(c) => mysql_async::prelude::Queryable::query_drop(c, sql).await?,
@@ -489,10 +545,17 @@ impl Conn {
     }
 
     /// Like [`Conn::query`], but keeps at most `max_rows` rows of the result; `truncated` says more were there.
-    /// Rows past the limit are read and dropped, so memory stays bounded and the connection stays in step.
     pub async fn query_limited(&mut self, sql: &str, max_rows: Option<usize>) -> Result<QueryResult> {
-        let max = max_rows.unwrap_or(usize::MAX);
-        let mut r = QueryResult::default();
+        Ok(self.query_results(sql, max_rows).await?.pop().unwrap_or_default())
+    }
+
+    /// Runs one or more statements and returns every statement's result in order (at least one). At most
+    /// `max_rows` rows are kept across them all, and at most [`MAX_RESULTS`] results; `truncated` marks a result
+    /// that lost rows. Rows past the limit are read and dropped, so memory stays bounded and the connection stays
+    /// in step.
+    pub async fn query_results(&mut self, sql: &str, max_rows: Option<usize>) -> Result<Vec<QueryResult>> {
+        crate::console::record(sql);
+        let mut out = Results { left: max_rows.unwrap_or(usize::MAX), ..Results::default() };
         match self {
             // The simple-query (text) protocol renders every Postgres type as text, so no per-type decoding.
             Conn::Pg(c) => {
@@ -502,17 +565,11 @@ impl Conn {
                 futures_util::pin_mut!(stream);
                 while let Some(msg) = stream.next().await {
                     match msg? {
-                        // Each statement's result replaces the previous one's: the last result set is shown.
-                        M::RowDescription(cols) => {
-                            r.columns = cols.iter().map(|c| c.name().to_string()).collect();
-                            r.rows.clear();
-                            r.truncated = false;
+                        M::RowDescription(cols) => out.begin(cols.iter().map(|c| c.name().to_string()).collect()),
+                        M::Row(row) if out.keep() => {
+                            out.push((0..row.len()).map(|i| row.get(i).map(String::from)).collect());
                         }
-                        M::Row(row) if r.rows.len() < max => {
-                            r.rows.push((0..row.len()).map(|i| row.get(i).map(String::from)).collect());
-                        }
-                        M::Row(_) => r.truncated = true,
-                        M::CommandComplete(n) => r.affected = n,
+                        M::CommandComplete(n) => out.end(n),
                         _ => {}
                     }
                 }
@@ -526,37 +583,48 @@ impl Conn {
                     c.set_infile_handler(infile_data(file));
                 }
                 let mut res = c.query_iter(sql).await?;
-                r.columns = res.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
-                while let Some(row) = res.next().await? {
-                    if r.rows.len() < max {
-                        r.rows.push(my_row(row));
-                    } else {
-                        r.truncated = true;
+                // One pass per result set; reading past a set's last row moves on to the next one.
+                loop {
+                    let columns: Vec<String> = res.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
+                    // Read now: for a statement without rows it's this one's count, and later it may be the next one's.
+                    let affected = if columns.is_empty() { res.affected_rows() } else { 0 };
+                    out.begin(columns);
+                    while let Some(row) = res.next().await? {
+                        if out.keep() {
+                            out.push(my_row(row));
+                        }
                     }
-                }
-                r.affected = res.affected_rows();
-                res.drop_result().await?; // ponytail: only the first result set of a multi-statement query
-            }
-            Conn::Lite(c) => {
-                // SQLite prepares one statement at a time; the editor sends scripts statement by statement.
-                let mut st = c.prepare(sql)?;
-                r.columns = st.column_names().into_iter().map(String::from).collect();
-                if r.columns.is_empty() {
-                    r.affected = st.execute([])? as u64;
-                    return Ok(r);
-                }
-                let n = r.columns.len();
-                let mut rows = st.query([])?;
-                while let Some(row) = rows.next()? {
-                    if r.rows.len() == max {
-                        r.truncated = true; // SQLite steps lazily, so there's nothing more to read
+                    out.end(affected);
+                    if res.is_empty() {
                         break;
                     }
-                    r.rows.push((0..n).map(|i| row.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<Vec<_>>>()?);
+                }
+            }
+            Conn::Lite(c) => {
+                use rusqlite::fallible_iterator::FallibleIterator;
+                // SQLite prepares one statement at a time; Batch steps through the rest of the text.
+                let mut batch = rusqlite::Batch::new(c, sql);
+                while let Some(mut st) = batch.next()? {
+                    let columns: Vec<String> = st.column_names().into_iter().map(String::from).collect();
+                    if columns.is_empty() {
+                        out.begin(columns);
+                        out.end(st.execute([])? as u64);
+                        continue;
+                    }
+                    let n = columns.len();
+                    out.begin(columns);
+                    let mut rows = st.query([])?;
+                    while let Some(row) = rows.next()? {
+                        if !out.keep() {
+                            break; // SQLite steps lazily, so there's nothing more to read
+                        }
+                        out.push((0..n).map(|i| row.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<Vec<_>>>()?);
+                    }
+                    out.end(0);
                 }
             }
         }
-        Ok(r)
+        Ok(out.finish())
     }
 
     /// Every table's columns in the current database, for autocomplete: (table, column) pairs in column order.
@@ -597,6 +665,7 @@ impl Conn {
 
     /// Runs one statement with bound parameters and returns the rows it affected.
     pub(crate) async fn execute_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<u64> {
+        crate::console::record(sql);
         match self {
             Conn::Pg(c) => {
                 let params: Vec<PgText> = params.iter().copied().map(PgText).collect();
@@ -615,6 +684,7 @@ impl Conn {
 
     /// Runs a catalog query with bound parameters. Every selected column must be text (cast `::text` on Postgres).
     pub(crate) async fn fetch_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<Vec<Option<String>>>> {
+        crate::console::record(sql);
         match self {
             Conn::Pg(c) => {
                 let params: Vec<PgText> = params.iter().copied().map(PgText).collect();
@@ -651,6 +721,7 @@ impl Conn {
     /// [`Conn::fetch_with`]); without, any query works.
     pub(crate) async fn stream(&mut self, sql: &str, params: &[Option<&str>], sink: &mut dyn RowSink) -> Result<()> {
         use futures_util::StreamExt;
+        crate::console::record(sql);
         match self {
             Conn::Pg(c) if params.is_empty() => {
                 use tokio_postgres::SimpleQueryMessage as M;
@@ -910,6 +981,79 @@ mod tests {
             assert_eq!((r.rows.len(), r.truncated), (10, true));
             let r = c.query_limited(sql, Some(50)).await.unwrap();
             assert_eq!((r.rows.len(), r.truncated), (50, false));
+        });
+    }
+
+    #[test]
+    fn query_results_should_return_every_statements_result_in_order() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            let sql = "create table t(a); insert into t values (1), (2); select a from t; select 'x' as b";
+            let r = c.query_results(sql, None).await.unwrap();
+            assert_eq!(r.len(), 4);
+            assert_eq!((r[1].columns.len(), r[1].affected), (0, 2), "the insert's count");
+            assert_eq!((r[2].columns.as_slice(), r[2].rows.len()), (&["a".to_string()][..], 2));
+            assert_eq!(r[3].rows[0][0].as_deref(), Some("x"));
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local Postgres"]
+    fn local_postgres_query_results_should_return_every_statements_result() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Postgres, "postgres://postgres@127.0.0.1:5432?sslmode=prefer").await;
+            let sql = "create temporary table tm_multi(a int); insert into tm_multi values (1), (2), (3); \
+                       select a from tm_multi order by a; select 'x' as b";
+            let r = c.query_results(sql, Some(2)).await.unwrap();
+            assert_eq!(r.len(), 4);
+            assert_eq!((r[1].columns.len(), r[1].affected), (0, 3), "the insert's count");
+            assert_eq!((r[2].rows.len(), r[2].truncated), (2, true));
+            assert_eq!((r[3].rows.len(), r[3].truncated), (0, true));
+        });
+    }
+
+    #[test]
+    fn query_results_should_share_the_row_limit_across_results() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            let r = c.query_results("select 1 union all select 2; select 3 union all select 4", Some(3)).await.unwrap();
+            assert_eq!((r[0].rows.len(), r[0].truncated), (2, false));
+            assert_eq!((r[1].rows.len(), r[1].truncated), (1, true));
+        });
+    }
+
+    #[test]
+    fn query_results_should_keep_at_most_max_results() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            let sql = "select 1;".repeat(super::MAX_RESULTS + 5);
+            assert_eq!(c.query_results(&sql, None).await.unwrap().len(), super::MAX_RESULTS);
+        });
+    }
+
+    #[test]
+    fn query_results_should_give_one_empty_result_for_a_comment() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            let r = c.query_results("-- nothing", None).await.unwrap();
+            assert_eq!((r.len(), r[0].columns.len()), (1, 0));
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local MySQL"]
+    fn local_mysql_query_results_should_return_every_result_set() {
+        tauri::async_runtime::block_on(async {
+            // A temporary table, gone with the session; it needs a database selected.
+            let mut c = open(Engine::Mysql, "mysql://root@127.0.0.1:3306/mysql").await;
+            let sql = "create temporary table tm_multi(a int); insert into tm_multi values (1), (2), (3); \
+                       select a from tm_multi; select 'x' as b, 'y' as c";
+            let r = c.query_results(sql, Some(2)).await.unwrap();
+            assert_eq!(r.len(), 4);
+            assert_eq!((r[1].columns.len(), r[1].affected), (0, 3), "the insert's count");
+            assert_eq!((r[2].rows.len(), r[2].truncated), (2, true));
+            assert_eq!((r[3].columns.len(), r[3].rows.len(), r[3].truncated), (2, 0, true));
+            assert_eq!(c.query("select 1").await.unwrap().rows[0][0].as_deref(), Some("1"), "still in step");
         });
     }
 

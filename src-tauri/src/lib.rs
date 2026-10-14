@@ -3,6 +3,7 @@
 mod backup;
 mod browse;
 mod catalog;
+mod console;
 mod db;
 mod ddl;
 mod error;
@@ -482,6 +483,15 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
     live.check(r)
 }
 
+/// What editor SQL returned.
+#[derive(Debug, serde::Serialize)]
+struct Ran {
+    /// One per statement, in order.
+    results: Vec<db::QueryResult>,
+    /// Whether the SQL only reads, so the UI may run it again to load more rows.
+    read_only: bool,
+}
+
 /// Runs editor SQL. Safe mode applies; see [`guard`].
 #[tauri::command]
 async fn run_query(
@@ -492,14 +502,19 @@ async fn run_query(
     confirmed: bool,
     unlock: Option<safety::Unlock>,
     max_rows: Option<u32>,
-) -> Result<db::QueryResult> {
-    guard(&open, &name, |kind| readonly::is_read_only(kind, &sql), confirmed, unlock.as_ref()).await?;
+) -> Result<Ran> {
+    let mut read_only = false;
+    let reads = |kind| {
+        read_only = readonly::is_read_only(kind, &sql);
+        read_only
+    };
+    guard(&open, &name, reads, confirmed, unlock.as_ref()).await?;
     let mut live = open.get(&name).await?;
     let max = max_rows.map(|n| n as usize);
     let r =
-        with_limit(&mut live, query_limit(&prefs), move |c| Box::pin(async move { c.query_limited(&sql, max).await }))
+        with_limit(&mut live, query_limit(&prefs), move |c| Box::pin(async move { c.query_results(&sql, max).await }))
             .await;
-    live.check(r)
+    Ok(Ran { results: live.check(r)?, read_only })
 }
 
 /// The largest SQL file the editor opens.
@@ -739,6 +754,8 @@ pub fn run() -> tauri::Result<()> {
             items,
             search_table,
             item_overview,
+            console::console_log,
+            console::console_clear,
             set_safety,
             safety::touch_id_available,
             passcode::passcode_set,
