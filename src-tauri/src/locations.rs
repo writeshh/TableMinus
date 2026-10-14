@@ -1,5 +1,5 @@
-//! Where the app keeps its files (Settings › Locations): saved connections, kept SQL tabs, saved queries and query
-//! history.
+//! Where the app keeps its files (Settings › Locations): saved connections, kept SQL tabs, saved queries, metrics
+//! boards and query history.
 //! `locations.json` in the app config folder names custom folders, e.g. in iCloud Drive or Dropbox; anything it
 //! doesn't name stays in the config folder.
 
@@ -21,7 +21,7 @@ impl Location {
     fn files(self) -> &'static [&'static str] {
         match self {
             Location::Connections => &["connections.json"],
-            Location::Queries => &["sql-tabs.json", "favorites.json"],
+            Location::Queries => &["sql-tabs.json", "favorites.json", "metrics.json"],
             Location::History => &["history.json"],
         }
     }
@@ -146,6 +146,8 @@ pub enum Doc {
     History,
     /// Saved queries, which live with the SQL tabs.
     Favorites,
+    /// Metrics boards, which live with the SQL tabs.
+    Metrics,
 }
 
 impl Doc {
@@ -154,6 +156,7 @@ impl Doc {
             Doc::SqlTabs => (Location::Queries, "sql-tabs.json"),
             Doc::History => (Location::History, "history.json"),
             Doc::Favorites => (Location::Queries, "favorites.json"),
+            Doc::Metrics => (Location::Queries, "metrics.json"),
         };
         Ok(folder(config, which)?.join(name))
     }
@@ -246,6 +249,15 @@ mod tests {
         std::fs::write(config.join("favorites.json"), r#"{"a":{}}"#).unwrap();
         relocate(&config, Location::Queries, Some(elsewhere.clone())).unwrap();
         assert_eq!(std::fs::read_to_string(elsewhere.join("favorites.json")).unwrap(), r#"{"a":{}}"#);
+    }
+
+    #[test]
+    fn relocate_moves_metrics_boards_with_the_sql_tabs() {
+        let config = temp_dir("metrics");
+        let elsewhere = temp_dir("metrics-dest");
+        std::fs::write(config.join("metrics.json"), r#"{"a":[]}"#).unwrap();
+        relocate(&config, Location::Queries, Some(elsewhere.clone())).unwrap();
+        assert_eq!(std::fs::read_to_string(elsewhere.join("metrics.json")).unwrap(), r#"{"a":[]}"#);
     }
 
     #[test]
