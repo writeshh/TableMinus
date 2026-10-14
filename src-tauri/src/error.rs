@@ -25,6 +25,9 @@ pub enum Error {
     Passcode(String),
     #[error("{0}")]
     Locations(String),
+    /// The passcode lock is on.
+    #[error("Table Minus is locked; unlock it first")]
+    Locked,
     #[error("not connected")]
     NotConnected,
     #[error("the query was stopped after the {0}-second query timeout (Settings › General)")]

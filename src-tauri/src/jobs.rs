@@ -88,8 +88,7 @@ impl Target {
         if let Some(reads) = reads {
             crate::guard(open, name, |_| reads, confirmed, unlock.as_ref()).await?;
         }
-        let mut open = open.0.lock().await;
-        let live = open.get_mut(name).ok_or(Error::NotConnected)?;
+        let mut live = open.get(name).await?;
         // MySQL switches database in place (Postgres's URL already names it), so the job's connection follows.
         let database = if matches!(live.conn, db::Conn::My(_)) {
             let r = live.conn.current_database().await;
@@ -158,7 +157,7 @@ pub async fn start_export(
     confirmed: bool,
     unlock: Option<Unlock>,
 ) -> Result<u64> {
-    let kind = open.0.lock().await.get(&name).ok_or(Error::NotConnected)?.saved.kind;
+    let kind = open.get(&name).await?.saved.kind;
     let queries: Vec<&str> = export
         .items
         .iter()

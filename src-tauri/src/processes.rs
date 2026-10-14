@@ -5,7 +5,7 @@ use crate::db::{Engine, QueryResult};
 use crate::error::{Error, Result};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use tauri::{AppHandle, State, async_runtime::Mutex};
+use tauri::{AppHandle, Manager, State, async_runtime::Mutex};
 
 /// The process list's own connection per saved connection, kept while its window is open.
 #[derive(Default)]
@@ -26,7 +26,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
     let mut sessions = sessions.0.lock().await;
     let live = match sessions.entry(name.clone()) {
         Entry::Occupied(e) => e.into_mut(),
-        Entry::Vacant(e) => e.insert(crate::open_saved(&crate::dir(&app)?, &name).await?),
+        Entry::Vacant(e) => e.insert(crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?),
     };
     let sql = match live.saved.kind {
         Engine::Postgres => POSTGRES,
@@ -42,7 +42,14 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
 
 /// Stops process `id`: its running query, or with `connection` the whole session.
 #[tauri::command]
-pub async fn kill_process(sessions: State<'_, Sessions>, name: String, id: u64, connection: bool) -> Result<()> {
+pub async fn kill_process(
+    open: State<'_, crate::Open>,
+    sessions: State<'_, Sessions>,
+    name: String,
+    id: u64,
+    connection: bool,
+) -> Result<()> {
+    open.unlocked()?;
     let mut sessions = sessions.0.lock().await;
     let live = sessions.get_mut(&name).ok_or(Error::NotConnected)?;
     match live.saved.kind {

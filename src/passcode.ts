@@ -30,6 +30,8 @@ form.hidden = true;
 
 function lock() {
   locked = true;
+  // The backend refuses database requests (the MCP server's too) until unlocked. Outside the app there's none.
+  invoke("lock").catch(() => {});
   form.hidden = false;
   input.value = "";
   message.textContent = "";

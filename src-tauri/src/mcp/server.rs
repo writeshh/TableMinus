@@ -241,8 +241,9 @@ impl Tools {
     /// The saved connection's engine, safe mode level and stored password, after checking the token may reach it.
     /// Opens it when the token names it and it isn't open yet.
     async fn reach(&self, token: &Token, name: &str) -> std::result::Result<Reached, Refusal> {
-        let mut open = self.0.open.0.lock().await;
-        let is_open = open.contains_key(name);
+        let open = &self.0.open;
+        open.unlocked()?;
+        let is_open = open.is_open(name).await;
         if !token.reaches(name, is_open) {
             return Err(Refusal(format!(
                 "this token can't use {name:?}: it reaches only the connections it lists, or open ones when it \
@@ -250,16 +251,17 @@ impl Tools {
             )));
         }
         if !is_open {
-            let live = crate::open_saved(&self.0.dir, name).await?;
-            open.insert(name.to_string(), live);
+            let live = crate::open_saved(open, &self.0.dir, name).await?;
+            open.insert(name.to_string(), live).await;
         }
-        let live = open.get(name).ok_or(Error::NotConnected)?;
+        let live = open.get(name).await?;
         Ok((live.saved.kind, live.saved.safety, live.password.clone()))
     }
 
     async fn list_connections(&self, token: &Token) -> Done {
         let saved = crate::store::load(&self.0.dir)?;
-        let open = self.0.open.0.lock().await;
+        self.0.open.unlocked()?;
+        let open = self.0.open.conns.lock().await;
         let list: Vec<_> = saved
             .iter()
             .filter(|c| token.reaches(&c.name, open.contains_key(&c.name)))
@@ -274,9 +276,9 @@ impl Tools {
     async fn list_tables(&self, token: &Token, args: &Args) -> Done {
         let name = need(args.connection.as_ref(), "connection")?;
         self.reach(token, name).await?;
-        let mut open = self.0.open.0.lock().await;
-        let live = open.get_mut(name).ok_or(Error::NotConnected)?;
-        let r = live.conn.tables(live.saved.options.system_schemas).await;
+        let mut live = self.0.open.get(name).await?;
+        let system = live.saved.options.system_schemas;
+        let r = live.conn.tables(system).await;
         let tables = live.check(r)?;
         Ok((json(&tables)?, format!("{} tables", tables.len())))
     }
@@ -285,8 +287,7 @@ impl Tools {
         let name = need(args.connection.as_ref(), "connection")?;
         let table = need(args.table.as_ref(), "table")?;
         self.reach(token, name).await?;
-        let mut open = self.0.open.0.lock().await;
-        let live = open.get_mut(name).ok_or(Error::NotConnected)?;
+        let mut live = self.0.open.get(name).await?;
         let r = live.conn.columns(table).await;
         let columns = live.check(r)?;
         Ok((json(&columns)?, format!("{} columns", columns.len())))
@@ -317,10 +318,9 @@ impl Tools {
             0 => MAX_ROWS,
             n => usize::try_from(n).unwrap_or(MAX_ROWS).min(MAX_ROWS),
         };
-        let mut open = self.0.open.0.lock().await;
-        let live = open.get_mut(name).ok_or(Error::NotConnected)?;
+        let mut live = self.0.open.get(name).await?;
         let timeout = crate::query_limit(&self.0.prefs);
-        let r = crate::with_limit(live, timeout, move |c| {
+        let r = crate::with_limit(&mut live, timeout, move |c| {
             Box::pin(async move { c.query_limited(&sql, Some(limit)).await })
         })
         .await;

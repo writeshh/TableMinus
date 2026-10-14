@@ -2,9 +2,9 @@
 //! found by its primary key (or, when asked, its row identity). The same plan renders as SQL for the preview.
 //! Also the catalog lookups the cell editors need: enum values and the bytes of binary cells.
 
+use crate::Open;
 use crate::db::{Conn, Dialect};
 use crate::error::{Error, Result};
-use crate::{Live, Open};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -393,8 +393,7 @@ pub async fn save_rows(
     unlock: Option<crate::safety::Unlock>,
 ) -> Result<u64> {
     crate::guard(&open, &name, |_| false, confirmed, unlock.as_ref()).await?;
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.save_rows(&table, &changes).await;
     live.check(r)
 }
@@ -402,8 +401,7 @@ pub async fn save_rows(
 /// The statements `save_rows` would run, for the preview.
 #[tauri::command]
 pub async fn rows_sql(open: State<'_, Open>, name: String, table: String, changes: Changes) -> Result<Vec<String>> {
-    let open = open.0.lock().await;
-    open.get(&name).ok_or(Error::NotConnected)?.conn.rows_sql(&table, &changes)
+    open.get(&name).await?.conn.rows_sql(&table, &changes)
 }
 
 #[tauri::command]
@@ -414,16 +412,14 @@ pub async fn cell_bytes(
     column: String,
     row: Row,
 ) -> Result<CellBytes> {
-    let mut open = open.0.lock().await;
-    let live: &mut Live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.cell_bytes(&table, &column, &row).await;
     live.check(r)
 }
 
 #[tauri::command]
 pub async fn enum_values(open: State<'_, Open>, name: String, table: String) -> Result<Vec<(String, Vec<String>)>> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.enum_values(&table).await;
     live.check(r)
 }

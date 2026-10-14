@@ -1,14 +1,14 @@
 //! The app passcode that locks the window at startup and after time away. Only an argon2 hash of it is kept, in the
-//! keychain. The lock itself is the UI's: the backend checks passcodes and keeps the hash.
-// ponytail: commands still answer while the UI is locked (and the MCP server keeps serving); gate them on a backend
-// lock flag if the passcode has to stop more than someone at the keyboard.
+//! keychain. While locked, [`crate::Open`] refuses every database request, the MCP server's included, so the lock
+//! stops more than the window.
 
 use crate::error::{Error, Result};
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use secrecy::{ExposeSecret, SecretString};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
 // The pre-rename name, kept so an existing passcode still unlocks.
 const SERVICE: &str = "dev.ritesh.dbmanager.passcode";
@@ -70,9 +70,11 @@ pub async fn set_passcode(current: Option<SecretString>, passcode: SecretString)
 }
 
 #[tauri::command]
-pub async fn remove_passcode(current: SecretString) -> Result<()> {
+pub async fn remove_passcode(open: State<'_, crate::Open>, current: SecretString) -> Result<()> {
     check(current).await?;
-    blocking(forget_hash).await
+    blocking(forget_hash).await?;
+    open.locked.store(false, Ordering::SeqCst);
+    Ok(())
 }
 
 fn forget_hash() -> Result<()> {
@@ -82,20 +84,40 @@ fn forget_hash() -> Result<()> {
     }
 }
 
+/// The app starts locked; this lets it go when no passcode is set. A keychain that can't be read keeps it locked.
+pub async fn lock_at_startup(open: crate::Open) {
+    if let Ok(false) = blocking(|| Ok(stored_hash()?.is_some())).await {
+        open.locked.store(false, Ordering::SeqCst);
+    }
+}
+
+/// The UI locked itself (time away); databases lock with it.
 #[tauri::command]
-pub async fn unlock(passcode: SecretString) -> Result<()> {
-    check(passcode).await
+pub async fn lock(open: State<'_, crate::Open>) -> Result<()> {
+    if blocking(|| Ok(stored_hash()?.is_some())).await? {
+        open.locked.store(true, Ordering::SeqCst);
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn unlock_with_touch_id() -> Result<()> {
-    crate::safety::touch_id("unlock Table Minus").await
+pub async fn unlock(open: State<'_, crate::Open>, passcode: SecretString) -> Result<()> {
+    check(passcode).await?;
+    open.locked.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn unlock_with_touch_id(open: State<'_, crate::Open>) -> Result<()> {
+    crate::safety::touch_id("unlock Table Minus").await?;
+    open.locked.store(false, Ordering::SeqCst);
+    Ok(())
 }
 
 /// The way out for a forgotten passcode. On macOS the Mac's own login (Touch ID or password) removes it. Elsewhere it
 /// goes together with every saved connection's passwords, so removing it gives nothing away.
 #[tauri::command]
-pub async fn forgot_passcode(app: AppHandle) -> Result<()> {
+pub async fn forgot_passcode(app: AppHandle, open: State<'_, crate::Open>) -> Result<()> {
     if cfg!(target_os = "macos") {
         crate::safety::touch_id("remove the Table Minus passcode").await?;
     } else {
@@ -103,7 +125,9 @@ pub async fn forgot_passcode(app: AppHandle) -> Result<()> {
         blocking(move || crate::store::load(&dir)?.iter().try_for_each(|c| crate::store::forget_secrets(&c.name)))
             .await?;
     }
-    blocking(forget_hash).await
+    blocking(forget_hash).await?;
+    open.locked.store(false, Ordering::SeqCst);
+    Ok(())
 }
 
 #[cfg(test)]

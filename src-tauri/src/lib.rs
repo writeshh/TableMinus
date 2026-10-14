@@ -63,8 +63,6 @@ fn set_preferences(prefs: State<'_, Prefs>, keep_alive: bool, query_timeout_secs
 
 /// Every 30 s, pings each open connection when keep-alive is on. A connection that doesn't answer is reported
 /// to the UI as `connection-lost`, so the reconnect banner shows before the next query fails.
-// ponytail: pings hold the global lock, so a dead connection's 10 s ping delays other commands; ping outside the
-// lock once connections get their own locks.
 async fn keep_alive(app: AppHandle) {
     let mut tick = tokio::time::interval(Duration::from_secs(30));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -73,9 +71,10 @@ async fn keep_alive(app: AppHandle) {
         if !app.state::<Prefs>().keep_alive.load(Ordering::Relaxed) {
             continue;
         }
-        let open = app.state::<Open>();
-        let mut open = open.0.lock().await;
-        for (name, live) in open.iter_mut() {
+        let conns: Vec<_> = app.state::<Open>().conns.lock().await.clone().into_iter().collect();
+        for (name, live) in conns {
+            // A connection busy with a request is in use, which is all a ping would check.
+            let Ok(mut live) = live.try_lock() else { continue };
             let answered = matches!(tokio::time::timeout(Duration::from_secs(10), live.conn.ping()).await, Ok(Ok(())));
             if !answered {
                 // The UI only listens while a workspace is open; nobody listening is fine.
@@ -121,8 +120,9 @@ async fn open_db(
     Ok((conn, tunnel))
 }
 
-/// Opens a saved connection by name, with its keychain secrets.
-async fn open_saved(dir: &std::path::Path, name: &str) -> Result<Live> {
+/// Opens a saved connection by name, with its keychain secrets. Refused while the passcode lock is on.
+async fn open_saved(open: &Open, dir: &std::path::Path, name: &str) -> Result<Live> {
+    open.unlocked()?;
     let saved = store::load(dir)?
         .into_iter()
         .find(|c| c.name == name)
@@ -154,11 +154,42 @@ async fn info(live: &mut Live) -> Result<Info> {
     Ok(Info { server: live.conn.server_version().await?, database, can_switch: !file_based, tables })
 }
 
-// ponytail: one lock for all open connections serialises queries across them, and SQLite's blocking calls
-// run on the async runtime; per-connection locks plus spawn_blocking if either hurts.
-/// The open connections by name. Clones share the map (the MCP server holds one).
+// ponytail: SQLite's calls block the async worker thread they run on. Each connection has its own lock, so that
+// stalls only its own connection's requests (the runtime has a worker per core); spawn_blocking if it hurts.
+/// The open connections by name, each behind its own lock so a slow query holds up only its connection. Clones
+/// share everything (the MCP server holds one).
 #[derive(Default, Clone)]
-struct Open(Arc<Mutex<HashMap<String, Live>>>);
+struct Open {
+    conns: Arc<Mutex<HashMap<String, Arc<Mutex<Live>>>>>,
+    /// The passcode lock. While it's set nothing reaches a database: not the UI's commands, not the MCP server.
+    locked: Arc<AtomicBool>,
+}
+
+impl Open {
+    fn unlocked(&self) -> Result<()> {
+        if self.locked.load(Ordering::SeqCst) { Err(Error::Locked) } else { Ok(()) }
+    }
+
+    /// The open connection, locked for this request. The map's lock is let go before waiting on the connection's.
+    async fn get(&self, name: &str) -> Result<tokio::sync::OwnedMutexGuard<Live>> {
+        self.unlocked()?;
+        let live = self.conns.lock().await.get(name).cloned().ok_or(Error::NotConnected)?;
+        Ok(live.lock_owned().await)
+    }
+
+    async fn insert(&self, name: String, live: Live) {
+        self.conns.lock().await.insert(name, Arc::new(Mutex::new(live)));
+    }
+
+    /// Takes the connection out of the map; it closes once a request still using it finishes.
+    async fn remove(&self, name: &str) -> Option<Arc<Mutex<Live>>> {
+        self.conns.lock().await.remove(name)
+    }
+
+    async fn is_open(&self, name: &str) -> bool {
+        self.conns.lock().await.contains_key(name)
+    }
+}
 
 fn dir(app: &AppHandle) -> Result<std::path::PathBuf> {
     Ok(app.path().app_config_dir()?)
@@ -179,17 +210,17 @@ async fn save_connection(
     ssh_password: Option<SecretString>,
     previous: Option<String>,
 ) -> Result<()> {
-    let mut open = open.0.lock().await; // drop live connections so the next connect uses the new settings
-    open.remove(&conn.name);
+    // Drop live connections so the next connect uses the new settings.
+    open.remove(&conn.name).await;
     if let Some(old) = &previous {
-        open.remove(old);
+        open.remove(old).await;
     }
     store::save(&dir(&app)?, conn, password.as_ref(), ssh_password.as_ref(), previous.as_deref())
 }
 
 #[tauri::command]
 async fn delete_connection(app: AppHandle, open: State<'_, Open>, name: String) -> Result<()> {
-    open.0.lock().await.remove(&name);
+    open.remove(&name).await;
     store::delete(&dir(&app)?, &name)
 }
 
@@ -197,11 +228,13 @@ async fn delete_connection(app: AppHandle, open: State<'_, Open>, name: String) 
 /// stored for `saved_name` (editing an existing connection); nothing is written.
 #[tauri::command]
 async fn test_connection(
+    open: State<'_, Open>,
     conn: store::Saved,
     password: SecretString,
     ssh_password: SecretString,
     saved_name: Option<String>,
 ) -> Result<String> {
+    open.unlocked()?;
     let fallback = |given: SecretString, which| -> Result<Option<SecretString>> {
         if !given.expose_secret().is_empty() {
             return Ok(Some(given));
@@ -218,35 +251,42 @@ async fn test_connection(
 /// Opens (or reuses) the saved connection.
 #[tauri::command]
 async fn connect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<Info> {
-    let mut open = open.0.lock().await;
-    if let Some(live) = open.get_mut(&name) {
-        match info(live).await {
+    open.unlocked()?;
+    if open.is_open(&name).await {
+        let mut live = open.get(&name).await?;
+        match info(&mut live).await {
             // Dropped while the workspace was closed: open a fresh one rather than show an error.
             Err(e) if live.conn.lost_by(&e) => {
-                open.remove(&name);
+                drop(live);
+                open.remove(&name).await;
             }
             other => return other,
         }
     }
-    let live = open.entry(name.clone()).or_insert(open_saved(&dir(&app)?, &name).await?);
-    info(live).await
+    let mut live = open_saved(&open, &dir(&app)?, &name).await?;
+    let r = info(&mut live).await;
+    open.insert(name, live).await;
+    r
 }
 
 /// Closes the connection (and its tunnel) and opens it again from its saved settings. The database chosen
 /// after connecting is chosen again.
 #[tauri::command]
 async fn reconnect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<Info> {
-    let mut open = open.0.lock().await;
-    let database = match open.remove(&name) {
-        Some(mut old) => old.conn.current_database().await.ok().flatten(), // a dead connection can't say
+    open.unlocked()?;
+    let database = match open.remove(&name).await {
+        // A dead connection can't say.
+        Some(old) => old.lock().await.conn.current_database().await.ok().flatten(),
         None => None,
     };
-    let mut live = open_saved(&dir(&app)?, &name).await?;
+    let mut live = open_saved(&open, &dir(&app)?, &name).await?;
     if let Some(db) = database {
         // A database dropped meanwhile isn't worth failing the reconnect over; the default one stays.
         let _ = switch_database(&mut live, &db).await;
     }
-    info(open.entry(name).or_insert(live)).await
+    let r = info(&mut live).await;
+    open.insert(name, live).await;
+    r
 }
 
 /// Safe mode's check for a request on an open connection; see [`safety::check`]. `reads` says whether the request
@@ -260,8 +300,7 @@ async fn guard(
     unlock: Option<&safety::Unlock>,
 ) -> Result<()> {
     let (level, kind, password) = {
-        let open = open.0.lock().await;
-        let live = open.get(name).ok_or(Error::NotConnected)?;
+        let live = open.get(name).await?;
         (live.saved.safety, live.saved.kind, live.password.clone())
     };
     safety::check(level, reads(kind), confirmed, unlock, password.as_ref()).await
@@ -270,33 +309,30 @@ async fn guard(
 /// Drops the live connection; the next connect opens a fresh one.
 #[tauri::command]
 async fn disconnect(open: State<'_, Open>, name: String) -> Result<()> {
-    open.0.lock().await.remove(&name);
+    open.remove(&name).await;
     Ok(())
 }
 
 #[tauri::command]
 async fn columns(open: State<'_, Open>, name: String, table: String) -> Result<Vec<db::Column>> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.columns(&table).await;
     live.check(r)
 }
 
 #[tauri::command]
 async fn list_databases(open: State<'_, Open>, name: String) -> Result<Vec<String>> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.databases().await;
     live.check(r)
 }
 
 #[tauri::command]
 async fn use_database(open: State<'_, Open>, name: String, database: String) -> Result<Info> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    let r = switch_database(live, &database).await;
+    let mut live = open.get(&name).await?;
+    let r = switch_database(&mut live, &database).await;
     live.check(r)?;
-    let r = info(live).await;
+    let r = info(&mut live).await;
     live.check(r)
 }
 
@@ -393,8 +429,7 @@ struct ConnectionInfo {
 
 #[tauri::command]
 async fn connection_info(open: State<'_, Open>, name: String) -> Result<ConnectionInfo> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = async {
         Ok(ConnectionInfo {
             server: live.conn.server_version().await?,
@@ -423,11 +458,11 @@ async fn run_query(
     max_rows: Option<u32>,
 ) -> Result<db::QueryResult> {
     guard(&open, &name, |kind| readonly::is_read_only(kind, &sql), confirmed, unlock.as_ref()).await?;
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let max = max_rows.map(|n| n as usize);
     let r =
-        with_limit(live, query_limit(&prefs), move |c| Box::pin(async move { c.query_limited(&sql, max).await })).await;
+        with_limit(&mut live, query_limit(&prefs), move |c| Box::pin(async move { c.query_limited(&sql, max).await }))
+            .await;
     live.check(r)
 }
 
@@ -459,8 +494,7 @@ async fn write_text_file(path: std::path::PathBuf, text: String) -> Result<()> {
 /// Every table's columns, for editor autocomplete: (table, column) pairs.
 #[tauri::command]
 async fn schema(open: State<'_, Open>, name: String) -> Result<Vec<(String, String)>> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.schema().await;
     live.check(r)
 }
@@ -473,17 +507,16 @@ async fn browse(
     name: String,
     request: browse::Browse,
 ) -> Result<browse::Page> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    let r = with_limit(live, query_limit(&prefs), move |c| Box::pin(async move { c.browse(&request).await })).await;
+    let mut live = open.get(&name).await?;
+    let r =
+        with_limit(&mut live, query_limit(&prefs), move |c| Box::pin(async move { c.browse(&request).await })).await;
     live.check(r)
 }
 
 /// A table's full structure for the structure view; see [`structure::Structure`].
 #[tauri::command]
 async fn table_structure(open: State<'_, Open>, name: String, table: String) -> Result<structure::Structure> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.structure(&table).await;
     live.check(r)
 }
@@ -497,8 +530,7 @@ async fn structure_sql(
     create: bool,
     changes: Vec<ddl::Change>,
 ) -> Result<Vec<String>> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.alter_sql(&table, create, &changes).await;
     live.check(r)
 }
@@ -506,8 +538,7 @@ async fn structure_sql(
 /// The statements a table operation (rename, clone, truncate, drop…) would run, for the confirmation.
 #[tauri::command]
 async fn table_op_sql(open: State<'_, Open>, name: String, op: ddl::TableOp) -> Result<Vec<String>> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.op_sql(&op).await;
     live.check(r)
 }
@@ -523,8 +554,7 @@ async fn run_ddl(
     unlock: Option<safety::Unlock>,
 ) -> Result<()> {
     guard(&open, &name, |_| false, confirmed, unlock.as_ref()).await?;
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.run_ddl(&statements).await;
     live.check(r)
 }
@@ -539,6 +569,7 @@ async fn set_safety(
     safety: safety::Safety,
     unlock: Option<safety::Unlock>,
 ) -> Result<()> {
+    open.unlocked()?;
     let dir = dir(&app)?;
     let mut saved =
         store::load(&dir)?.into_iter().find(|c| c.name == name).ok_or_else(|| Error::NoSuchConnection(name.clone()))?;
@@ -548,7 +579,7 @@ async fn set_safety(
     }
     saved.safety = safety;
     store::save(&dir, saved, None, None, None)?;
-    if let Some(live) = open.0.lock().await.get_mut(&name) {
+    if let Ok(mut live) = open.get(&name).await {
         live.saved.safety = safety;
     }
     Ok(())
@@ -557,8 +588,7 @@ async fn set_safety(
 /// The CREATE statement of a table or view.
 #[tauri::command]
 async fn table_ddl(open: State<'_, Open>, name: String, table: String) -> Result<String> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.ddl(&table).await;
     live.check(r)
 }
@@ -566,8 +596,7 @@ async fn table_ddl(open: State<'_, Open>, name: String, table: String) -> Result
 /// The sidebar's items other than tables: schemas, views, functions, sequences, types.
 #[tauri::command]
 async fn items(open: State<'_, Open>, name: String) -> Result<Vec<catalog::Item>> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let system = live.saved.options.system_schemas;
     let r = live.conn.items(system).await;
     live.check(r)
@@ -584,9 +613,8 @@ async fn search_table(
     mode: catalog::SearchMode,
     text: String,
 ) -> Result<u64> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
-    let r = with_limit(live, query_limit(&prefs), move |c| {
+    let mut live = open.get(&name).await?;
+    let r = with_limit(&mut live, query_limit(&prefs), move |c| {
         Box::pin(async move { c.search_count(&table, mode, &text).await })
     })
     .await;
@@ -596,8 +624,7 @@ async fn search_table(
 /// Rows and size of a table or view, for the sidebar's Overview.
 #[tauri::command]
 async fn item_overview(open: State<'_, Open>, name: String, table: String) -> Result<catalog::Overview> {
-    let mut open = open.0.lock().await;
-    let live = open.get_mut(&name).ok_or(Error::NotConnected)?;
+    let mut live = open.get(&name).await?;
     let r = live.conn.overview(&table).await;
     live.check(r)
 }
@@ -609,6 +636,7 @@ async fn item_overview(open: State<'_, Open>, name: String, table: String) -> Re
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> tauri::Result<()> {
     let (open, prefs) = (Open::default(), Prefs::default());
+    open.locked.store(true, Ordering::SeqCst); // until lock_at_startup knows whether a passcode is set
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -619,6 +647,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(jobs::Jobs::default())
         .setup(|app| {
             tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
+            tauri::async_runtime::spawn(passcode::lock_at_startup(open.clone()));
             mcp::setup(app.handle(), open, prefs)?;
             Ok(())
         })
@@ -657,6 +686,7 @@ pub fn run() -> tauri::Result<()> {
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,
+            passcode::lock,
             passcode::unlock,
             passcode::unlock_with_touch_id,
             passcode::forgot_passcode,
@@ -728,7 +758,7 @@ mod tests {
             l.saved.safety = Safety::Safe2;
             l.password = Some("pw".into());
             let open = super::Open::default();
-            open.0.lock().await.insert("t".into(), l);
+            open.insert("t".into(), l).await;
             let reads = |sql: &'static str| move |kind| crate::readonly::is_read_only(kind, sql);
             assert!(super::guard(&open, "t", reads("select 1"), false, None).await.is_ok());
             let write = super::guard(&open, "t", reads("delete from x"), true, None).await;
@@ -744,6 +774,30 @@ mod tests {
                 super::guard(&open, "gone", reads("select 1"), true, None).await,
                 Err(Error::NotConnected)
             ));
+        });
+    }
+
+    #[test]
+    fn open_should_let_one_connection_work_while_another_is_busy() {
+        tauri::async_runtime::block_on(async {
+            let open = super::Open::default();
+            open.insert("a".into(), live(Engine::Sqlite, ":memory:").await).await;
+            open.insert("b".into(), live(Engine::Sqlite, ":memory:").await).await;
+            let _busy = open.get("a").await.unwrap();
+            let other = tokio::time::timeout(Duration::from_secs(1), open.get("b")).await;
+            assert!(other.is_ok_and(|g| g.is_ok()), "b waited on a");
+        });
+    }
+
+    #[test]
+    fn open_should_refuse_every_request_while_locked() {
+        tauri::async_runtime::block_on(async {
+            let open = super::Open::default();
+            open.insert("a".into(), live(Engine::Sqlite, ":memory:").await).await;
+            open.locked.store(true, std::sync::atomic::Ordering::SeqCst);
+            assert!(matches!(open.get("a").await, Err(Error::Locked)));
+            let dir = std::env::temp_dir();
+            assert!(matches!(super::open_saved(&open, &dir, "a").await, Err(Error::Locked)));
         });
     }
 

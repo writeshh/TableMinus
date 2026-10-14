@@ -52,7 +52,7 @@ async fn server(test: &str) -> Server {
     }
     let open = Open::default();
     let live = Live { saved: saved("lite", ":memory:"), url: ":memory:".into(), password: None, conn, tunnel: None };
-    open.0.lock().await.insert("lite".into(), live);
+    open.insert("lite".into(), live).await;
 
     let (tx, events) = channel();
     let notify = Box::new(move |e| {
@@ -270,7 +270,7 @@ fn a_connection_in_safe_mode_asks_even_with_approval_off() {
     tauri::async_runtime::block_on(async {
         let s = server("safe-mode").await;
         s.shared.update(|c| c.approval = false).unwrap();
-        s.shared.open.0.lock().await.get_mut("lite").unwrap().saved.safety = crate::safety::Safety::Alert2;
+        s.shared.open.get("lite").await.unwrap().saved.safety = crate::safety::Safety::Alert2;
         let port = s.port;
         let delete = json!({ "connection": "lite", "sql": "delete from t" });
         let pending = tauri::async_runtime::spawn(async move { call(port, READ_WRITE, "run_query", delete).await });
@@ -284,7 +284,7 @@ fn alert1_asks_even_before_a_read() {
     tauri::async_runtime::block_on(async {
         let s = server("alert1").await;
         s.shared.update(|c| c.approval = false).unwrap();
-        s.shared.open.0.lock().await.get_mut("lite").unwrap().saved.safety = crate::safety::Safety::Alert1;
+        s.shared.open.get("lite").await.unwrap().saved.safety = crate::safety::Safety::Alert1;
         let port = s.port;
         let select = json!({ "connection": "lite", "sql": "select count(*) from t" });
         let pending = tauri::async_runtime::spawn(async move { call(port, READ_WRITE, "run_query", select).await });
@@ -298,8 +298,7 @@ fn a_safe_level_allows_only_with_the_right_password() {
     tauri::async_runtime::block_on(async {
         let s = server("safe1").await;
         {
-            let mut open = s.shared.open.0.lock().await;
-            let live = open.get_mut("lite").unwrap();
+            let mut live = s.shared.open.get("lite").await.unwrap();
             live.saved.safety = crate::safety::Safety::Safe2;
             live.password = Some("pw".into());
         }

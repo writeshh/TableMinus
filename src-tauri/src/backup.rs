@@ -736,7 +736,7 @@ pub struct Setup {
 
 #[tauri::command]
 pub async fn backup_setup(app: AppHandle, name: String) -> Result<Setup> {
-    let mut live = crate::open_saved(&crate::dir(&app)?, &name).await?;
+    let mut live = crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?;
     let server = live.conn.server_version().await?;
     let (tools, matched, problem) = if live.saved.kind == Engine::Sqlite {
         (vec![], None, None)
@@ -772,7 +772,7 @@ async fn tools_for(live: &mut crate::Live, chosen: Option<&Path>) -> Result<Tool
 /// connection (and SSH tunnel), so it carries on whatever the workspace does.
 #[tauri::command]
 pub async fn start_backup(app: AppHandle, name: String, request: BackupRequest) -> Result<u64> {
-    let mut live = crate::open_saved(&crate::dir(&app)?, &name).await?;
+    let mut live = crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?;
     if live.saved.kind == Engine::Sqlite {
         let crate::Live { conn: Conn::Lite(from), password, .. } = live else {
             return Err(Error::Invalid("not a SQLite connection"));
@@ -800,7 +800,7 @@ pub async fn start_restore(
     confirmed: bool,
     unlock: Option<crate::safety::Unlock>,
 ) -> Result<u64> {
-    let mut live = crate::open_saved(&crate::dir(&app)?, &name).await?;
+    let mut live = crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?;
     let (level, password) = (live.saved.safety, live.password.as_ref());
     crate::safety::check(level, false, confirmed, unlock.as_ref(), password).await?;
     if live.saved.kind == Engine::Sqlite {
