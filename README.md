@@ -12,8 +12,11 @@ Personal database client for macOS and Linux: Tauri 2, a Rust core, a plain Type
 npm install
 npm run tauri dev        # app with hot reload
 npm run check            # tsc, rustfmt, clippy (warnings are errors), tests
-npm run tauri build      # .app/.dmg on macOS; .deb/AppImage on Linux
+npm run audit            # cargo-deny and cargo-audit (needs the network)
+npm run bundle           # check, audit, MCP bridge, then .app/.dmg on macOS (.deb/AppImage on Linux)
 ```
+
+`npm run bundle -- --skip-checks` skips the checks; `-- --target <triple>` cross-builds. Bundles land in `src-tauri/target/release/bundle/` (`target/<triple>/release/bundle/` when cross-building), with the `tableminus-mcp` bridge next to the app's executable.
 
 Rust comes from `rustup`. On Linux, Tauri also needs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `librsvg2-dev`, and `libdbus-1-dev` for the keychain.
 
