@@ -86,7 +86,7 @@ const originText = (o: Origin) => ("git" in o ? o.git : o.folder);
 
 async function refresh() {
   try {
-    installed = await invoke<Installed[]>("plugin_list");
+    installed = (await invoke<Installed[] | null>("plugin_list")) ?? []; // null only outside the app
   } catch (e) {
     installed = [];
     say(String(e), "error");

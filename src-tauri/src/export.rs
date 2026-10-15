@@ -67,6 +67,52 @@ pub struct Csv {
     pub header: bool,
     /// NULL as an empty field; otherwise as the text NULL.
     pub null_empty: bool,
+    /// The quote around fields that need one (doubled inside them).
+    #[serde(default = "double_quote")]
+    pub quote: char,
+    /// The decimal separator for values that are plain decimal numbers (`-12.5`, `3.0e2`): `.` keeps them as the
+    /// database gives them, `,` is for spreadsheets set up that way.
+    #[serde(default = "point")]
+    pub decimal: char,
+}
+
+fn double_quote() -> char {
+    '"'
+}
+
+fn point() -> char {
+    '.'
+}
+
+impl Csv {
+    /// Options that would make a file nobody can read back are refused.
+    fn check(&self) -> Result<()> {
+        if !['"', '\''].contains(&self.quote) {
+            return Err(Error::Invalid("the CSV quote is a double or a single quote"));
+        }
+        if !['.', ','].contains(&self.decimal) {
+            return Err(Error::Invalid("the CSV decimal separator is a point or a comma"));
+        }
+        if self.delimiter == self.quote || ['\n', '\r'].contains(&self.delimiter) {
+            return Err(Error::Invalid("the CSV delimiter can't be the quote or a line break"));
+        }
+        Ok(())
+    }
+}
+
+/// Whether `v` is a plain decimal number, as databases print numeric and float values.
+fn is_decimal(v: &str) -> bool {
+    let digits = v.strip_prefix('-').unwrap_or(v);
+    let (mantissa, exponent) = digits.split_once(['e', 'E']).unwrap_or((digits, ""));
+    let exponent_ok = exponent.is_empty() || {
+        let e = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        !e.is_empty() && e.bytes().all(|b| b.is_ascii_digit())
+    };
+    let Some((whole, fraction)) = mantissa.split_once('.') else { return false };
+    !whole.is_empty()
+        && !fraction.is_empty()
+        && whole.bytes().chain(fraction.bytes()).all(|b| b.is_ascii_digit())
+        && exponent_ok
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +130,9 @@ pub struct Sql {
 pub async fn run(conn: &mut Conn, export: &Export, job: &Job) -> Result<u64> {
     if export.items.is_empty() {
         return Err(Error::Invalid("nothing to export"));
+    }
+    if let Format::Csv(o) = &export.format {
+        o.check()?;
     }
     let mut rows = 0;
     for (i, item) in export.items.iter().enumerate() {
@@ -366,13 +415,15 @@ fn eol(o: &Csv) -> &'static str {
     if o.crlf { "\r\n" } else { "\n" }
 }
 
-/// One CSV field, quoted when it must be (or always, with `quote_all`).
+/// One CSV field, quoted when it must be (or always, with `quote_all`), its decimal point swapped when asked.
 fn csv_field(o: &Csv, v: Option<&str>) -> String {
     let Some(v) = v else { return if o.null_empty { String::new() } else { "NULL".into() } };
-    if o.quote_all || v.contains(o.delimiter) || v.contains(['"', '\n', '\r']) {
-        format!("\"{}\"", v.replace('"', "\"\""))
+    let v = if o.decimal == '.' || !is_decimal(v) { v.to_string() } else { v.replacen('.', &o.decimal.to_string(), 1) };
+    if o.quote_all || v.contains(o.delimiter) || v.contains([o.quote, '\n', '\r']) {
+        let q = o.quote.to_string();
+        format!("{q}{}{q}", v.replace(o.quote, &format!("{q}{q}")))
     } else {
-        v.to_string()
+        v
     }
 }
 
@@ -411,7 +462,15 @@ mod tests {
     }
 
     fn csv() -> Format {
-        Format::Csv(Csv { delimiter: ',', quote_all: false, crlf: false, header: true, null_empty: true })
+        Format::Csv(Csv {
+            delimiter: ',',
+            quote_all: false,
+            crlf: false,
+            header: true,
+            null_empty: true,
+            quote: '"',
+            decimal: '.',
+        })
     }
 
     async fn export_one(c: &mut Conn, source: Source, format: Format, gzip: bool, path: &Path) -> u64 {
@@ -437,8 +496,15 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let mut c = people().await;
             let path = dir("csv-opts").join("people.csv");
-            let format =
-                Format::Csv(Csv { delimiter: ';', quote_all: true, crlf: true, header: false, null_empty: false });
+            let format = Format::Csv(Csv {
+                delimiter: ';',
+                quote_all: true,
+                crlf: true,
+                header: false,
+                null_empty: false,
+                quote: '"',
+                decimal: '.',
+            });
             let source = Source::Query { sql: "select id, note from people where id = 2".into(), table: "q".into() };
             export_one(&mut c, source, format, false, &path).await;
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "\"2\";NULL\r\n");
@@ -551,8 +617,17 @@ mod tests {
                 wkt: false,
             };
             let d = dir("rows");
-            let format =
-                || Format::Csv(Csv { delimiter: ',', quote_all: false, crlf: false, header: false, null_empty: true });
+            let format = || {
+                Format::Csv(Csv {
+                    delimiter: ',',
+                    quote_all: false,
+                    crlf: false,
+                    header: false,
+                    null_empty: true,
+                    quote: '"',
+                    decimal: '.',
+                })
+            };
             let all = d.join("all.csv");
             export_one(&mut c, Source::Rows { request: request.clone(), page: false }, format(), false, &all).await;
             assert_eq!(std::fs::read_to_string(all).unwrap(), "3,Cy,\"a\nb\"\n2,O'Hara,\n");
@@ -660,5 +735,40 @@ mod tests {
             assert_eq!(r.rows[0], vec![Some("a\\b'c".into()), Some("2026-01-02".into())]);
             assert_eq!(r.rows[1], vec![None, None]);
         });
+    }
+
+    fn csv_with(quote: char, decimal: char, delimiter: char) -> super::Csv {
+        super::Csv { delimiter, quote_all: false, crlf: false, header: false, null_empty: true, quote, decimal }
+    }
+
+    #[test]
+    fn csv_field_should_quote_with_the_chosen_quote() {
+        let o = csv_with('\'', '.', ',');
+        assert_eq!(super::csv_field(&o, Some("it's, here")), "'it''s, here'");
+        assert_eq!(super::csv_field(&o, Some(r#"say "hi""#)), r#"say "hi""#, "a double quote needs no quoting now");
+    }
+
+    #[test]
+    fn csv_field_should_swap_the_decimal_point_of_numbers_only() {
+        let o = csv_with('"', ',', ';');
+        assert_eq!(super::csv_field(&o, Some("-12.50")), "-12,50");
+        assert_eq!(super::csv_field(&o, Some("3.0e-2")), "3,0e-2");
+        assert_eq!(super::csv_field(&o, Some("1.2.3")), "1.2.3");
+        assert_eq!(super::csv_field(&o, Some("12")), "12");
+        assert_eq!(super::csv_field(&o, Some("v1.5")), "v1.5");
+        assert_eq!(super::csv_field(&o, Some(".5")), ".5");
+    }
+
+    #[test]
+    fn csv_field_should_quote_a_comma_decimal_when_comma_is_the_delimiter() {
+        assert_eq!(super::csv_field(&csv_with('"', ',', ','), Some("1.5")), "\"1,5\"");
+    }
+
+    #[test]
+    fn csv_check_should_refuse_a_delimiter_equal_to_the_quote() {
+        assert!(csv_with('"', '.', '"').check().is_err());
+        assert!(csv_with('`', '.', ',').check().is_err());
+        assert!(csv_with('"', ';', ',').check().is_err());
+        assert!(csv_with('"', ',', ';').check().is_ok());
     }
 }
