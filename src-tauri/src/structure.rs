@@ -28,7 +28,8 @@ pub struct TableOptions {
     pub collations: Vec<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, Default)]
+#[expect(clippy::struct_excessive_bools, reason = "each is a separate fact the catalog gives about the column")]
 pub struct ColumnInfo {
     pub name: String,
     /// The full type as the database writes it, e.g. `character varying(255)` or `int unsigned`.
@@ -42,6 +43,12 @@ pub struct ColumnInfo {
     /// MySQL's `ON UPDATE CURRENT_TIMESTAMP`, kept so changing the column doesn't drop it.
     #[serde(skip)]
     pub on_update: Option<String>,
+    /// MySQL's collation for a text column, kept when the column is restated (it would fall back to the table's).
+    #[serde(skip)]
+    pub collation: Option<String>,
+    /// A MySQL generated column, which restating would turn into a plain one.
+    #[serde(skip)]
+    pub generated: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -166,7 +173,7 @@ fn my_default(maria: bool, data_type: &str, extra: &str, default: String) -> Opt
     })
 }
 
-/// A MySQL `information_schema.columns` row: name, type, nullable, default, comment, extra, key.
+/// A MySQL `information_schema.columns` row: name, type, nullable, default, comment, extra, key, collation.
 fn my_column(maria: bool, mut r: Vec<Option<String>>) -> ColumnInfo {
     let data_type = take(&mut r, 1).unwrap_or_default();
     let extra = take(&mut r, 5).unwrap_or_default();
@@ -179,6 +186,8 @@ fn my_column(maria: bool, mut r: Vec<Option<String>>) -> ColumnInfo {
         auto_increment: extra.contains("auto_increment"),
         primary: take(&mut r, 6).as_deref() == Some("PRI"),
         on_update: extra.to_ascii_lowercase().find("on update ").map(|i| extra[i + 10..].to_string()),
+        collation: take(&mut r, 7),
+        generated: extra.to_ascii_uppercase().contains("GENERATED"),
         data_type,
     }
 }
@@ -238,7 +247,7 @@ impl Conn {
                 comment: take(&mut r, 4),
                 auto_increment: take(&mut r, 5).as_deref() == Some("true"),
                 primary: take(&mut r, 6).as_deref() == Some("true"),
-                on_update: None,
+                ..ColumnInfo::default()
             })
             .collect();
 
@@ -327,7 +336,8 @@ impl Conn {
         let maria = self.server_version().await?.starts_with("MariaDB");
         let columns = self
             .fetch_with(
-                "select column_name, column_type, is_nullable, column_default, column_comment, extra, column_key \
+                "select column_name, column_type, is_nullable, column_default, column_comment, extra, column_key, \
+                 collation_name \
                  from information_schema.columns where table_schema = database() and table_name = ? \
                  order by ordinal_position",
                 &t,
@@ -466,9 +476,8 @@ impl Conn {
                     data_type,
                     nullable: take(&mut r, 2).as_deref() == Some("0"),
                     default: take(&mut r, 3),
-                    comment: None,
                     primary,
-                    on_update: None,
+                    ..ColumnInfo::default()
                 }
             })
             .collect();

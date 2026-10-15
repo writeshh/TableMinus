@@ -89,6 +89,25 @@ const columnDef = (c: ColumnInfo, primary = c.primary) => ({
 });
 const sameColumn = (a: ColumnInfo, b: ColumnInfo) => JSON.stringify(columnDef(a)) === JSON.stringify(columnDef(b));
 
+/** MySQL reorders an existing table's columns: each column whose neighbour before it isn't the one it would have
+ *  anyway (its old order, added columns after) moves after its new neighbour, or first. A new table is created in
+ *  the drafted order, so it needs none. */
+function columnMoves(d: Draft): Record<string, unknown>[] {
+  if (d.create || kind() !== "mysql" || !d.base) return [];
+  const now = d.columns.filter((c) => !c.dropped);
+  const was = (c: ColumnDraft) => d.base!.columns.findIndex((x) => x.name === c.orig!.name);
+  const baseline = [...now.filter((c) => c.orig).sort((a, b) => was(a) - was(b)), ...now.filter((c) => !c.orig)];
+  const before = (list: ColumnDraft[], c: ColumnDraft) => list[list.indexOf(c) - 1] ?? null;
+  return now.filter((c) => before(now, c) !== before(baseline, c))
+    .map((c) => ({ op: "move_column", name: c.name.trim(), after: before(now, c)?.name.trim() ?? null }));
+}
+
+/** A type's length or other arguments: `255` in varchar(255), `10,2` in decimal(10,2). */
+const typeArgs = (t: string) => /\(([^()]*)\)/.exec(t)?.[1] ?? "";
+/** The type with its arguments replaced (added at the end when it had none, removed when empty). */
+const withArgs = (t: string, args: string) =>
+  /\([^()]*\)/.test(t) ? t.replace(/\s*\([^()]*\)/, args.trim() ? `(${args.trim()})` : "") : args.trim() ? `${t.trimEnd()}(${args.trim()})` : t;
+
 /** The primary key's columns as drafted, by their names in the end, or null when it's unchanged. Columns are
  *  compared by what they were, so renaming a key column alone isn't a new key. */
 function newPrimaryKey(d: Draft): string[] | null {
@@ -110,6 +129,7 @@ function changes(d: Draft): Record<string, unknown>[] {
       out.push({ op: "modify_column", from: c.orig.name, column: columnDef(c, c.orig.primary) });
     }
   }
+  out.push(...columnMoves(d));
   const key = newPrimaryKey(d);
   if (key) out.push({ op: "set_primary_key", columns: key });
   for (const i of d.indexes) {
@@ -279,21 +299,41 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
 
   // Columns
   const types = el("datalist", { id: `types-${tabId}` }, ...TYPES[kind()].map((t) => el("option", { value: t })));
+  // A new table takes the drafted order; MySQL can also move an existing table's columns.
+  const movable = d.create || kind() === "mysql";
+  const moveButtons = (c: ColumnDraft) => {
+    const shown = d.columns.filter((x) => !x.dropped);
+    const i = shown.indexOf(c);
+    const go = (to: ColumnDraft | undefined) => () => {
+      if (!to) return;
+      const [a, b] = [d.columns.indexOf(c), d.columns.indexOf(to)];
+      [d.columns[a], d.columns[b]] = [d.columns[b], d.columns[a]];
+      redraw();
+    };
+    const up = el("button", { className: "ghost", textContent: "↑", title: "Move up", disabled: i === 0 });
+    const down = el("button", { className: "ghost", textContent: "↓", title: "Move down", disabled: i === shown.length - 1 });
+    up.onclick = go(shown[i - 1]);
+    down.onclick = go(shown[i + 1]);
+    return [up, down];
+  };
   const colRows = d.columns.map((c) => {
     const tr = el("tr");
     const mark = () => tr.classList.toggle("changed", !!c.orig && !c.dropped && !sameColumn(c, c.orig));
     const set = <K extends keyof ColumnInfo>(k: K) => (v: ColumnInfo[K]) => ((c[k] = v), mark(), touched());
-    const type = input(c.data_type, set("data_type"), "Type");
+    // Type and length edit one value: the length is the type's (…), and each follows the other.
+    const type = input(c.data_type, (v) => (set("data_type")(v), (length.value = typeArgs(v))), "Type");
     type.setAttribute("list", types.id);
+    const length = input(typeArgs(c.data_type), (v) => (set("data_type")(withArgs(c.data_type, v)), (type.value = c.data_type)), "Length");
+    length.classList.add("length");
     const comment = input(c.comment ?? "", set("comment"), "Comment");
     comment.disabled = lite;
     const primary = check(c.primary, set("primary"), "Primary key");
     primary.disabled = lite && !d.create; // SQLite would have to rebuild the table
     primary.title = d.create ? "Primary key" : "Primary key: the key's columns change together when saved";
     tr.append(
-      td(input(c.name, set("name"), "Column name")), td(type), td(check(c.nullable, set("nullable"), "Nullable")),
+      td(input(c.name, set("name"), "Column name")), td(type), td(length), td(check(c.nullable, set("nullable"), "Nullable")),
       td(input(c.default ?? "", set("default"), "Default (SQL)")), td(check(c.auto_increment, set("auto_increment"), "Auto-increment")),
-      td(primary), td(comment), td(dropButton(c, redraw)),
+      td(primary), td(comment), td(...(movable && !c.dropped ? moveButtons(c) : []), dropButton(c, redraw)),
     );
     tr.classList.toggle("added", !!c.added);
     tr.classList.toggle("dropped", !!c.dropped);
@@ -301,7 +341,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
     mark();
     return tr;
   });
-  view.append(section(`Columns`, ["Name", "Type", "Null", "Default", "Auto inc.", "Key", "Comment", ""], colRows,
+  view.append(section(`Columns`, ["Name", "Type", "Length", "Null", "Default", "Auto inc.", "Key", "Comment", ""], colRows,
     addButton("Column", () => (d.columns.push(newColumn()), redraw()))), types);
 
   // Indexes
