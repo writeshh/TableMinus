@@ -1,5 +1,6 @@
 {
   "bundle": {
-    "externalBin": ["binaries/tableminus-mcp"]
+    "externalBin": ["binaries/tableminus-mcp"],
+    "macOS": { "signingIdentity": "-" }
   }
 }
