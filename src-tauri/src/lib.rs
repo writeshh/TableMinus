@@ -18,6 +18,7 @@ mod locations;
 mod mcp;
 mod objects;
 mod passcode;
+mod plugins;
 mod processes;
 mod readonly;
 mod rows;
@@ -567,8 +568,7 @@ async fn is_read_only(open: State<'_, Open>, name: String, sql: String) -> Resul
 const AI_ROWS: usize = 50;
 
 /// Runs a query the AI assistant asked for, once the user approved it in the pane (which counts as the safe mode
-/// confirmation; password levels still want `unlock`). Only SQL the parse calls read-only runs, and inside read-only
-/// bounds, so the database refuses a function that writes.
+/// confirmation; password levels still want `unlock`).
 #[tauri::command]
 async fn ai_run(
     open: State<'_, Open>,
@@ -577,17 +577,37 @@ async fn ai_run(
     sql: String,
     unlock: Option<safety::Unlock>,
 ) -> Result<db::QueryResult> {
-    let kind = open.get(&name).await?.saved.kind;
-    if !readonly::is_read_only(kind, &sql) {
-        return Err(Error::Invalid("the assistant may only run read-only SQL; insert it into the editor to run it"));
-    }
+    refuse_writes(&open, &name, &sql).await?; // before safe mode asks for anything
     guard(&open, &name, |_| true, true, unlock.as_ref()).await?;
-    let mut live = open.get(&name).await?;
+    run_read_only(&open, &prefs, &name, &sql, AI_ROWS).await
+}
+
+async fn refuse_writes(open: &Open, name: &str, sql: &str) -> Result<()> {
+    let kind = open.get(name).await?.saved.kind;
+    if readonly::is_read_only(kind, sql) {
+        Ok(())
+    } else {
+        Err(Error::Invalid("only read-only SQL runs here; insert it into the editor to run it"))
+    }
+}
+
+/// Runs SQL for the assistant or a plugin: only what the parse calls read-only, and inside read-only bounds, so the
+/// database refuses a function that writes. At most `max_rows` rows come back. Safe mode is the caller's to check.
+pub(crate) async fn run_read_only(
+    open: &Open,
+    prefs: &Prefs,
+    name: &str,
+    sql: &str,
+    max_rows: usize,
+) -> Result<db::QueryResult> {
+    refuse_writes(open, name, sql).await?;
+    let mut live = open.get(name).await?;
     let (start, end) = live.conn.read_only_bounds();
     let r = live.conn.query(start).await;
     live.check(r)?;
-    let r = with_limit(&mut live, query_limit(&prefs), move |c| {
-        Box::pin(async move { c.query_limited(&sql, Some(AI_ROWS)).await })
+    let sql = sql.to_string();
+    let r = with_limit(&mut live, query_limit(prefs), move |c| {
+        Box::pin(async move { c.query_limited(&sql, Some(max_rows)).await })
     })
     .await;
     let ended = live.conn.query(end).await;
@@ -880,6 +900,12 @@ pub fn run() -> tauri::Result<()> {
             acp::acp_cancel,
             acp::acp_permission,
             acp::acp_stop,
+            plugins::plugin_list,
+            plugins::plugin_fetch,
+            plugins::plugin_install,
+            plugins::plugin_remove,
+            plugins::plugin_enable,
+            plugins::plugin_run,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,

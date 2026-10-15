@@ -33,7 +33,7 @@ pub struct Fetched {
 }
 
 /// Only `https://` URLs without credentials: git's other transports can run commands (`ext::`) or reach the disk.
-fn checked_url(url: &str) -> Result<Url> {
+pub(crate) fn checked_url(url: &str) -> Result<Url> {
     let u = Url::parse(url.trim())?;
     if u.scheme() != "https" {
         return Err(Error::Invalid("use the repository's https:// address"));
@@ -74,7 +74,7 @@ fn collect(dir: &Path) -> Result<Vec<ThemeFile>> {
 }
 
 /// A temporary folder, removed when dropped.
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 
 impl Drop for Scratch {
     fn drop(&mut self) {
@@ -111,14 +111,22 @@ async fn git(args: &[&std::ffi::OsStr], protocol: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Clones `url` (already checked) shallowly into `into`, over `protocol` only; returns the commit.
+pub(crate) async fn shallow_clone(url: &str, protocol: &str, into: &Path) -> Result<String> {
+    let clone = ["clone", "--depth", "1", "--single-branch", "--no-tags", "--quiet", "--"].map(std::ffi::OsStr::new);
+    git(&[&clone[..], &[std::ffi::OsStr::new(url), into.as_os_str()]].concat(), protocol).await?;
+    git(&["-C", &into.to_string_lossy(), "rev-parse", "HEAD"].map(std::ffi::OsStr::new), protocol).await
+}
+
+/// A fresh, empty temporary folder, removed when dropped.
+pub(crate) fn scratch(what: &str) -> Result<Scratch> {
+    Ok(Scratch(std::env::temp_dir().join(format!("tableminus-{what}-{}", crate::mcp::random_hex(8)?))))
+}
+
 /// Clones `url` (already checked) shallowly and reads its theme files.
 async fn fetch(url: &str, protocol: &str) -> Result<Fetched> {
-    let scratch = Scratch(std::env::temp_dir().join(format!("tableminus-theme-{}", crate::mcp::random_hex(8)?)));
-    let dir = scratch.0.as_os_str();
-    let clone = ["clone", "--depth", "1", "--single-branch", "--no-tags", "--quiet", "--"].map(std::ffi::OsStr::new);
-    git(&[&clone[..], &[std::ffi::OsStr::new(url), dir]].concat(), protocol).await?;
-    let commit =
-        git(&["-C", &scratch.0.to_string_lossy(), "rev-parse", "HEAD"].map(std::ffi::OsStr::new), protocol).await?;
+    let scratch = scratch("theme")?;
+    let commit = shallow_clone(url, protocol, &scratch.0).await?;
     let path = scratch.0.clone();
     let files = tauri::async_runtime::spawn_blocking(move || collect(&path)).await??;
     if files.is_empty() {

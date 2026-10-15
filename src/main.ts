@@ -27,6 +27,7 @@ import { applyTheme } from "./themes"; // also adds the theme rows to Settings �
 import "./passcode"; // the lock screen, and its rows in Settings › Security
 import { withVault } from "./vault";
 import { openScript } from "./scripts";
+import { initPlugins, pluginMenu } from "./plugins"; // also adds Settings › Plugins
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
@@ -1345,7 +1346,8 @@ function tableRow(t: string, label: string, first: MenuItem[], last: MenuItem[])
   row.classList.toggle("active", t === open);
   row.onclick = () => openTable(t);
   row.oncontextmenu = (e) => (e.stopPropagation(),
-    contextMenu(e, [...first, "-", ...tableMenu(t), "-", ...transferMenu(t), "-", ["Show diagram", () => showDiagram(t)], ...last]));
+    contextMenu(e, [...first, "-", ...tableMenu(t), "-", ...transferMenu(t), "-", ["Show diagram", () => showDiagram(t)],
+      ...pluginMenu("table", () => ({ table: t, engine: active?.kind ?? null })), ...last]));
   const li = el("li", {}, row);
   if (isOpen)
     li.append(
@@ -2778,6 +2780,11 @@ function wireSelection(table: HTMLTableElement, r: QueryResult, options?: Render
       "-",
       [`Copy column name "${column}"`, () => copyText(column, "column name")],
       [`Copy all values of ${column} on this page`, values],
+      ...pluginMenu("rows", () => {
+        const cells = selectedCells(true);
+        const rows = (cells?.rows ?? []).map((row) => Object.fromEntries(cells!.columns.map((c, i) => [c, row[i]])));
+        return { table: options?.table ?? null, columns: cells?.columns ?? [], rows };
+      }),
       ...(options?.menu?.(ri, ci) ?? []),
     ]);
   };
@@ -2960,6 +2967,15 @@ function showDiagram(table?: string) {
   openDiagram(pg ? (table?.includes(".") ? table.split(".")[0] : shownSchema()) : null, table);
 }
 initDiagram({ call, conn: hostConn, openTable: (t) => openTable(t), menu: contextMenu });
+initPlugins({
+  conn: hostConn,
+  insert(sql) {
+    if (current()?.kind === "sql") editor.insert(sql);
+    else openSqlIn(null, sql);
+  },
+  copy: (text, what) => void copyText(text, what),
+  say: (text, kind = "done") => note(text, kind),
+});
 initAssistant({
   conn: hostConn,
   server: () => info?.server ?? "",

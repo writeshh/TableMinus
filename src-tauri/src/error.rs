@@ -58,6 +58,9 @@ pub enum Error {
     Rebuild(String),
     #[error("git: {0}")]
     Git(String),
+    /// A plugin that can't be installed or read, or whose action failed.
+    #[error("plugin: {0}")]
+    Plugin(String),
     /// An assistant agent (acp.rs) failed to start, stopped, or refused a request.
     #[error("agent: {0}")]
     Agent(String),
