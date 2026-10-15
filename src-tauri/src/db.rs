@@ -547,6 +547,18 @@ impl Conn {
         }
     }
 
+    /// Whether `err` is the database refusing a write inside [`Conn::read_only_bounds`]: Postgres's
+    /// `read_only_sql_transaction` (25006), MySQL's `ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION` (1792), or
+    /// SQLite's `READONLY`.
+    pub fn refused_as_read_only(err: &Error) -> bool {
+        match err {
+            Error::Postgres(e) => e.code() == Some(&tokio_postgres::error::SqlState::READ_ONLY_SQL_TRANSACTION),
+            Error::MySql(mysql_async::Error::Server(e)) => e.code == 1792,
+            Error::Sqlite(rusqlite::Error::SqliteFailure(e, _)) => e.code == rusqlite::ErrorCode::ReadOnly,
+            _ => false,
+        }
+    }
+
     /// Runs SQL typed by the user and returns the last result set as text cells (None = NULL).
     pub async fn query(&mut self, sql: &str) -> Result<QueryResult> {
         self.query_limited(sql, None).await
@@ -970,6 +982,66 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn refused_as_read_only_should_recognise_sqlite_refusing_a_write_in_bounds() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            c.query("create table t (a int)").await.unwrap();
+            let (start, end) = c.read_only_bounds();
+            c.query(start).await.unwrap();
+            let refused = c.query("insert into t values (1)").await.unwrap_err();
+            c.query(end).await.unwrap();
+            assert!(Conn::refused_as_read_only(&refused), "{refused}");
+            let other = c.query("select * from nope").await.unwrap_err();
+            assert!(!Conn::refused_as_read_only(&other), "{other}");
+        });
+    }
+
+    /// A function that writes passes the read-only parse; the bounds still stop it. `DBM_PG_URL` points elsewhere.
+    #[test]
+    #[ignore = "needs a local Postgres"]
+    fn refused_as_read_only_should_recognise_postgres_refusing_a_writing_function() {
+        tauri::async_runtime::block_on(async {
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+            let mut c = open(Engine::Postgres, &url).await;
+            // A real table: Postgres lets a read-only transaction write temporary ones.
+            let t = format!("dbm_bumped_{}", std::process::id());
+            c.query(&format!(
+                "create table {t} (n int); create function pg_temp.bump() returns int language sql as \
+                 'insert into {t} values (1) returning 1'"
+            ))
+            .await
+            .unwrap();
+            let sql = "select pg_temp.bump()";
+            let parsed = crate::readonly::is_read_only(Engine::Postgres, sql);
+            let (start, end) = c.read_only_bounds();
+            c.query(start).await.unwrap();
+            let refused = c.query(sql).await;
+            c.query(end).await.unwrap();
+            c.query(&format!("drop table {t}")).await.unwrap();
+            assert!(parsed, "the parse can't tell");
+            let refused = refused.unwrap_err();
+            assert!(Conn::refused_as_read_only(&refused), "{refused}");
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local MySQL"]
+    fn refused_as_read_only_should_recognise_mysql_refusing_a_write_in_bounds() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Mysql, "mysql://root@127.0.0.1:3306").await;
+            let db = format!("dbm_ro_{}", std::process::id());
+            c.query(&format!("create database {db}; use {db}; create table t (a int)")).await.unwrap();
+            let (start, end) = c.read_only_bounds();
+            c.query(start).await.unwrap();
+            let refused = c.query("insert into t values (1)").await.unwrap_err();
+            c.query(end).await.unwrap();
+            c.query(&format!("drop database {db}")).await.unwrap();
+            assert!(Conn::refused_as_read_only(&refused), "{refused}");
+        });
     }
 
     #[test]

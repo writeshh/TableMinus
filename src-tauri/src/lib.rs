@@ -341,19 +341,20 @@ async fn reconnect(app: AppHandle, open: State<'_, Open>, name: String) -> Resul
 
 /// Safe mode's check for a request on an open connection; see [`safety::check`]. `reads` says whether the request
 /// is read-only for the connection's engine. The connection lock is let go before checking, since Touch ID waits for
-/// the user.
+/// the user. Returns the connection's level.
 async fn guard(
     open: &Open,
     name: &str,
     reads: impl FnOnce(Engine) -> bool,
     confirmed: bool,
     unlock: Option<&safety::Unlock>,
-) -> Result<()> {
+) -> Result<safety::Safety> {
     let (level, kind, password) = {
         let live = open.get(name).await?;
         (live.saved.safety, live.saved.kind, live.password.clone())
     };
-    safety::check(level, reads(kind), confirmed, unlock, password.as_ref()).await
+    safety::check(level, reads(kind), confirmed, unlock, password.as_ref()).await?;
+    Ok(level)
 }
 
 /// Drops the live connection; the next connect opens a fresh one.
@@ -521,13 +522,33 @@ async fn run_query(
         read_only = readonly::is_read_only(kind, &sql);
         read_only
     };
-    guard(&open, &name, reads, confirmed, unlock.as_ref()).await?;
+    let level = guard(&open, &name, reads, confirmed, unlock.as_ref()).await?;
+    // The level asks before writes and the parse saw none, so nobody was asked: the database makes sure, refusing
+    // what the parse can't see (a function that writes). Once the user has said yes, it runs as it is.
+    let bounded = read_only && level.asks(false) && !confirmed && unlock.is_none();
     let mut live = open.get(&name).await?;
+    let (start, end) = live.conn.read_only_bounds();
+    if bounded {
+        let r = live.conn.query(start).await;
+        live.check(r)?;
+    }
     let max = max_rows.map(|n| n as usize);
     let r =
         with_limit(&mut live, query_limit(&prefs), move |c| Box::pin(async move { c.query_results(&sql, max).await }))
             .await;
-    Ok(Ran { results: live.check(r)?, read_only })
+    if bounded {
+        let ended = live.conn.query(end).await;
+        if r.is_ok() {
+            live.check(ended)?;
+        }
+    }
+    match r {
+        // It did try to write: ask as for any write, and the answer sends it again unbounded.
+        Err(e) if bounded && db::Conn::refused_as_read_only(&e) => {
+            Err(if level.wants_password() { Error::PasswordRequired } else { Error::ConfirmRequired })
+        }
+        r => Ok(Ran { results: live.check(r)?, read_only }),
+    }
 }
 
 /// Whether safe mode counts `sql` as only reading. The metrics board asks before running anything else, and never
