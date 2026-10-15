@@ -1729,7 +1729,7 @@ async function loadTable(tab: TableTab) {
       }
       const request = {
         ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset, count: tab.total === undefined,
-        estimate_over: settings.estimateOver || null, identity: true,
+        estimate_over: settings.estimateOver || null, identity: true, wkt: settings.geometryWkt,
       };
       const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null; estimated: boolean; ids?: string[] }>("browse", { name, request });
       tab.result = arrange({ columns: page.columns, rows: page.rows, affected: 0 }, tab.layout.order);
@@ -2890,7 +2890,7 @@ function transferMenu(table: string): MenuItem[] {
 $("export-table").onclick = () => {
   const tab = current();
   if (tab?.kind !== "table" || !active) return;
-  const request = { ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset, count: false };
+  const request = { ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset, count: false, wkt: settings.geometryWkt };
   const source: ExportSource = { kind: "rows", request, pageRows: tab.result?.rows.length ?? 0 };
   exportDialog(transferCtx(), source);
 };

@@ -30,6 +30,10 @@ pub struct Browse {
     /// be saved to a row its key doesn't single out.
     #[serde(default)]
     pub identity: bool,
+    /// `PostGIS` geometry and geography as extended WKT (`SRID=4326;POINT(1 2)`, which also reads back in when
+    /// edited) rather than hex WKB.
+    #[serde(default)]
+    pub wkt: bool,
 }
 
 /// How several filters combine.
@@ -188,7 +192,10 @@ impl Conn {
 
     /// The queries behind a browse request, without paging: its rows (filtered and sorted) and their count.
     pub(crate) async fn select(&mut self, req: &Browse) -> Result<Select> {
-        let columns: Vec<String> = self.columns(&req.table).await?.into_iter().map(|c| c.name).collect();
+        let table_columns = self.columns(&req.table).await?;
+        let spatial: Vec<bool> =
+            table_columns.iter().map(|c| req.wkt && matches!(c.data_type.as_str(), "geometry" | "geography")).collect();
+        let columns: Vec<String> = table_columns.into_iter().map(|c| c.name).collect();
         if columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
         }
@@ -212,7 +219,9 @@ impl Conn {
         // Postgres's binary protocol would need a decoder per type; every type can be cast to text instead.
         let select: Vec<String> = columns
             .iter()
-            .map(|c| match self {
+            .zip(&spatial)
+            .map(|(c, &spatial)| match self {
+                Conn::Pg(_) if spatial => format!("st_asewkt({0}) as {0}", self.ident(c)),
                 Conn::Pg(_) => format!("{} as {}", self.text_expr(c), self.ident(c)),
                 _ => self.ident(c),
             })
@@ -325,6 +334,7 @@ mod tests {
             count: true,
             estimate_over: None,
             identity: false,
+            wkt: false,
         }
     }
 
@@ -461,23 +471,27 @@ mod tests {
         });
     }
 
-    /// The catalog estimate stands in for the count above the threshold, and only without filters. Runs in a
-    /// scratch database, dropped afterwards. `DBM_PG_URL` points elsewhere than the default server.
+    /// A scratch database on the local Postgres (`DBM_PG_URL` points elsewhere): the admin connection, one to the
+    /// scratch database, and its name, for dropping it.
+    async fn pg_scratch(prefix: &str) -> (Conn, Conn, String) {
+        let url = std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+        let open = |url: String| async move {
+            Conn::open(Engine::Postgres, &url, None, &Tls::default(), &Options::default(), None).await.unwrap()
+        };
+        let mut admin = open(url.clone()).await;
+        let db = format!("{prefix}_{}", std::process::id());
+        admin.query(&format!("create database {db}")).await.unwrap();
+        let mut u = url::Url::parse(&url).unwrap();
+        u.set_path(&db);
+        (admin, open(u.to_string()).await, db)
+    }
+
+    /// The catalog estimate stands in for the count above the threshold, and only without filters.
     #[test]
     #[ignore = "needs a local Postgres; creates and drops a scratch database"]
     fn local_postgres_browse_should_estimate_large_tables() {
         tauri::async_runtime::block_on(async {
-            let url =
-                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
-            let open = |url: String| async move {
-                Conn::open(Engine::Postgres, &url, None, &Tls::default(), &Options::default(), None).await.unwrap()
-            };
-            let mut admin = open(url.clone()).await;
-            let db = format!("dbm_estimate_{}", std::process::id());
-            admin.query(&format!("create database {db}")).await.unwrap();
-            let mut u = url::Url::parse(&url).unwrap();
-            u.set_path(&db);
-            let mut c = open(u.to_string()).await;
+            let (mut admin, mut c, db) = pg_scratch("dbm_estimate").await;
             c.query("create table people(id int primary key, name text)").await.unwrap();
             c.query("insert into people select n, 'p' || n from generate_series(1, 500) n").await.unwrap();
             c.query("analyze people").await.unwrap();
@@ -490,6 +504,29 @@ mod tests {
             assert_eq!((estimated.total, estimated.estimated), (Some(500), true));
             assert_eq!((small.total, small.estimated), (Some(500), false));
             assert_eq!((filtered.total, filtered.estimated), (Some(10), false));
+        });
+    }
+
+    /// Spatial values read as extended WKT when asked, as hex WKB otherwise. Needs `PostGIS` on the server.
+    #[test]
+    #[ignore = "needs a local Postgres with PostGIS; creates and drops a scratch database"]
+    fn local_postgres_browse_should_show_geometry_as_wkt_when_asked() {
+        tauri::async_runtime::block_on(async {
+            let (mut admin, mut c, db) = pg_scratch("dbm_wkt").await;
+            let rows = async {
+                c.query("create extension postgis").await?;
+                c.query("create table people(id int primary key, at geometry(Point, 4326))").await?;
+                c.query("insert into people values (1, 'SRID=4326;POINT(1 2)')").await?;
+                let wkt = c.browse(&Browse { wkt: true, ..request(vec![]) }).await?.rows;
+                let hex = c.browse(&request(vec![])).await?.rows;
+                Ok::<_, crate::error::Error>((wkt, hex))
+            }
+            .await;
+            drop(c);
+            admin.query(&format!("drop database {db}")).await.unwrap();
+            let (wkt, hex) = rows.unwrap();
+            assert_eq!(wkt[0][1].as_deref(), Some("SRID=4326;POINT(1 2)"));
+            assert!(hex[0][1].as_deref().is_some_and(|h| h.starts_with("0101000020E6100000")), "{hex:?}");
         });
     }
 
@@ -526,6 +563,7 @@ mod tests {
                 count: true,
                 estimate_over: None,
                 identity: false,
+                wkt: false,
             };
             let page = c.browse(&req).await;
             c.query(&format!("drop database {db}")).await.unwrap();

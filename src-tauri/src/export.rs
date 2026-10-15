@@ -118,6 +118,7 @@ async fn plan(conn: &mut Conn, source: &Source) -> Result<Plan> {
                 count: false,
                 estimate_over: None,
                 identity: false,
+                wkt: false,
             };
             (all, false)
         }
@@ -547,6 +548,7 @@ mod tests {
                 count: false,
                 estimate_over: None,
                 identity: false,
+                wkt: false,
             };
             let d = dir("rows");
             let format =
