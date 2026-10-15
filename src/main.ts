@@ -201,7 +201,7 @@ function section(g: launcher.Group, title: string, conns: Saved[], dropTarget: b
       el("span", { className: "count", textContent: String(conns.length) }));
     const fold = () => (collapsed.has(title) ? collapsed.delete(title) : collapsed.add(title), renderConns());
     head.onclick = fold;
-    head.onkeydown = (e) => e.key === "Enter" && fold();
+    head.onkeydown = (e) => void (e.key === "Enter" && fold()); // returning false would cancel Tab
     if (g.name) head.oncontextmenu = (e) => contextMenu(e, groupMenu(g));
     if (dropTarget) head.dataset.group = g.name;
     out.append(head);
@@ -238,7 +238,7 @@ function connRow(c: Saved) {
   if (c.color) li.style.setProperty("--conn-color", COLORS[c.color] ?? "transparent"), li.classList.add("colored");
   li.onclick = () => !dragged && connect(c);
   li.oncontextmenu = (e) => contextMenu(e, connMenu(c));
-  li.onkeydown = (e) => e.key === "Enter" && connect(c);
+  li.onkeydown = (e) => void (e.key === "Enter" && connect(c));
   li.onpointerdown = (e) => e.button === 0 && dragToGroup(e, c);
   return li;
 }
@@ -692,7 +692,7 @@ async function showConnectionInfo() {
   }
 }
 $("pill").onclick = showConnectionInfo;
-$("pill").onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), showConnectionInfo());
+$("pill").onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), showConnectionInfo()));
 $("info-reconnect").onclick = () => (($("conn-info").hidden = true), reconnect());
 $("info-disconnect").onclick = () => (($("conn-info").hidden = true), closeWorkspace());
 document.addEventListener("pointerdown", (e) => {
@@ -968,7 +968,7 @@ function showWorkspaces() {
   ]);
 }
 $("where-conn").onclick = showWorkspaces;
-$("where-conn").onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), showWorkspaces());
+$("where-conn").onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), showWorkspaces()));
 $("return-workspace").onclick = () => ws && showWorkspace(ws);
 
 // ---------- Split panes: the focused pane is live, the others show a still picture of their tab ----------
@@ -1510,7 +1510,8 @@ async function closeTab(id: number, remember = true) {
   tabs.splice(i, 1);
   saveSqlTabs();
   if (!tabs.length && (ws?.panes.length ?? 1) > 1) return closePane();
-  if (!tabs.length) return void closeWorkspace(); // last tab gone: leave the connection, like TablePlus
+  // Last tab gone: unlike TablePlus, stay connected on a fresh SQL tab. The workspace tab's × and Disconnect leave.
+  if (!tabs.length) return void (openSqlTab(), editor.focus());
   if (id === currentId) select(tabs[Math.max(0, i - 1)].id);
   else renderMain();
 }
@@ -2896,7 +2897,6 @@ initStructure({
     for (const t of tabs.filter((t): t is TableTab => t.kind === "table" && t.table === table)) {
       t.staged.clear();
       dropDraft(t.id);
-      if (tabs.length === 1) openSqlTab(); // closing the last tab would leave the workspace
       closeTab(t.id, false);
     }
   },

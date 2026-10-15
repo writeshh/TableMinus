@@ -367,5 +367,5 @@ export function initSearch() {
     searching = null;
   };
   go.onclick = run;
-  input.onkeydown = (e) => e.key === "Enter" && (e.preventDefault(), searching || run());
+  input.onkeydown = (e) => void (e.key === "Enter" && (e.preventDefault(), searching || run())); // false would cancel typing
 }
