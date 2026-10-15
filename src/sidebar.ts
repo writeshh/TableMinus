@@ -118,6 +118,11 @@ export const loadedItems = (conn: string): Item[] => {
 // ---------- The tree ----------
 
 /** Draws the tree into `host`; `query` is the sidebar's filter text. Returns how many items it shows. */
+/** Rows a sidebar section shows before Show more. */
+const BATCH = 300;
+/** How many rows each section shows now, by connection and section; Show more raises it until the app quits. */
+const shownLimit = new Map<string, number>();
+
 export function renderTree(host: HTMLElement, query: string): number {
   const conn = ctx.conn();
   if (!conn) return 0;
@@ -141,7 +146,6 @@ export function renderTree(host: HTMLElement, query: string): number {
   let count = 0;
 
   const rowFor = (name: string, kind: Kind | "table"): HTMLElement => {
-    count++;
     const pin: MenuItem = pinned.has(name)
       ? ["Unpin", () => savePrefs({ ...p, pins: p.pins.filter((x) => x !== name) })]
       : ["Pin to top", () => savePrefs({ ...p, pins: [...p.pins, name] })];
@@ -194,11 +198,22 @@ export function renderTree(host: HTMLElement, query: string): number {
     return row;
   };
 
-  const section = (id: string, title: string, rows: HTMLElement[]) => {
-    if (!rows.length && id !== "tables") return [];
+  // Rows are built only for open sections, and only so many at a time: a schema with thousands of tables would
+  // otherwise build them all on every redraw. Show more adds the next batch.
+  const section = <T>(id: string, title: string, items: T[], build: (item: T) => HTMLElement) => {
+    if (!items.length && id !== "tables") return [];
     const open = !collapsed.includes(id);
+    count += items.length;
+    const limitKey = `${conn.name}\u001f${id}`;
+    const limit = shownLimit.get(limitKey) ?? BATCH;
+    const rows = open ? items.slice(0, limit).map(build) : [];
+    if (open && items.length > limit) {
+      const more = el("button", { className: "ghost show-more", textContent: `Show ${Math.min(BATCH, items.length - limit)} more (${items.length - limit} not shown)` });
+      more.onclick = () => (shownLimit.set(limitKey, limit + BATCH), ctx.redraw());
+      rows.push(el("li", {}, more));
+    }
     const head = el("button", { className: "section-head", textContent: `${title} ` },
-      el("span", { className: "count", textContent: String(rows.length) }));
+      el("span", { className: "count", textContent: String(items.length) }));
     head.setAttribute("aria-expanded", String(open));
     head.onclick = () => {
       const l = looks();
@@ -207,13 +222,16 @@ export function renderTree(host: HTMLElement, query: string): number {
     };
     return [el("li", { className: "section" }, head, ...(open ? [el("ul", {}, ...rows)] : []))];
   };
+  const tableRows = (names: string[]) => names.map((n) => ({ n, kind: kindOf.get(n) ?? ("table" as const) }));
 
   const kindOf = new Map(all.map((i) => [i.name, i.kind]));
-  const pinRows = p.pins.filter(shows).filter((n) => kindOf.has(n) || ctx.tables().includes(n)).map((n) => rowFor(n, kindOf.get(n) ?? "table"));
+  const known = new Set(ctx.tables());
+  const exists = (n: string) => kindOf.has(n) || known.has(n);
+  const build = ({ n, kind }: { n: string; kind: Kind | "table" }) => rowFor(n, kind);
+  const pinNames = p.pins.filter(shows).filter(exists);
   // Recent: what was opened last that still exists here (another database's names don't show).
-  const recentRows = off.includes("recent") ? []
-    : (p.recent ?? []).filter(shows).filter((n) => kindOf.has(n) || ctx.tables().includes(n)).map((n) => rowFor(n, kindOf.get(n) ?? "table"));
-  const recentSection = section("recent", "Recent", recentRows);
+  const recentNames = off.includes("recent") ? [] : (p.recent ?? []).filter(shows).filter(exists);
+  const recentSection = section("recent", "Recent", tableRows(recentNames), build);
   recentSection[0]?.querySelector(".section-head")?.addEventListener("contextmenu", (e) => {
     e.stopPropagation();
     ctx.menu(e as MouseEvent, [["Clear recent", () => savePrefs({ ...p, recent: [] })]]);
@@ -231,7 +249,7 @@ export function renderTree(host: HTMLElement, query: string): number {
   const groupSections = p.groups.flatMap((g, gi) => {
     const members = unpinned.filter((t) => !grouped.has(t) && matches(g, t));
     members.forEach((t) => grouped.add(t));
-    const li = section(`group:${g.name}`, g.name, members.map((t) => rowFor(t, "table")));
+    const li = section(`group:${g.name}`, g.name, members, (t) => rowFor(t, "table"));
     li[0]?.querySelector(".section-head")?.addEventListener("contextmenu", (e) => {
       e.stopPropagation();
       ctx.menu(e as MouseEvent, [
@@ -243,12 +261,12 @@ export function renderTree(host: HTMLElement, query: string): number {
   });
 
   host.replaceChildren(
-    ...(pinRows.length ? section("pinned", "Pinned", pinRows) : []),
+    ...(pinNames.length ? section("pinned", "Pinned", tableRows(pinNames), build) : []),
     ...recentSection,
     ...groupSections,
-    ...section("tables", "Tables", unpinned.filter((t) => !grouped.has(t)).map((t) => rowFor(t, "table"))),
+    ...section("tables", "Tables", unpinned.filter((t) => !grouped.has(t)), (t) => rowFor(t, "table")),
     ...SECTIONS.flatMap(([id, title, kinds]) =>
-      off.includes(id) ? [] : section(id, title, others.filter((i) => kinds.includes(i.kind) && !pinned.has(i.name)).map((i) => rowFor(i.name, i.kind))),
+      off.includes(id) ? [] : section(id, title, others.filter((i) => kinds.includes(i.kind) && !pinned.has(i.name)), (i) => rowFor(i.name, i.kind)),
     ),
   );
   return count;

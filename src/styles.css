@@ -172,6 +172,7 @@ aside { display: flex; flex-direction: column; }
 .side-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
 .tree-row { display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 4px; border-radius: 999px; cursor: default; user-select: none; white-space: nowrap; }
+.show-more { margin: 2px 0 4px 22px; padding: 2px 8px; font-size: 12px; color: var(--muted); }
 .tree-row:hover { background: var(--hover); }
 .tree-row:active { background: var(--press); }
 .tree-row.active { background: var(--accent); color: var(--on-accent); }
