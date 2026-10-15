@@ -7,6 +7,10 @@
 .structure td:has(input:not([type="checkbox"]), select) { padding: 2px 4px; }
 .structure td input:not([type="checkbox"]), .structure td select { width: 100%; min-width: 90px; padding: 3px 6px; font: inherit; border-color: transparent; background-color: transparent; }
 .structure td select { padding-right: 24px; }
+.structure .trigger-form { display: grid; gap: 4px; min-width: 320px; }
+.structure .trigger-form select { width: auto; min-width: 0; }
+.structure .trigger-form textarea { width: 100%; font: 12px/1.4 var(--mono); resize: vertical; }
+.structure .events { display: inline-flex; gap: 8px; }
 .structure td input:not([type="checkbox"]):hover, .structure td select:hover { border-color: var(--line); }
 .structure td input:focus { border-color: var(--accent); background: var(--bg); }
 .structure tr.changed td, .structure input.changed { background: color-mix(in srgb, var(--warn) 14%, transparent); }

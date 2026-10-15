@@ -18,10 +18,12 @@ type ForeignKeyInfo = {
   name: string; columns: string[]; ref_table: string; ref_columns: string[]; on_update: string; on_delete: string;
 };
 type NamedDef = { name: string; definition: string };
+/** `timing` is null for a trigger the editor can't restate (statement-level, WHEN, a column list): drop only. */
+type TriggerInfo = NamedDef & { timing: string | null; events: string[]; body: string | null };
 /** MySQL's engine and collation, with the server's choices. */
 type TableOptions = { engine: string | null; collation: string | null; engines: string[]; collations: string[] };
 type Structure = {
-  columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[]; checks: NamedDef[]; triggers: NamedDef[];
+  columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[]; checks: NamedDef[]; triggers: TriggerInfo[];
   comment: string | null; options: TableOptions | null;
 };
 
@@ -33,6 +35,7 @@ type Draft = {
   columns: ColumnDraft[]; indexes: (IndexInfo & Staged)[]; fks: (ForeignKeyInfo & Staged)[];
   /** `definition` is the expression of an added check, the whole CHECK (…) of an existing one. */
   checks: (NamedDef & Staged)[];
+  triggers: (TriggerInfo & Staged)[];
 };
 
 /** What the workspace (main.ts) lends this module. */
@@ -117,6 +120,11 @@ function changes(d: Draft): Record<string, unknown>[] {
     if (k.added && !k.dropped) out.push({ op: "add_check", name: k.name.trim(), expression: k.definition });
     else if (k.dropped && !k.added) out.push({ op: "drop_check", name: k.name });
   }
+  // Drops first, so an edited trigger (dropped, then added again) can keep its name.
+  for (const t of d.triggers) if (t.dropped && !t.added) out.push({ op: "drop_trigger", name: t.name });
+  for (const t of d.triggers) {
+    if (t.added && !t.dropped) out.push({ op: "add_trigger", name: t.name.trim(), timing: t.timing, events: t.events, body: t.body ?? "" });
+  }
   for (const f of d.fks) {
     const { name, columns, ref_table, ref_columns, on_update, on_delete } = f;
     if (f.added && !f.dropped) out.push({ op: "add_foreign_key", name: name.trim(), columns, ref_table, ref_columns, on_update, on_delete });
@@ -146,6 +154,7 @@ function fromBase(table: string, s: Structure): Draft {
     indexes: s.indexes.map((i) => ({ ...i })),
     fks: s.foreign_keys.map((f) => ({ ...f })),
     checks: s.checks.map((k) => ({ ...k })),
+    triggers: s.triggers.map((t) => ({ ...t })),
   };
 }
 
@@ -222,7 +231,7 @@ export async function showStructure(out: HTMLElement, tabId: number, table: stri
     if (create) {
       d = {
         table, create, name: shortName(table), comment: "", engine: "", collation: "",
-        columns: [{ ...newColumn(), name: "id", primary: true, nullable: false }], indexes: [], fks: [], checks: [],
+        columns: [{ ...newColumn(), name: "id", primary: true, nullable: false }], indexes: [], fks: [], checks: [], triggers: [],
       };
       if (kind() !== "sqlite") d.columns[0].auto_increment = true;
       d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER" }[kind()]!;
@@ -353,11 +362,55 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
     : addButton("Check", () => (d.checks.push({ name: `${d.name.trim()}_check${d.checks.length + 1}`, definition: "", added: true }), redraw()));
   view.append(section("Checks", ["Name", "Definition", ""], checkRows, addCheck));
 
-  // Read-only for now
-  const defs = (rows: NamedDef[]) => rows.map((r) => el("tr", {}, td(r.name), td(el("code", { textContent: r.definition }))));
-  if (d.base?.triggers.length) view.append(section("Triggers", ["Name", "Definition"], defs(d.base.triggers)));
+  view.append(triggerSection(d, redraw, touched));
 
   out.replaceChildren(view);
+}
+
+/** Postgres triggers call a function; MySQL and SQLite run statements (SQLite's go inside BEGIN … END). */
+const TRIGGER_BODY: Record<string, string> = {
+  postgres: "Function to call, e.g. audit()", mysql: "Statement, e.g. SET NEW.updated_at = NOW()", sqlite: "Statements, e.g. UPDATE …;",
+};
+
+/** Triggers: an existing one can be dropped, or edited (dropped, and added again as changed); added ones are forms. */
+function triggerSection(d: Draft, redraw: () => void, touched: () => void) {
+  const several = kind() === "postgres"; // MySQL and SQLite fire on one event
+  const rows = d.triggers.map((t) => {
+    if (!t.added) {
+      const edit = el("button", { className: "ghost", textContent: "Edit", title: "Change it: drops it and adds it again" });
+      edit.onclick = () => {
+        t.dropped = true;
+        d.triggers.push({ ...t, dropped: false, added: true });
+        redraw();
+      };
+      const tr = el("tr", {}, td(t.name), td(el("code", { textContent: t.definition })),
+        td(...(t.timing && !t.dropped ? [edit] : []), dropButton(t, redraw)));
+      tr.classList.toggle("dropped", !!t.dropped);
+      return tr;
+    }
+    const timing = el("select", { title: "When" }, ...["BEFORE", "AFTER"].map((v) => el("option", { value: v, textContent: v, selected: v === t.timing })));
+    timing.onchange = () => ((t.timing = timing.value), touched());
+    const events = several
+      ? el("span", { className: "events" }, ...["INSERT", "UPDATE", "DELETE"].map((e) => {
+          const box = check(t.events.includes(e), (on) => ((t.events = on ? [...t.events, e] : t.events.filter((x) => x !== e)), touched()), e);
+          return el("label", { className: "inline" }, box, ` ${e.toLowerCase()}`);
+        }))
+      : (() => {
+          const s = el("select", { title: "On" }, ...["INSERT", "UPDATE", "DELETE"].map((v) => el("option", { value: v, textContent: v, selected: v === t.events[0] })));
+          s.onchange = () => ((t.events = [s.value]), touched());
+          return s;
+        })();
+    const body = el("textarea", { value: t.body ?? "", spellcheck: false, placeholder: TRIGGER_BODY[kind()], rows: 2 });
+    body.oninput = () => ((t.body = body.value), touched());
+    const tr = el("tr", { className: "added" }, td(input(t.name, (v) => ((t.name = v), touched()), "Trigger name")),
+      td(el("div", { className: "trigger-form" }, el("span", {}, timing, " ", events), body)), td(dropButton(t, redraw)));
+    tr.classList.toggle("dropped", !!t.dropped);
+    return tr;
+  });
+  const add = addButton("Trigger", () => (d.triggers.push({
+    name: `${d.name.trim()}_trigger${d.triggers.length + 1}`, definition: "", timing: "BEFORE", events: ["INSERT"], body: "", added: true,
+  }), redraw()));
+  return section("Triggers", ["Name", "Definition", ""], rows, add);
 }
 
 const td = (...kids: (Node | string)[]) => el("td", {}, ...kids);

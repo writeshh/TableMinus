@@ -1,5 +1,5 @@
-//! DDL from typed requests: structure edits (columns, indexes, foreign keys, checks, the primary key, name, comment,
-//! MySQL's engine and collation) and table operations
+//! DDL from typed requests: structure edits (columns, indexes, foreign keys, checks, triggers, the primary key, name,
+//! comment, MySQL's engine and collation) and table operations
 //! (clone, truncate, drop, reset auto-increment, schemas). Statements are generated first, so the UI can show
 //! them, then run as shown by [`Conn::run_ddl`].
 //!
@@ -68,6 +68,36 @@ impl IndexMethod {
     }
 }
 
+/// When a row trigger fires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum TriggerTiming {
+    #[serde(rename = "BEFORE")]
+    Before,
+    #[serde(rename = "AFTER")]
+    After,
+}
+
+/// What a row trigger fires on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum TriggerEvent {
+    #[serde(rename = "INSERT")]
+    Insert,
+    #[serde(rename = "UPDATE")]
+    Update,
+    #[serde(rename = "DELETE")]
+    Delete,
+}
+
+impl TriggerEvent {
+    fn sql(self) -> &'static str {
+        match self {
+            TriggerEvent::Insert => "INSERT",
+            TriggerEvent::Update => "UPDATE",
+            TriggerEvent::Delete => "DELETE",
+        }
+    }
+}
+
 /// A column as the structure editor wants it. Blank defaults and comments mean none.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,6 +156,17 @@ pub enum Change {
         expression: String,
     },
     DropCheck {
+        name: String,
+    },
+    /// A row trigger. `body` is SQL the user typed: MySQL's and SQLite's statements (SQLite's go inside BEGIN … END),
+    /// or the function Postgres calls, like `audit()`.
+    AddTrigger {
+        name: String,
+        timing: TriggerTiming,
+        events: Vec<TriggerEvent>,
+        body: String,
+    },
+    DropTrigger {
         name: String,
     },
     /// Replaces an existing table's primary key with one on `columns`, in order; none when empty.
@@ -301,6 +342,49 @@ fn check_sql(d: Dialect, name: &str, expression: &str) -> Result<String> {
     Ok(format!("{named}CHECK ({expression})"))
 }
 
+fn trigger_sql(
+    d: Dialect,
+    t: &str,
+    name: &str,
+    timing: TriggerTiming,
+    events: &[TriggerEvent],
+    body: &str,
+) -> Result<String> {
+    let name = d.ident(not_blank(name, "every trigger needs a name")?);
+    let body = not_blank(body, "a trigger needs something to run")?;
+    let timing = match timing {
+        TriggerTiming::Before => "BEFORE",
+        TriggerTiming::After => "AFTER",
+    };
+    let one = match events {
+        [] => return Err(Error::Invalid("a trigger needs an event to fire on")),
+        [e] => Some(e.sql()),
+        _ => None,
+    };
+    Ok(match d {
+        Dialect::Pg => {
+            let events = events.iter().map(|e| e.sql()).collect::<Vec<_>>().join(" OR ");
+            format!("CREATE TRIGGER {name} {timing} {events} ON {t} FOR EACH ROW EXECUTE FUNCTION {body}")
+        }
+        Dialect::My => {
+            let event = one.ok_or(Error::Invalid("MySQL and SQLite triggers fire on one event"))?;
+            format!("CREATE TRIGGER {name} {timing} {event} ON {t} FOR EACH ROW {body}")
+        }
+        Dialect::Lite => {
+            let event = one.ok_or(Error::Invalid("MySQL and SQLite triggers fire on one event"))?;
+            let end = if body.ends_with(';') { "" } else { ";" };
+            format!("CREATE TRIGGER {name} {timing} {event} ON {t} FOR EACH ROW BEGIN\n  {body}{end}\nEND")
+        }
+    })
+}
+
+fn drop_trigger_sql(d: Dialect, t: &str, name: &str) -> String {
+    match d {
+        Dialect::Pg => format!("DROP TRIGGER {} ON {t}", d.ident(name)),
+        _ => format!("DROP TRIGGER {}", d.ident(name)),
+    }
+}
+
 /// The statements that put the primary key on `columns` (none when empty) in place of the current one.
 fn primary_key_sql(d: Dialect, t: &str, current: &Structure, columns: &[String]) -> Result<Vec<String>> {
     let old = current.indexes.iter().find(|i| i.primary);
@@ -427,6 +511,10 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 // MariaDB and MySQL 8.0.19+ both read DROP CONSTRAINT; MySQL's own DROP CHECK isn't MariaDB's.
                 _ => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
             }),
+            Change::AddTrigger { name, timing, events, body } => {
+                out.push(trigger_sql(d, &t, name, *timing, events, body)?)
+            }
+            Change::DropTrigger { name } => out.push(drop_trigger_sql(d, &t, name)),
             Change::SetPrimaryKey { columns } => out.extend(primary_key_sql(d, &t, current, columns)?),
             Change::Engine { engine } => out.push(format!("ALTER TABLE {t} ENGINE = {}", mysql_option(d, engine)?)),
             Change::Collation { collation } => {
@@ -556,6 +644,9 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
                 after.push(index_sql(d, t, name, columns, *unique, *method)?);
             }
             Change::AddCheck { name, expression } => defs.push(check_sql(d, name, expression)?),
+            Change::AddTrigger { name, timing, events, body } => {
+                after.push(trigger_sql(d, t, name, *timing, events, body)?)
+            }
             Change::Engine { engine } => options.push(format!(" ENGINE = {}", mysql_option(d, engine)?)),
             Change::Collation { collation } => options.push(format!(" COLLATE = {}", mysql_option(d, collation)?)),
             Change::AddForeignKey { name, columns, ref_table, ref_columns, on_update, on_delete } => {
@@ -572,7 +663,7 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
             Change::Comment { comment } => table_comment = blank_is_none(comment.as_ref()),
             _ => {
                 return Err(Error::Invalid(
-                    "a new table can only have columns, indexes, foreign keys and checks added",
+                    "a new table can only have columns, indexes, foreign keys, checks and triggers",
                 ));
             }
         }
@@ -1046,12 +1137,12 @@ fn without_fk_checks(ignore: bool, statement: String) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Change, ColumnDef, DbOp, IndexMethod, Rule, TableOp, alter_sql, create_database_sql, pg_create_sql,
-        sqlite_renamed_create,
+        Change, ColumnDef, DbOp, IndexMethod, Rule, TableOp, TriggerEvent, TriggerTiming, alter_sql,
+        create_database_sql, pg_create_sql, sqlite_renamed_create,
     };
     use crate::db::{Conn, Dialect, Engine, Options};
     use crate::error::Error;
-    use crate::structure::{ColumnInfo, ForeignKeyInfo, IndexInfo, NamedDef, Structure};
+    use crate::structure::{ColumnInfo, ForeignKeyInfo, IndexInfo, NamedDef, Structure, TriggerInfo};
     use crate::tls::Tls;
 
     fn col(name: &str, data_type: &str) -> ColumnDef {
@@ -1261,6 +1352,53 @@ mod tests {
         assert!(matches!(alter_sql(Dialect::Lite, "t", Some(&current), &changes), Err(Error::SqliteRebuild(_))));
     }
 
+    fn add_trigger(events: Vec<TriggerEvent>, body: &str) -> Change {
+        Change::AddTrigger { name: "touch".into(), timing: TriggerTiming::Before, events, body: body.into() }
+    }
+
+    #[test]
+    fn alter_sql_should_write_each_engines_row_trigger() {
+        let current = structure(vec![info("a", "int")]);
+        let pg = [add_trigger(vec![TriggerEvent::Insert, TriggerEvent::Update], "touch()")];
+        assert_eq!(
+            alter_sql(Dialect::Pg, "s.t", Some(&current), &pg).unwrap(),
+            [r#"CREATE TRIGGER "touch" BEFORE INSERT OR UPDATE ON "s"."t" FOR EACH ROW EXECUTE FUNCTION touch()"#]
+        );
+        let my = [add_trigger(vec![TriggerEvent::Delete], "SET @n = @n + 1")];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &my).unwrap(),
+            ["CREATE TRIGGER `touch` BEFORE DELETE ON `t` FOR EACH ROW SET @n = @n + 1"]
+        );
+        let lite = [add_trigger(vec![TriggerEvent::Insert], "select 1")];
+        assert_eq!(
+            alter_sql(Dialect::Lite, "t", Some(&current), &lite).unwrap(),
+            ["CREATE TRIGGER \"touch\" BEFORE INSERT ON \"t\" FOR EACH ROW BEGIN\n  select 1;\nEND"]
+        );
+    }
+
+    #[test]
+    fn alter_sql_should_refuse_several_events_on_mysql_and_sqlite_and_a_blank_body() {
+        let current = structure(vec![info("a", "int")]);
+        let two = [add_trigger(vec![TriggerEvent::Insert, TriggerEvent::Update], "select 1")];
+        assert!(matches!(alter_sql(Dialect::My, "t", Some(&current), &two), Err(Error::Invalid(_))));
+        assert!(matches!(alter_sql(Dialect::Lite, "t", Some(&current), &two), Err(Error::Invalid(_))));
+        let blank = [add_trigger(vec![TriggerEvent::Insert], " ")];
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &blank), Err(Error::Invalid(_))));
+        let none = [add_trigger(vec![], "f()")];
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &none), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn alter_sql_should_drop_a_postgres_trigger_on_its_table() {
+        let current = structure(vec![info("a", "int")]);
+        let drop = [Change::DropTrigger { name: "touch".into() }];
+        assert_eq!(
+            alter_sql(Dialect::Pg, "s.t", Some(&current), &drop).unwrap(),
+            [r#"DROP TRIGGER "touch" ON "s"."t""#]
+        );
+        assert_eq!(alter_sql(Dialect::My, "t", Some(&current), &drop).unwrap(), ["DROP TRIGGER `touch`"]);
+    }
+
     #[test]
     fn alter_sql_should_set_mysql_engine_and_collation_only_as_plain_names() {
         let current = structure(vec![info("a", "int")]);
@@ -1459,7 +1597,11 @@ mod tests {
                 on_delete: "SET NULL".into(),
             }],
             checks: vec![NamedDef { name: "owner_positive".into(), definition: "CHECK (owner > 0)".into() }],
-            triggers: vec![NamedDef { name: "touch".into(), definition: "CREATE TRIGGER touch …".into() }],
+            triggers: vec![TriggerInfo {
+                name: "touch".into(),
+                definition: "CREATE TRIGGER touch …".into(),
+                ..TriggerInfo::default()
+            }],
             comment: Some("pets".into()),
             options: None,
         };
@@ -1699,10 +1841,10 @@ mod tests {
         Ok(())
     }
 
-    /// Checks, a new primary key, an index method and the table options, on a scratch database dropped afterwards.
+    /// Checks, a new primary key, an index method, triggers and table options, in a scratch database dropped after.
     #[test]
     #[ignore = "needs a local MySQL 8.0.19+ or MariaDB; creates and drops a scratch database"]
-    fn local_mysql_checks_primary_key_index_method_and_options() {
+    fn local_mysql_checks_keys_triggers_and_options() {
         tauri::async_runtime::block_on(async {
             let url = "mysql://root@127.0.0.1:3306";
             let mut c = Conn::open(Engine::Mysql, url, None, &Tls::default(), &Options::default(), None).await.unwrap();
@@ -1753,13 +1895,45 @@ mod tests {
         assert_eq!(s.indexes.iter().find(|i| i.name == "t_n").and_then(|i| i.method.as_deref()), Some("BTREE"));
         assert_eq!(s.options.and_then(|o| o.collation).as_deref(), Some("utf8mb4_general_ci"));
         c.query("insert into t values (1, 500)").await?;
+
+        // A trigger with a compound body, then changed (drop and add) and dropped.
+        let body = "BEGIN\n  SET NEW.n = NEW.n + 1;\nEND";
+        let add = Change::AddTrigger {
+            name: "t_bump".into(),
+            timing: TriggerTiming::Before,
+            events: vec![TriggerEvent::Insert],
+            body: body.into(),
+        };
+        apply(c, "t", false, &[add]).await?;
+        c.query("insert into t values (2, 5)").await?;
+        assert_eq!(c.query("select n from t where id = 2").await?.rows[0][0].as_deref(), Some("6"));
+        let s = c.structure("t").await?;
+        let tr = &s.triggers[0];
+        assert_eq!(
+            (tr.timing.as_deref(), tr.events.clone(), tr.body.as_deref()),
+            (Some("BEFORE"), vec!["INSERT".into()], Some(body))
+        );
+        let edit = [
+            Change::DropTrigger { name: "t_bump".into() },
+            Change::AddTrigger {
+                name: "t_bump".into(),
+                timing: TriggerTiming::Before,
+                events: vec![TriggerEvent::Insert],
+                body: "SET NEW.n = 1".into(),
+            },
+        ];
+        apply(c, "t", false, &edit).await?;
+        c.query("insert into t values (3, 5)").await?;
+        assert_eq!(c.query("select n from t where id = 3").await?.rows[0][0].as_deref(), Some("1"));
+        apply(c, "t", false, &[Change::DropTrigger { name: "t_bump".into() }]).await?;
+        assert!(c.structure("t").await?.triggers.is_empty());
         Ok(())
     }
 
     /// The same on Postgres, where the edits run in one transaction. `DBM_PG_URL` points elsewhere than the default.
     #[test]
     #[ignore = "needs a local Postgres; creates and drops a scratch database"]
-    fn local_postgres_checks_primary_key_and_index_method() {
+    fn local_postgres_checks_keys_and_triggers() {
         tauri::async_runtime::block_on(async {
             let url =
                 std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
@@ -1810,6 +1984,23 @@ mod tests {
             [Change::DropCheck { name: "id_positive".into() }, Change::SetPrimaryKey { columns: vec!["nope".into()] }];
         assert!(apply(c, "public.t", false, &bad).await.is_err());
         assert_eq!(c.structure("public.t").await?.checks.len(), 1);
+
+        c.query("create function bump() returns trigger language plpgsql as $$ begin new.id := new.id + 1; return new; end $$")
+            .await?;
+        let add = Change::AddTrigger {
+            name: "t_bump".into(),
+            timing: TriggerTiming::Before,
+            events: vec![TriggerEvent::Insert, TriggerEvent::Update],
+            body: "bump()".into(),
+        };
+        apply(c, "public.t", false, &[add]).await?;
+        c.query("insert into t values (1, '{a}')").await?;
+        assert_eq!(c.query("select id from t").await?.rows[0][0].as_deref(), Some("2"));
+        let tr = &c.structure("public.t").await?.triggers[0];
+        assert_eq!(tr.events, ["INSERT", "UPDATE"]);
+        assert_eq!((tr.timing.as_deref(), tr.body.as_deref()), (Some("BEFORE"), Some("bump()")));
+        apply(c, "public.t", false, &[Change::DropTrigger { name: "t_bump".into() }]).await?;
+        assert!(c.structure("public.t").await?.triggers.is_empty());
         Ok(())
     }
 

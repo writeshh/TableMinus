@@ -13,7 +13,7 @@ pub struct Structure {
     pub indexes: Vec<IndexInfo>,
     pub foreign_keys: Vec<ForeignKeyInfo>,
     pub checks: Vec<NamedDef>,
-    pub triggers: Vec<NamedDef>,
+    pub triggers: Vec<TriggerInfo>,
     pub comment: Option<String>,
     /// MySQL's engine and collation; None elsewhere.
     pub options: Option<TableOptions>,
@@ -69,7 +69,60 @@ pub struct ForeignKeyInfo {
     pub on_delete: String,
 }
 
-/// A check constraint or trigger: its name and its definition as SQL.
+/// A trigger: its definition as SQL, and its parts for the structure editor when it can restate them (a row-level
+/// trigger without a WHEN clause or column list; otherwise `timing` is None and it can only be dropped).
+#[derive(Debug, Serialize, PartialEq, Default)]
+pub struct TriggerInfo {
+    pub name: String,
+    pub definition: String,
+    /// `BEFORE` or `AFTER`.
+    pub timing: Option<String>,
+    /// `INSERT`, `UPDATE`, `DELETE`; Postgres can fire on several.
+    pub events: Vec<String>,
+    /// What it runs: MySQL's and SQLite's statements, or Postgres's function call.
+    pub body: Option<String>,
+}
+
+/// A trigger's parts from the catalog's row: name, definition, timing, events (SEP-separated), body.
+fn trigger(mut r: Vec<Option<String>>) -> TriggerInfo {
+    let timing = take(&mut r, 2).filter(|t| t == "BEFORE" || t == "AFTER");
+    let body = take(&mut r, 4).filter(|_| timing.is_some());
+    TriggerInfo {
+        name: take(&mut r, 0).unwrap_or_default(),
+        definition: take(&mut r, 1).unwrap_or_default(),
+        events: if body.is_some() { list(take(&mut r, 3)) } else { vec![] },
+        timing: timing.filter(|_| body.is_some()),
+        body,
+    }
+}
+
+/// SQLite keeps only a trigger's CREATE statement: its parts, read back from it, when it's a plain row trigger
+/// (`BEFORE|AFTER INSERT|UPDATE|DELETE ON t [FOR EACH ROW] BEGIN … END`). The last timing and event words before ` ON `
+/// count, since the trigger's name comes before them.
+fn lite_trigger(name: String, sql: String) -> TriggerInfo {
+    let upper = sql.to_ascii_uppercase();
+    let parts = (|| {
+        let head = &upper[..upper.find(" ON ")?];
+        let begin = upper.find("BEGIN")?;
+        let end = upper.rfind("END")?;
+        let words: Vec<&str> = head.split_whitespace().collect();
+        if upper[..begin].contains(" WHEN ") || head.contains(" OF ") || end <= begin {
+            return None;
+        }
+        let timing = words.iter().rev().find(|w| ["BEFORE", "AFTER"].contains(w)).map_or("BEFORE", |w| w);
+        let event = words.iter().rev().find(|w| ["INSERT", "UPDATE", "DELETE"].contains(w))?;
+        let body = sql[begin + "BEGIN".len()..end].trim();
+        Some((timing.to_string(), (*event).to_string(), body.to_string()))
+    })();
+    match parts {
+        Some((timing, event, body)) => {
+            TriggerInfo { name, definition: sql, timing: Some(timing), events: vec![event], body: Some(body) }
+        }
+        None => TriggerInfo { name, definition: sql, ..TriggerInfo::default() },
+    }
+}
+
+/// A check constraint: its name and its definition as SQL.
 #[derive(Debug, Serialize, PartialEq)]
 pub struct NamedDef {
     pub name: String,
@@ -244,13 +297,23 @@ impl Conn {
                 &oid_param,
             )
             .await?;
+        // tgtype bits: 1 row-level, 2 before, 4 insert, 8 delete, 16 update, 64 instead of. The function call is
+        // restated only without arguments (they're kept as bytes) and for a row-level trigger without WHEN.
         let triggers = self
-            .named(
-                "select tgname::text, pg_get_triggerdef(oid, true) from pg_trigger \
-                 where tgrelid = $1::oid and not tgisinternal order by tgname",
+            .fetch_with(
+                "select tgname::text, pg_get_triggerdef(oid, true), \
+                 case when tgtype::int & 1 = 0 or tgqual is not null or tgattr::text <> '' then null \
+                      when tgtype::int & 2 <> 0 then 'BEFORE' when tgtype::int & 64 <> 0 then 'INSTEAD OF' else 'AFTER' end, \
+                 concat_ws(chr(31), case when tgtype::int & 4 <> 0 then 'INSERT' end, \
+                   case when tgtype::int & 16 <> 0 then 'UPDATE' end, case when tgtype::int & 8 <> 0 then 'DELETE' end), \
+                 case when tgnargs = 0 then tgfoid::regproc::text || '()' end \
+                 from pg_trigger where tgrelid = $1::oid and not tgisinternal order by tgname",
                 &oid_param,
             )
-            .await?;
+            .await?
+            .into_iter()
+            .map(trigger)
+            .collect();
         Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment, options: None })
     }
 
@@ -329,13 +392,17 @@ impl Conn {
             .await
             .unwrap_or_default();
         let triggers = self
-            .named(
+            .fetch_with(
                 "select trigger_name, concat(action_timing, ' ', event_manipulation, ' FOR EACH ', \
-                 action_orientation, ' ', action_statement) from information_schema.triggers \
+                 action_orientation, ' ', action_statement), action_timing, event_manipulation, action_statement \
+                 from information_schema.triggers \
                  where event_object_schema = database() and event_object_table = ? order by trigger_name",
                 &t,
             )
-            .await?;
+            .await?
+            .into_iter()
+            .map(trigger)
+            .collect();
         let (comment, options) = self.my_table_options(table).await?;
         Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment, options: Some(options) })
     }
@@ -452,8 +519,14 @@ impl Conn {
             }
         }
         let triggers = self
-            .named("select name, sql from sqlite_master where type = 'trigger' and tbl_name = $1 order by name", &t)
-            .await?;
+            .fetch_with(
+                "select name, sql from sqlite_master where type = 'trigger' and tbl_name = $1 order by name",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| lite_trigger(take(&mut r, 0).unwrap_or_default(), take(&mut r, 1).unwrap_or_default()))
+            .collect();
         Ok(Structure { columns, indexes, foreign_keys, checks: vec![], triggers, comment: None, options: None })
     }
 
@@ -472,8 +545,38 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
+    use super::lite_trigger;
     use crate::db::{Conn, Engine, Options};
     use crate::tls::Tls;
+
+    #[test]
+    fn lite_trigger_should_read_timing_event_and_body_of_a_plain_row_trigger() {
+        let t = lite_trigger(
+            "t".into(),
+            "CREATE TRIGGER \"after insert\" AFTER DELETE ON pets FOR EACH ROW BEGIN\n  select 1;\nEND".into(),
+        );
+        assert_eq!(
+            (t.timing.as_deref(), t.events, t.body.as_deref()),
+            (Some("AFTER"), vec!["DELETE".to_string()], Some("select 1;"))
+        );
+    }
+
+    #[test]
+    fn lite_trigger_should_default_to_before_like_sqlite() {
+        let t = lite_trigger("t".into(), "create trigger t insert on pets begin select 1; end".into());
+        assert_eq!((t.timing.as_deref(), t.events), (Some("BEFORE"), vec!["INSERT".to_string()]));
+    }
+
+    #[test]
+    fn lite_trigger_should_leave_when_clauses_and_column_lists_to_the_definition() {
+        let when = lite_trigger(
+            "t".into(),
+            "create trigger t after insert on pets when new.id > 1 begin select 1; end".into(),
+        );
+        let of = lite_trigger("t".into(), "create trigger t after update of name on pets begin select 1; end".into());
+        assert!(when.timing.is_none() && when.body.is_none() && of.timing.is_none());
+        assert!(of.definition.starts_with("create trigger"));
+    }
 
     async fn sqlite() -> Conn {
         Conn::open(Engine::Sqlite, ":memory:", None, &Tls::default(), &Options::default(), None).await.unwrap()
