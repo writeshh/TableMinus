@@ -966,6 +966,9 @@ function snapshot(p: Pane): HTMLElement {
     n.removeAttribute("contenteditable");
   }
   shot.classList.add("shot");
+  // The grid draws only the rows in view (vgrid.ts): the copy must sit at the same scroll to show them.
+  const out = shot.querySelector<HTMLElement>('[data-id="out"]');
+  if (out) out.dataset.scroll = String($("out").scrollTop);
   // The column layout sheet targets #out; scoped to this copy, it neither leaks into the live grid nor goes stale.
   const scope = `shot-${nextShot++}`;
   shot.classList.add(scope);
@@ -982,6 +985,7 @@ function snapshot(p: Pane): HTMLElement {
 function layoutPanes() {
   const panes = ws?.panes ?? [pane];
   $("panes").replaceChildren(...panes.map((p) => (p === pane ? live() : p.shot ?? snapshot(p))));
+  for (const out of $("panes").querySelectorAll<HTMLElement>('.shot [data-id="out"]')) out.scrollTop = Number(out.dataset.scroll ?? 0);
   $("panes").classList.toggle("split", panes.length > 1);
 }
 
