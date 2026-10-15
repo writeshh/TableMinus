@@ -47,7 +47,13 @@ fi
 
 triple="${target:-$(rustc -vV | sed -n 's/^host: //p')}"
 echo "==> MCP bridge for $triple"
-(cd src-tauri && cargo build --release --locked --bin tableminus-mcp ${target:+--target "$target"})
+# Built the way `tauri build` builds (its feature, and on macOS its deployment target), so that build reuses these
+# artifacts instead of compiling every crate a second time.
+if [ "$(uname)" = Darwin ]; then
+  MACOSX_DEPLOYMENT_TARGET="$(node -p "require('./src-tauri/tauri.conf.json').bundle?.macOS?.minimumSystemVersion ?? '10.13'")"
+  export MACOSX_DEPLOYMENT_TARGET
+fi
+(cd src-tauri && cargo build --release --locked --features tauri/custom-protocol --bin tableminus-mcp ${target:+--target "$target"})
 out="src-tauri/target/${target:+$target/}release/tableminus-mcp"
 [ -f "$out.exe" ] && { out="$out.exe"; ext=".exe"; } || ext=""
 mkdir -p src-tauri/binaries
