@@ -1510,10 +1510,17 @@ async function closeTab(id: number, remember = true) {
   tabs.splice(i, 1);
   saveSqlTabs();
   if (!tabs.length && (ws?.panes.length ?? 1) > 1) return closePane();
-  // Last tab gone: unlike TablePlus, stay connected on a fresh SQL tab. The workspace tab's × and Disconnect leave.
-  if (!tabs.length) return void (openSqlTab(), editor.focus());
+  // Last tab gone: unlike TablePlus, stay connected with no tab open. ⌘W again leaves (closeCurrent).
+  if (!tabs.length) return void ((currentId = 0), renderMain(), renderTables());
   if (id === currentId) select(tabs[Math.max(0, i - 1)].id);
   else renderMain();
+}
+
+/** ⌘W: the current tab; with none open, the empty pane, then the workspace and its connection. */
+function closeCurrent() {
+  if (tabs.length) return closeTab(currentId);
+  if ((ws?.panes.length ?? 1) > 1) return closePane();
+  return closeWorkspace();
 }
 
 /** Every other tab closed, each asking first if it has unsaved changes. */
@@ -1609,7 +1616,6 @@ async function reloadTab() {
 
 function renderMain() {
   const tab = current();
-  if (!tab) return;
   $("tabs").replaceChildren(
     ...tabs.map((t) => {
       const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
@@ -1632,8 +1638,9 @@ function renderMain() {
   $("tabs").querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 
   const env = active?.tag ? `${tagLabel(active.tag)} | ` : "";
-  $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${info.database}` : ""} : ${tab.title}`;
+  $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${info.database}` : ""}${tab ? ` : ${tab.title}` : ""}`;
   $("pill").className = `pill ${active?.tag ?? ""}`;
+  if (!tab) return showNoTab();
 
   $("sql-pane").hidden = tab.kind !== "sql";
   $("table-foot").hidden = tab.kind !== "table";
@@ -1703,6 +1710,18 @@ function syncDetail() {
   const table = tab?.kind === "table" && tab.view === "data" && !tab.error ? tab : null;
   const sel = selection;
   syncRowDetail(table, sel && sel.r === table?.result ? sel.focus[0] : null);
+}
+
+/** The workspace with every tab closed: still connected, saying how to go on or leave. */
+function showNoTab() {
+  for (const id of ["sql-pane", "table-foot", "result-strip", "filters"]) $(id).hidden = true;
+  filtersDrawnFor = 0;
+  selection = null;
+  syncDetail();
+  $("out").replaceChildren(el("p", {
+    className: "hint empty",
+    textContent: `No tabs open. Open a table from the sidebar, or press ${keyLabel("new-tab")} for a SQL query. ${keyLabel("close-tab")} closes the connection.`,
+  }));
 }
 
 /** The rows the selection covers, top to bottom. */
@@ -3250,7 +3269,7 @@ addCommands([
     run: () => (current()?.kind === "sql" ? saveSqlFile(true) : saveEdits()) },
   // On the launcher there's no tab: close the window, like other apps.
   { id: "close-tab", label: "Close Tab", menu: "File", keys: ["Mod+KeyW"], sep: true,
-    run: () => (inWorkspace() ? closeTab(currentId) : getCurrentWindow().close()) },
+    run: () => (inWorkspace() ? closeCurrent() : getCurrentWindow().close()) },
   { id: "close-other-tabs", label: "Close Other Tabs", menu: "File", when: () => inWorkspace() && tabs.length > 1,
     run: () => closeOtherTabs(currentId) },
   { id: "rename-tab", label: "Rename Tab…", menu: "File", when: inWorkspace, run: () => renameTab(currentId) },
