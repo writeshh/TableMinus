@@ -9,7 +9,9 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <nav id="db-tabs" class="db-tabs" role="tablist" aria-label="Open workspaces" hidden></nav>
+    <!-- macOS: the title bar is see-through (tauri.conf.json); this strip and the workspace tabs drag the window -->
+    <div class="drag-strip" data-tauri-drag-region aria-hidden="true"></div>
+    <nav id="db-tabs" class="db-tabs" role="tablist" aria-label="Open workspaces" data-tauri-drag-region hidden></nav>
     <!-- Launcher: shown until a connection opens -->
     <section id="home">
       <div class="intro">
