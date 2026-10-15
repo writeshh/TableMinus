@@ -208,17 +208,23 @@ export function hexDump(hex: string): string {
 
 type Key = { names: string[]; idx: number[] };
 type Pair = [string, Value];
+type Found = { key: [string, string][]; id?: string; original?: [string, string | null][] };
 export type Changes = {
-  deletes: { key: [string, string][]; id?: string }[];
-  updates: { key: [string, string][]; id?: string; set: Pair[] }[];
+  deletes: Found[];
+  updates: (Found & { set: Pair[] })[];
   inserts: Pair[][];
+  log_originals?: boolean;
 };
 
 /** The save_rows payload. Rows are found by `key`, or by `ids` (row identities from the page) when given. */
-export function changesFor(s: Staged, columns: string[], rows: (string | null)[][], key: Key, ids?: string[]): Changes {
-  const find = (ri: number) => {
-    const k: [string, string][] = key.names.map((n, i) => [n, rows[ri][key.idx[i]] ?? ""]);
-    return ids ? { key: k, id: ids[ri] } : { key: k };
+/** The save payload. Existing rows are found by `key`, by their identity in `ids` when given, or with neither
+ *  (a MySQL table without a primary key) by every value they had; `log` sends those values for the log too. */
+export function changesFor(s: Staged, columns: string[], rows: (string | null)[][], key: Key | null, ids?: string[], log = false): Changes {
+  const find = (ri: number): Found => {
+    const k: [string, string][] = key ? key.names.map((n, i) => [n, rows[ri][key.idx[i]] ?? ""]) : [];
+    const found: Found = ids ? { key: k, id: ids[ri] } : { key: k };
+    if (log || (!key && !ids)) found.original = columns.map((c, ci) => [c, rows[ri][ci]]);
+    return found;
   };
   return {
     deletes: [...s.deleted].sort((a, b) => a - b).map(find),
@@ -226,5 +232,6 @@ export function changesFor(s: Staged, columns: string[], rows: (string | null)[]
       .filter(([ri]) => !s.deleted.has(ri))
       .map(([ri, cells]) => ({ ...find(ri), set: [...cells].map(([ci, v]): Pair => [columns[ci], v]) })),
     inserts: s.added.map((row) => [...row].map(([ci, v]): Pair => [columns[ci], v])),
+    ...(log ? { log_originals: true } : {}),
   };
 }

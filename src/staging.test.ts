@@ -100,3 +100,13 @@ test("changesFor skips edits to deleted rows and finds rows by key or identity",
   });
   assert.deepEqual(changesFor(s, ["id", "v"], rows, key, ["(0,1)", "(0,2)"]).deletes, [{ key: [["id", "2"]], id: "(0,2)" }]);
 });
+
+test("changesFor finds rows without key or identity by every value, and sends values to log when asked", () => {
+  const s = new Staged();
+  s.deleted.add(0);
+  const rows = [["1", null]];
+  assert.deepEqual(changesFor(s, ["n", "v"], rows, null).deletes, [{ key: [], original: [["n", "1"], ["v", null]] }]);
+  const logged = changesFor(s, ["n", "v"], rows, { names: ["n"], idx: [0] }, undefined, true);
+  assert.deepEqual(logged.deletes, [{ key: [["n", "1"]], original: [["n", "1"], ["v", null]] }]);
+  assert.equal(logged.log_originals, true);
+});

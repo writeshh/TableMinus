@@ -174,6 +174,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" /></svg>
           Appearance
         </button>
+        <button role="tab" data-tab="data">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M3 15h18M9 4v16" /></svg>
+          Data
+        </button>
         <button role="tab" data-tab="editor">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16z" /><path d="M13 7l4 4" /></svg>
           Editor
@@ -217,6 +221,32 @@
           <span class="k">Results</span>
           <label class="check"><input type="checkbox" id="zebra" /> Alternating row backgrounds</label>
         </div>
+      </section>
+      <section data-pane="data" hidden>
+        <div class="row">
+          <span class="k">Rows per page</span>
+          <input id="page-size" type="number" min="1" max="100000" step="1" class="num-input" />
+        </div>
+        <div class="row">
+          <span class="k">Estimate the count</span>
+          <span><input id="estimate-over" type="number" min="0" step="1000" class="num-input wide-num" /> rows and above <span class="hint inline">0 = always count</span></span>
+        </div>
+        <div class="row">
+          <span class="k">Default sort</span>
+          <select id="default-sort"><option value="none">None</option><option value="asc">Primary key, ascending</option><option value="desc">Primary key, descending</option></select>
+        </div>
+        <div class="row">
+          <span class="k">Display</span>
+          <span class="checks">
+            <label class="check"><input type="checkbox" id="geometry-wkt" /> Show PostGIS geometry as WKT</label>
+            <label class="check"><input type="checkbox" id="hide-scrollbars" /> Hide scroll bars until the pointer is over the grid</label>
+          </span>
+        </div>
+        <div class="row">
+          <span class="k">Saving</span>
+          <label class="check"><input type="checkbox" id="log-originals" /> Log the original values of updated and deleted rows</label>
+        </div>
+        <p class="hint note">Above the threshold, a table without filters shows the database's estimate of its rows (Postgres and MySQL); Count in the page settings counts them exactly. The log of original values is in the console (⇧⌘C).</p>
       </section>
       <section data-pane="editor" hidden>
         <div class="row">
@@ -404,7 +434,7 @@
           <button id="preview-edits" class="ghost" hidden title="Preview the changes as SQL">SQL</button>
           <button id="discard-edits" hidden>Discard</button>
           <button id="save-edits" class="primary" hidden title="Save changes (⌘S)">Save</button>
-          <span id="page-info" class="page-info"></span>
+          <button id="page-info" class="ghost page-info" title="Page size, jump to a row, count the rows"></button>
           <button id="page-prev" class="ghost" title="Previous page" aria-label="Previous page">‹</button>
           <button id="page-next" class="ghost" title="Next page" aria-label="Next page">›</button>
         </footer>

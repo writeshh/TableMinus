@@ -131,7 +131,9 @@ impl Conn {
             limit: SEARCH_CAP,
             offset: 0,
             count: false,
+            estimate_over: None,
             identity: false,
+            wkt: false,
         };
         let s = self.select(&req).await?;
         let count = if matches!(self, Conn::Pg(_)) { "count(*)::text" } else { "count(*)" };

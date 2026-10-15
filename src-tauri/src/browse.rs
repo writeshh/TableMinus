@@ -22,10 +22,18 @@ pub struct Browse {
     /// Also count the rows that match, for "1–300 of N".
     #[serde(default)]
     pub count: bool,
+    /// With `count` and no filters: when the catalog estimates more rows than this, the estimate is the total
+    /// and nothing is counted (an exact count reads the whole table).
+    #[serde(default)]
+    pub estimate_over: Option<u64>,
     /// Also read each row's identity (ctid on Postgres, rowid on SQLite) where the table has one, so a change can
     /// be saved to a row its key doesn't single out.
     #[serde(default)]
     pub identity: bool,
+    /// `PostGIS` geometry and geography as extended WKT (`SRID=4326;POINT(1 2)`, which also reads back in when
+    /// edited) rather than hex WKB.
+    #[serde(default)]
+    pub wkt: bool,
 }
 
 /// How several filters combine.
@@ -89,6 +97,8 @@ pub struct Page {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub total: Option<u64>,
+    /// `total` is the catalog's estimate (see [`Browse::estimate_over`]).
+    pub estimated: bool,
     /// Each row's identity, when asked for and the table has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ids: Option<Vec<String>>,
@@ -182,7 +192,10 @@ impl Conn {
 
     /// The queries behind a browse request, without paging: its rows (filtered and sorted) and their count.
     pub(crate) async fn select(&mut self, req: &Browse) -> Result<Select> {
-        let columns: Vec<String> = self.columns(&req.table).await?.into_iter().map(|c| c.name).collect();
+        let table_columns = self.columns(&req.table).await?;
+        let spatial: Vec<bool> =
+            table_columns.iter().map(|c| req.wkt && matches!(c.data_type.as_str(), "geometry" | "geography")).collect();
+        let columns: Vec<String> = table_columns.into_iter().map(|c| c.name).collect();
         if columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
         }
@@ -206,7 +219,9 @@ impl Conn {
         // Postgres's binary protocol would need a decoder per type; every type can be cast to text instead.
         let select: Vec<String> = columns
             .iter()
-            .map(|c| match self {
+            .zip(&spatial)
+            .map(|(c, &spatial)| match self {
+                Conn::Pg(_) if spatial => format!("st_asewkt({0}) as {0}", self.ident(c)),
                 Conn::Pg(_) => format!("{} as {}", self.text_expr(c), self.ident(c)),
                 _ => self.ident(c),
             })
@@ -249,8 +264,26 @@ impl Conn {
         let sql = format!("{} limit {} offset {}", s.rows, req.limit.min(MAX_PAGE), req.offset);
         let mut rows = self.fetch_with(&sql, &s.bound()).await?;
         let ids = s.identity.then(|| rows.iter_mut().map(|r| r.pop().flatten().unwrap_or_default()).collect());
-        let total = if req.count { self.count(&s).await? } else { None };
-        Ok(Page { columns: s.columns, rows, total, ids })
+        let estimate = match req.estimate_over {
+            Some(over) if req.count && req.filters.is_empty() => self.estimate(&req.table, over).await,
+            _ => None,
+        };
+        let total = match estimate {
+            Some(n) => Some(n),
+            None if req.count => self.count(&s).await?,
+            None => None,
+        };
+        Ok(Page { columns: s.columns, rows, total, estimated: estimate.is_some(), ids })
+    }
+
+    /// The catalog's row estimate for `table`, when it is one and above `over`. SQLite keeps none.
+    async fn estimate(&mut self, table: &str, over: u64) -> Option<u64> {
+        if matches!(self, Conn::Lite(_)) {
+            return None;
+        }
+        // No estimate (never analyzed, or the catalog can't say) just means counting.
+        let o = self.overview(table).await.ok()?;
+        o.rows.filter(|&n| o.estimated && n > over)
     }
 }
 
@@ -299,7 +332,9 @@ mod tests {
             limit: 100,
             offset: 0,
             count: true,
+            estimate_over: None,
             identity: false,
+            wkt: false,
         }
     }
 
@@ -427,6 +462,74 @@ mod tests {
         });
     }
 
+    #[test]
+    fn browse_should_count_sqlite_rows_exactly_whatever_the_estimate_threshold() {
+        tauri::async_runtime::block_on(async {
+            let mut c = people().await;
+            let page = c.browse(&Browse { estimate_over: Some(0), ..request(vec![]) }).await.unwrap();
+            assert_eq!((page.total, page.estimated), (Some(4), false));
+        });
+    }
+
+    /// A scratch database on the local Postgres (`DBM_PG_URL` points elsewhere): the admin connection, one to the
+    /// scratch database, and its name, for dropping it.
+    async fn pg_scratch(prefix: &str) -> (Conn, Conn, String) {
+        let url = std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+        let open = |url: String| async move {
+            Conn::open(Engine::Postgres, &url, None, &Tls::default(), &Options::default(), None).await.unwrap()
+        };
+        let mut admin = open(url.clone()).await;
+        let db = format!("{prefix}_{}", std::process::id());
+        admin.query(&format!("create database {db}")).await.unwrap();
+        let mut u = url::Url::parse(&url).unwrap();
+        u.set_path(&db);
+        (admin, open(u.to_string()).await, db)
+    }
+
+    /// The catalog estimate stands in for the count above the threshold, and only without filters.
+    #[test]
+    #[ignore = "needs a local Postgres; creates and drops a scratch database"]
+    fn local_postgres_browse_should_estimate_large_tables() {
+        tauri::async_runtime::block_on(async {
+            let (mut admin, mut c, db) = pg_scratch("dbm_estimate").await;
+            c.query("create table people(id int primary key, name text)").await.unwrap();
+            c.query("insert into people select n, 'p' || n from generate_series(1, 500) n").await.unwrap();
+            c.query("analyze people").await.unwrap();
+            let estimated = c.browse(&Browse { estimate_over: Some(100), ..request(vec![]) }).await.unwrap();
+            let small = c.browse(&Browse { estimate_over: Some(1000), ..request(vec![]) }).await.unwrap();
+            let filtered = Browse { estimate_over: Some(100), ..request(vec![filter(Some("id"), Op::Le, "10")]) };
+            let filtered = c.browse(&filtered).await.unwrap();
+            drop(c);
+            admin.query(&format!("drop database {db}")).await.unwrap();
+            assert_eq!((estimated.total, estimated.estimated), (Some(500), true));
+            assert_eq!((small.total, small.estimated), (Some(500), false));
+            assert_eq!((filtered.total, filtered.estimated), (Some(10), false));
+        });
+    }
+
+    /// Spatial values read as extended WKT when asked, as hex WKB otherwise. Needs `PostGIS` on the server.
+    #[test]
+    #[ignore = "needs a local Postgres with PostGIS; creates and drops a scratch database"]
+    fn local_postgres_browse_should_show_geometry_as_wkt_when_asked() {
+        tauri::async_runtime::block_on(async {
+            let (mut admin, mut c, db) = pg_scratch("dbm_wkt").await;
+            let rows = async {
+                c.query("create extension postgis").await?;
+                c.query("create table people(id int primary key, at geometry(Point, 4326))").await?;
+                c.query("insert into people values (1, 'SRID=4326;POINT(1 2)')").await?;
+                let wkt = c.browse(&Browse { wkt: true, ..request(vec![]) }).await?.rows;
+                let hex = c.browse(&request(vec![])).await?.rows;
+                Ok::<_, crate::error::Error>((wkt, hex))
+            }
+            .await;
+            drop(c);
+            admin.query(&format!("drop database {db}")).await.unwrap();
+            let (wkt, hex) = rows.unwrap();
+            assert_eq!(wkt[0][1].as_deref(), Some("SRID=4326;POINT(1 2)"));
+            assert!(hex[0][1].as_deref().is_some_and(|h| h.starts_with("0101000020E6100000")), "{hex:?}");
+        });
+    }
+
     /// Typed MySQL values through prepared statements read like the text protocol's. Creates and drops a
     /// scratch database, because `information_schema` doesn't list temporary tables.
     #[test]
@@ -458,7 +561,9 @@ mod tests {
                 limit: 10,
                 offset: 0,
                 count: true,
+                estimate_over: None,
                 identity: false,
+                wkt: false,
             };
             let page = c.browse(&req).await;
             c.query(&format!("drop database {db}")).await.unwrap();

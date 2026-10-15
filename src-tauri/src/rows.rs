@@ -1,5 +1,6 @@
 //! Saving the grid's staged changes: deleted, updated and inserted rows in one transaction, each existing row
-//! found by its primary key (or, when asked, its row identity). The same plan renders as SQL for the preview.
+//! found by its primary key, its row identity (ctid / rowid), or on MySQL, for a table without a key, by every
+//! column's value with `LIMIT 1`. The same plan renders as SQL for the preview.
 //! Also the catalog lookups the cell editors need: enum values and the bytes of binary cells.
 
 use crate::Open;
@@ -34,20 +35,26 @@ pub struct FileValue {
 }
 
 /// An existing row: its primary-key values, or with `id` its row identity (ctid / rowid) from the page.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Row {
     pub key: Vec<(String, String)>,
     #[serde(default)]
     pub id: Option<String>,
+    /// Every column's value as loaded: what the row is matched on when it has neither key nor identity (MySQL
+    /// tables without a primary key), and what [`Changes::log_originals`] logs.
+    #[serde(default)]
+    pub original: Vec<(String, Option<String>)>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Update {
     pub key: Vec<(String, String)>,
     #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
+    pub original: Vec<(String, Option<String>)>,
     pub set: Vec<(String, Value)>,
 }
 
@@ -58,6 +65,53 @@ pub struct Changes {
     pub updates: Vec<Update>,
     /// New rows: values for the columns given; the others get their defaults.
     pub inserts: Vec<Vec<(String, Value)>>,
+    /// Write each updated or deleted row's original values to the console log before changing it.
+    pub log_originals: bool,
+}
+
+impl Changes {
+    /// Whether some row is found by its values, which needs the table's column types.
+    fn matches_values(&self) -> bool {
+        let by_values = |key: &[(String, String)], id: &Option<String>, original: &[(String, Option<String>)]| {
+            key.is_empty() && id.is_none() && !original.is_empty()
+        };
+        self.deletes.iter().any(|r| by_values(&r.key, &r.id, &r.original))
+            || self.updates.iter().any(|u| by_values(&u.key, &u.id, &u.original))
+    }
+}
+
+/// MySQL column types whose values don't survive the trip through text exactly (FLOAT reads back rounded, JSON
+/// compares as a JSON string, binary cells only show as placeholders), so a row can't be matched on them.
+fn inexact(column_type: &str) -> bool {
+    let base = column_type.split(['(', ' ']).next().unwrap_or_default().to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "float"
+            | "json"
+            | "bit"
+            | "binary"
+            | "varbinary"
+            | "tinyblob"
+            | "blob"
+            | "mediumblob"
+            | "longblob"
+            | "geometry"
+            | "point"
+            | "linestring"
+            | "polygon"
+            | "multipoint"
+            | "multilinestring"
+            | "multipolygon"
+            | "geometrycollection"
+    )
+}
+
+/// MySQL text types, compared case- and space-exactly when matching a row.
+fn texty(column_type: &str) -> bool {
+    let t = column_type.to_ascii_lowercase();
+    ["char", "varchar", "tinytext", "text", "mediumtext", "longtext", "enum", "set"]
+        .iter()
+        .any(|p| t == *p || t.starts_with(&format!("{p}(")) || t.starts_with(&format!("{p} ")))
 }
 
 #[derive(Clone, Copy)]
@@ -77,6 +131,20 @@ struct Statement<'a> {
     parts: Vec<Part<'a>>,
     /// An UPDATE or DELETE, which must touch at most one row.
     one_row: bool,
+    /// The row's values before the change, for the log.
+    original: &'a [(String, Option<String>)],
+}
+
+/// The console log's note of a row's values before it changes.
+fn original_note(d: Dialect, original: &[(String, Option<String>)]) -> String {
+    let values: Vec<String> = original
+        .iter()
+        .map(|(c, v)| {
+            format!("{} = {}", d.ident(c), v.as_deref().map_or_else(|| "NULL".into(), |v| shown_literal(d, v)))
+        })
+        .collect();
+    // A newline in a value can't end the comment early: the note is one console entry, never run.
+    format!("-- original values: {}", values.join(", "))
 }
 
 impl<'a> From<&'a Value> for Param<'a> {
@@ -88,8 +156,49 @@ impl<'a> From<&'a Value> for Param<'a> {
     }
 }
 
-/// `where …` finding one existing row.
-fn find<'a>(d: Dialect, key: &'a [(String, String)], id: Option<&'a str>, parts: &mut Vec<Part<'a>>) -> Result<()> {
+/// How a planned UPDATE or DELETE finds its row.
+struct Target<'a> {
+    key: &'a [(String, String)],
+    id: Option<&'a str>,
+    original: &'a [(String, Option<String>)],
+}
+
+/// `where …` finding one existing row; matching on values (MySQL only) ends in `limit 1`. `types` holds the
+/// table's column types, needed only for matching.
+fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: &mut Vec<Part<'a>>) -> Result<()> {
+    let Target { key, id, original } = *t;
+    if key.is_empty() && id.is_none() && !original.is_empty() {
+        if d != Dialect::My {
+            return Err(Error::Invalid("only MySQL rows are matched on their values; this engine has row identities"));
+        }
+        for (i, (column, value)) in original.iter().enumerate() {
+            let column_type = types.get(column).ok_or(Error::Invalid("a row names a column the table doesn't have"))?;
+            if inexact(column_type) {
+                return Err(Error::Invalid(
+                    "without a primary key, rows are matched on every value, and FLOAT, JSON, binary and spatial \
+                     values can't be matched exactly; add a primary key to edit this table",
+                ));
+            }
+            let c = d.ident(column);
+            let joint = if i == 0 { " where " } else { " and " };
+            let value = Param::Text(value.as_deref());
+            if texty(column_type) {
+                // The column's own collation may ignore case and trailing spaces; two rows differing only there are
+                // different rows.
+                parts.push(Part::Sql(format!("{joint}{c} <=> ")));
+                parts.push(Part::Param(value));
+                parts.push(Part::Sql(format!(" collate utf8mb4_bin and char_length({c}) <=> char_length(")));
+                parts.push(Part::Param(value));
+                parts.push(Part::Sql(")".into()));
+            } else {
+                parts.push(Part::Sql(format!("{joint}{c} <=> ")));
+                parts.push(Part::Param(value));
+            }
+        }
+        // Rows equal in every value are interchangeable: changing any one of them is right.
+        parts.push(Part::Sql(" limit 1".into()));
+        return Ok(());
+    }
     if let Some(id) = id {
         let column = match d {
             Dialect::Pg => "ctid",
@@ -113,13 +222,18 @@ fn find<'a>(d: Dialect, key: &'a [(String, String)], id: Option<&'a str>, parts:
 
 /// The statements for `changes`: deletes first (so a new row may reuse a deleted row's key), then updates, then
 /// inserts.
-fn plan<'a>(d: Dialect, table: &str, changes: &'a Changes) -> Result<Vec<Statement<'a>>> {
+fn plan<'a>(
+    d: Dialect,
+    table: &str,
+    changes: &'a Changes,
+    types: &HashMap<String, String>,
+) -> Result<Vec<Statement<'a>>> {
     let t = d.table_ident(table);
     let mut plan = Vec::new();
     for row in &changes.deletes {
         let mut parts = vec![Part::Sql(format!("delete from {t}"))];
-        find(d, &row.key, row.id.as_deref(), &mut parts)?;
-        plan.push(Statement { parts, one_row: true });
+        find(d, &Target { key: &row.key, id: row.id.as_deref(), original: &row.original }, types, &mut parts)?;
+        plan.push(Statement { parts, one_row: true, original: &row.original });
     }
     for u in &changes.updates {
         if u.set.is_empty() {
@@ -131,8 +245,8 @@ fn plan<'a>(d: Dialect, table: &str, changes: &'a Changes) -> Result<Vec<Stateme
             parts.push(Part::Sql(format!("{comma}{} = ", d.ident(column))));
             parts.push(Part::Param(value.into()));
         }
-        find(d, &u.key, u.id.as_deref(), &mut parts)?;
-        plan.push(Statement { parts, one_row: true });
+        find(d, &Target { key: &u.key, id: u.id.as_deref(), original: &u.original }, types, &mut parts)?;
+        plan.push(Statement { parts, one_row: true, original: &u.original });
     }
     for values in &changes.inserts {
         let parts = if values.is_empty() {
@@ -150,7 +264,7 @@ fn plan<'a>(d: Dialect, table: &str, changes: &'a Changes) -> Result<Vec<Stateme
             parts.push(Part::Sql(")".into()));
             parts
         };
-        plan.push(Statement { parts, one_row: false });
+        plan.push(Statement { parts, one_row: false, original: &[] });
     }
     Ok(plan)
 }
@@ -289,13 +403,17 @@ impl Conn {
     // rows with the same new value) isn't detected there; set CLIENT_FOUND_ROWS on the connection if that matters.
     pub async fn save_rows(&mut self, table: &str, changes: &Changes) -> Result<u64> {
         let d = self.dialect();
-        let plan = plan(d, table, changes)?;
+        let types = self.match_types(table, changes).await?;
+        let plan = plan(d, table, changes, &types)?;
         let files = read_files(&plan).await?; // before the transaction: a bad file fails before anything runs
         let statements = plan.iter().map(|s| s.bind(d, &files)).collect::<Result<Vec<_>>>()?;
         self.query(if d == Dialect::My { "start transaction" } else { "begin" }).await?;
         let mut total = 0;
         for (n, ((sql, params), s)) in (1..).zip(statements.iter().zip(&plan)) {
             let params: Vec<Option<&str>> = params.iter().map(Option::as_deref).collect();
+            if changes.log_originals && !s.original.is_empty() {
+                crate::console::record(&original_note(d, s.original));
+            }
             let outcome = match self.execute_with(sql, &params).await {
                 Ok(rows) if s.one_row && rows > 1 => Err(Error::SeveralRows),
                 Ok(rows) => Ok(rows),
@@ -315,9 +433,18 @@ impl Conn {
     }
 
     /// The statements [`Conn::save_rows`] would run, with values written in, for the preview.
-    pub fn rows_sql(&self, table: &str, changes: &Changes) -> Result<Vec<String>> {
+    pub async fn rows_sql(&mut self, table: &str, changes: &Changes) -> Result<Vec<String>> {
         let d = self.dialect();
-        Ok(plan(d, table, changes)?.iter().map(|s| s.show(d)).collect())
+        let types = self.match_types(table, changes).await?;
+        Ok(plan(d, table, changes, &types)?.iter().map(|s| s.show(d)).collect())
+    }
+
+    /// The table's column types when some row is matched on its values; nothing is asked otherwise.
+    async fn match_types(&mut self, table: &str, changes: &Changes) -> Result<HashMap<String, String>> {
+        if !changes.matches_values() {
+            return Ok(HashMap::new());
+        }
+        Ok(self.columns(table).await?.into_iter().map(|c| (c.name, c.data_type)).collect())
     }
 
     /// The first [`HEX_PREVIEW`] bytes of one binary cell, for the hex viewer.
@@ -332,8 +459,9 @@ impl Conn {
             Dialect::Lite => format!("select hex(substr({c}, 1, {HEX_PREVIEW})), length(cast({c} as blob))"),
         };
         let mut parts = vec![Part::Sql(format!("{select} from {}", d.table_ident(table)))];
-        find(d, &row.key, row.id.as_deref(), &mut parts)?;
-        let statement = Statement { parts, one_row: true };
+        // Binary cells can't be matched on, so a row without key or identity never gets here (find refuses).
+        find(d, &Target { key: &row.key, id: row.id.as_deref(), original: &[] }, &HashMap::new(), &mut parts)?;
+        let statement = Statement { parts, one_row: true, original: &[] };
         let files = HashMap::new();
         let (sql, params) = statement.bind(d, &files)?;
         let params: Vec<Option<&str>> = params.iter().map(Option::as_deref).collect();
@@ -401,7 +529,9 @@ pub async fn save_rows(
 /// The statements `save_rows` would run, for the preview.
 #[tauri::command]
 pub async fn rows_sql(open: State<'_, Open>, name: String, table: String, changes: Changes) -> Result<Vec<String>> {
-    open.get(&name).await?.conn.rows_sql(&table, &changes)
+    let mut live = open.get(&name).await?;
+    let r = live.conn.rows_sql(&table, &changes).await;
+    live.check(r)
 }
 
 #[tauri::command]
@@ -427,7 +557,7 @@ pub async fn enum_values(open: State<'_, Open>, name: String, table: String) -> 
 #[cfg(test)]
 mod tests {
     use super::{Changes, Row, Update, Value, mysql_enum};
-    use crate::db::{Conn, Engine, Options};
+    use crate::db::{Conn, Dialect, Engine, Options};
     use crate::tls::Tls;
 
     async fn sqlite(setup: &str) -> Conn {
@@ -448,7 +578,7 @@ mod tests {
     }
 
     fn update(id: &str, column: &str, v: Option<&str>) -> Update {
-        Update { key: key(id), id: None, set: vec![(column.into(), text(v))] }
+        Update { key: key(id), id: None, original: vec![], set: vec![(column.into(), text(v))] }
     }
 
     async fn column(c: &mut Conn, sql: &str) -> Vec<Option<String>> {
@@ -463,9 +593,10 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let mut c = sqlite(PEOPLE).await;
             let changes = Changes {
-                deletes: vec![Row { key: key("2"), id: None }],
+                deletes: vec![Row { key: key("2"), id: None, original: vec![] }],
                 updates: vec![update("1", "v", Some("O'Brien \\ ;--"))],
                 inserts: vec![vec![("id".into(), text(Some("2"))), ("v".into(), text(Some("again")))], vec![]],
+                log_originals: false,
             };
             assert_eq!(c.save_rows("t", &changes).await.unwrap(), 4);
             let rows = column(&mut c, "select id || ':' || v from t order by id").await;
@@ -483,9 +614,10 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let mut c = sqlite(PEOPLE).await;
             let changes = Changes {
-                deletes: vec![Row { key: key("2"), id: None }],
+                deletes: vec![Row { key: key("2"), id: None, original: vec![] }],
                 updates: vec![update("1", "v", None)], // v is NOT NULL
                 inserts: vec![],
+                log_originals: false,
             };
             let err = c.save_rows("t", &changes).await.unwrap_err();
             assert!(err.to_string().starts_with("statement 2: "), "{err}");
@@ -497,8 +629,10 @@ mod tests {
     fn save_rows_should_refuse_a_key_that_matches_several_rows() {
         tauri::async_runtime::block_on(async {
             let mut c = sqlite("create table dup(k integer, v text); insert into dup values (1, 'a'), (1, 'b')").await;
-            let changes =
-                Changes { deletes: vec![Row { key: vec![("k".into(), "1".into())], id: None }], ..Changes::default() };
+            let changes = Changes {
+                deletes: vec![Row { key: vec![("k".into(), "1".into())], id: None, original: vec![] }],
+                ..Changes::default()
+            };
             let err = c.save_rows("dup", &changes).await.unwrap_err();
             assert_eq!(err.to_string(), "a key matched more than one row; nothing was saved");
             assert_eq!(column(&mut c, "select count(*) from dup").await, [Some("2".into())]);
@@ -514,6 +648,7 @@ mod tests {
                 updates: vec![Update {
                     key: vec![("k".into(), "1".into())],
                     id: Some(id),
+                    original: vec![],
                     set: vec![("v".into(), text(None))],
                 }],
                 ..Changes::default()
@@ -559,14 +694,15 @@ mod tests {
     #[test]
     fn rows_sql_should_show_values_written_in_and_quotes_doubled() {
         tauri::async_runtime::block_on(async {
-            let c = sqlite("").await;
+            let mut c = sqlite("").await;
             let changes = Changes {
-                deletes: vec![Row { key: key("3"), id: None }],
+                deletes: vec![Row { key: key("3"), id: None, original: vec![] }],
                 updates: vec![update("1", "na\"me", Some("it's"))],
                 inserts: vec![vec![("v".into(), text(None))]],
+                log_originals: false,
             };
             assert_eq!(
-                c.rows_sql("t", &changes).unwrap(),
+                c.rows_sql("t", &changes).await.unwrap(),
                 [
                     r#"delete from "t" where "id" = '3'"#,
                     r#"update "t" set "na""me" = 'it''s' where "id" = '1'"#,
@@ -579,12 +715,119 @@ mod tests {
     #[test]
     fn rows_sql_should_refuse_a_change_without_a_key() {
         tauri::async_runtime::block_on(async {
-            let c = sqlite("").await;
-            let changes = Changes { deletes: vec![Row { key: vec![], id: None }], ..Changes::default() };
+            let mut c = sqlite("").await;
+            let changes =
+                Changes { deletes: vec![Row { key: vec![], id: None, original: vec![] }], ..Changes::default() };
             assert_eq!(
-                c.rows_sql("t", &changes).unwrap_err().to_string(),
+                c.rows_sql("t", &changes).await.unwrap_err().to_string(),
                 "every changed or deleted row needs its primary key"
             );
+        });
+    }
+
+    fn original(values: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
+        values.iter().map(|(c, v)| ((*c).to_string(), v.map(String::from))).collect()
+    }
+
+    fn types(list: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        list.iter().map(|(c, t)| ((*c).to_string(), (*t).to_string())).collect()
+    }
+
+    #[test]
+    fn plan_should_match_a_mysql_row_on_every_value_exactly_and_change_one() {
+        let changes = Changes {
+            deletes: vec![Row { original: original(&[("n", Some("1")), ("s", Some("A b"))]), ..Row::default() }],
+            ..Changes::default()
+        };
+        let plan = super::plan(Dialect::My, "t", &changes, &types(&[("n", "int"), ("s", "varchar(10)")])).unwrap();
+        assert_eq!(
+            plan[0].show(Dialect::My),
+            "delete from `t` where `n` <=> '1' and `s` <=> 'A b' collate utf8mb4_bin \
+             and char_length(`s`) <=> char_length('A b') limit 1"
+        );
+    }
+
+    #[test]
+    fn plan_should_refuse_to_match_a_row_on_a_float_value() {
+        let changes = Changes {
+            updates: vec![Update {
+                original: original(&[("f", Some("0.1"))]),
+                set: vec![("f".into(), text(Some("1")))],
+                ..Update::default()
+            }],
+            ..Changes::default()
+        };
+        let Err(err) = super::plan(Dialect::My, "t", &changes, &types(&[("f", "float")])) else { panic!() };
+        assert!(err.to_string().contains("can't be matched exactly"), "{err}");
+    }
+
+    #[test]
+    fn plan_should_match_on_values_only_on_mysql() {
+        let changes = Changes {
+            deletes: vec![Row { original: original(&[("n", Some("1"))]), ..Row::default() }],
+            ..Changes::default()
+        };
+        assert!(super::plan(Dialect::Pg, "t", &changes, &types(&[("n", "int4")])).is_err());
+    }
+
+    #[test]
+    fn save_rows_should_log_the_original_values_when_asked() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite(PEOPLE).await;
+            let changes = Changes {
+                updates: vec![Update {
+                    original: original(&[("id", Some("1")), ("v", Some("it's"))]),
+                    ..update("1", "v", Some("x"))
+                }],
+                log_originals: true,
+                ..Changes::default()
+            };
+            c.save_rows("t", &changes).await.unwrap();
+            let log = crate::console::console_log(0);
+            assert!(log.iter().any(|e| e.sql == r#"-- original values: "id" = '1', "v" = 'it''s'"#), "{log:?}");
+        });
+    }
+
+    /// A table without a primary key: duplicates change one at a time, and case or trailing spaces tell rows apart.
+    #[test]
+    #[ignore = "needs a local MySQL; creates and drops a scratch database"]
+    fn local_mysql_save_rows_should_match_rows_without_a_key() {
+        tauri::async_runtime::block_on(async {
+            let url = "mysql://root@127.0.0.1:3306";
+            let mut c = Conn::open(Engine::Mysql, url, None, &Tls::default(), &Options::default(), None).await.unwrap();
+            let db = format!("dbm_nokey_{}", std::process::id());
+            c.query(&format!("create database {db}")).await.unwrap();
+            let result = async {
+                c.use_database(&db).await?;
+                c.query("create table t(n int, s varchar(10), d datetime(3), x double) collate utf8mb4_general_ci").await?;
+                c.query(
+                    "insert into t values (1, 'a', '2026-01-02 03:04:05.678', 1.5), (1, 'a', '2026-01-02 03:04:05.678', 1.5), \
+                     (1, 'A', null, null), (1, 'a ', null, null)",
+                )
+                .await?;
+                let row = original(&[("n", Some("1")), ("s", Some("a")), ("d", Some("2026-01-02 03:04:05.678")), ("x", Some("1.5"))]);
+                let changes = Changes {
+                    updates: vec![Update { original: row, set: vec![("n".into(), text(Some("2")))], ..Update::default() }],
+                    deletes: vec![Row { original: original(&[("n", Some("1")), ("s", Some("A")), ("d", None), ("x", None)]), ..Row::default() }],
+                    ..Changes::default()
+                };
+                let saved = c.save_rows("t", &changes).await?;
+                let rows = c.query("select n, concat('[', s, ']') from t order by n, char_length(s)").await?.rows;
+                c.query("create table f(v float)").await?;
+                let refused = Changes {
+                    deletes: vec![Row { original: original(&[("v", Some("0.1"))]), ..Row::default() }],
+                    ..Changes::default()
+                };
+                let refused = c.save_rows("f", &refused).await.is_err();
+                Ok::<_, crate::error::Error>((saved, rows, refused))
+            }
+            .await;
+            c.query(&format!("drop database {db}")).await.unwrap();
+            let (saved, rows, refused) = result.unwrap();
+            let s = |n: &str, v: &str| vec![Some(n.to_string()), Some(v.to_string())];
+            assert_eq!(saved, 2);
+            assert_eq!(rows, [s("1", "[a]"), s("1", "[a ]"), s("2", "[a]")]);
+            assert!(refused, "a FLOAT column can't be matched");
         });
     }
 
@@ -609,7 +852,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let mut c =
                 sqlite("create table b(id integer primary key, data blob); insert into b values (1, x'00ff10')").await;
-            let bytes = c.cell_bytes("b", "data", &Row { key: key("1"), id: None }).await.unwrap();
+            let bytes = c.cell_bytes("b", "data", &Row { key: key("1"), id: None, original: vec![] }).await.unwrap();
             assert_eq!((bytes.hex.as_str(), bytes.size), ("00ff10", 3));
         });
     }
@@ -636,16 +879,17 @@ mod tests {
                 let path = std::env::temp_dir().join(format!("tableminus-{}-my.bin", std::process::id()));
                 std::fs::write(&path, [0u8, 0xff])?;
                 let changes = Changes {
-                    deletes: vec![Row { key: key("2"), id: None }],
+                    deletes: vec![Row { key: key("2"), id: None, original: vec![] }],
                     updates: vec![update("1", "mood", Some("it's"))],
                     inserts: vec![vec![("b".into(), Value::File(super::FileValue { file: path.clone() }))], vec![]],
+                    log_originals: false,
                 };
                 let saved = c.save_rows("t", &changes).await;
                 let _ = std::fs::remove_file(&path);
                 saved?;
                 let rows = c.query("select id, mood, hex(b) from t order by id").await?.rows;
                 let enums = c.enum_values("t").await?;
-                let bytes = c.cell_bytes("t", "b", &Row { key: key("3"), id: None }).await?;
+                let bytes = c.cell_bytes("t", "b", &Row { key: key("3"), id: None, original: vec![] }).await?;
                 Ok::<_, crate::error::Error>((rows, enums, bytes.hex))
             }
             .await;

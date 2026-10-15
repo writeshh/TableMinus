@@ -8,7 +8,7 @@ import { fillParams, findParams, sourceTable, type ParamFormat } from "./stateme
 import { $, el } from "./dom";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
-import { MIN_WIDTH, layoutCss, loadLayout, saveLayout, type Layout } from "./columns";
+import { MIN_WIDTH, arrange, layoutCss, loadLayout, moveColumn, saveLayout, type Layout } from "./columns";
 import {
   dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showStructure, sidebarMenu, structurePending,
   tableMenu,
@@ -19,6 +19,7 @@ import { openUsers } from "./users";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
 import { Staged } from "./staging";
 import * as grid from "./grid-edit";
+import * as vgrid from "./vgrid";
 import { syncRowDetail, toggleRowDetail } from "./rowdetail";
 import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
 import "./passcode"; // the lock screen, and its rows in Settings › Security
@@ -965,6 +966,9 @@ function snapshot(p: Pane): HTMLElement {
     n.removeAttribute("contenteditable");
   }
   shot.classList.add("shot");
+  // The grid draws only the rows in view (vgrid.ts): the copy must sit at the same scroll to show them.
+  const out = shot.querySelector<HTMLElement>('[data-id="out"]');
+  if (out) out.dataset.scroll = String($("out").scrollTop);
   // The column layout sheet targets #out; scoped to this copy, it neither leaks into the live grid nor goes stale.
   const scope = `shot-${nextShot++}`;
   shot.classList.add(scope);
@@ -981,6 +985,7 @@ function snapshot(p: Pane): HTMLElement {
 function layoutPanes() {
   const panes = ws?.panes ?? [pane];
   $("panes").replaceChildren(...panes.map((p) => (p === pane ? live() : p.shot ?? snapshot(p))));
+  for (const out of $("panes").querySelectorAll<HTMLElement>('.shot [data-id="out"]')) out.scrollTop = Number(out.dataset.scroll ?? 0);
   $("panes").classList.toggle("split", panes.length > 1);
 }
 
@@ -1370,8 +1375,15 @@ type SqlTab = {
 };
 type Sort = { column: string; desc: boolean };
 type TableTab = {
-  id: number; kind: "table"; title: string; table: string; view: "data" | "structure"; page: number;
-  total?: number; result?: QueryResult; error?: string; loading?: boolean;
+  id: number; kind: "table"; title: string; table: string; view: "data" | "structure";
+  /** The first row on the page, from 0. */
+  offset: number;
+  total?: number;
+  /** `total` is the catalog's estimate; Count in the page settings replaces it with the exact number. */
+  estimated?: boolean;
+  /** The default sort was applied (on the first load, once the key is known). */
+  sortSet?: boolean;
+  result?: QueryResult; error?: string; loading?: boolean;
   sort: Sort[]; filters: FilterRow[]; combine: "and" | "or"; filtersShown: boolean; layout: Layout;
   /** Staged cell edits, added and deleted rows (grid-edit.ts). */
   staged: Staged;
@@ -1383,7 +1395,6 @@ type TableTab = {
 };
 type Tab = SqlTab | TableTab;
 type StatusKind = "" | "busy" | "error" | "done";
-const PAGE = 300;
 let tabs: Tab[] = [];
 let currentId = 0;
 let nextId = 1;
@@ -1424,15 +1435,16 @@ function openSqlIn(title: string | null, sql: string) {
   editor.focus();
 }
 
-function openTable(table: string, view: TableTab["view"] = "data", create = false) {
+/** Opens `table`'s tab (or brings it forward); a new tab starts with `filters` when given. */
+function openTable(table: string, view: TableTab["view"] = "data", create = false, filters?: FilterRow[]) {
   const existing = tabs.find((t) => t.kind === "table" && t.table === table) as TableTab | undefined;
   if (existing) {
     if (existing.view !== view && !pendingCount(existing)) existing.view = view;
     return select(existing.id);
   }
   const tab: TableTab = {
-    id: nextId++, kind: "table", title: table, table, view, page: 0, staged: new Staged(), create,
-    sort: [], filters: [blankFilter()], combine: "and", filtersShown: false, layout: loadLayout(active!.name, table),
+    id: nextId++, kind: "table", title: table, table, view, offset: 0, staged: new Staged(), create,
+    sort: [], filters: filters ?? [blankFilter()], combine: "and", filtersShown: !!filters, layout: loadLayout(active!.name, table),
   };
   tabs.push(tab);
   select(tab.id);
@@ -1555,6 +1567,7 @@ async function reloadTab() {
   if (tab?.kind !== "table") return reloadItems();
   if (!(await okToDiscard(tab))) return;
   columnsCache.delete(tab.table);
+  foreignKeys.delete(fkKey(tab.table));
   tab.total = undefined;
   if (tab.view === "data") loadTable(tab);
   else (dropDraft(tab.id), renderMain());
@@ -1605,20 +1618,26 @@ function renderMain() {
   }
   $("result-strip").hidden = true;
   for (const b of $("view-seg").querySelectorAll<HTMLElement>("button")) b.setAttribute("aria-pressed", String(b.dataset.view === tab.view));
-  const from = tab.page * PAGE;
+  const from = tab.offset;
   const shown = tab.result?.rows.length ?? 0;
+  const total = tab.total === undefined ? "?" : `${tab.estimated ? "~" : ""}${fmt(tab.total)}`;
   $("page-info").textContent =
     tab.view === "structure" ? (tab.create ? "New table" : "")
     : tab.loading ? "Loading…"
-    : `${shown ? from + 1 : 0}–${from + shown} of ${tab.total ?? "?"} rows`;
-  $<HTMLButtonElement>("page-prev").disabled = tab.view !== "data" || tab.page === 0;
-  $<HTMLButtonElement>("page-next").disabled = tab.view !== "data" || tab.total === undefined || from + shown >= tab.total;
+    : `${shown ? fmt(from + 1) : 0}–${fmt(from + shown)} of ${total} rows`;
+  $<HTMLButtonElement>("page-info").disabled = tab.view !== "data";
+  $<HTMLButtonElement>("page-prev").disabled = tab.view !== "data" || tab.offset === 0;
+  // An estimate can be off either way: a full page means there may be more.
+  const last = shown < settings.pageSize || (!tab.estimated && tab.total !== undefined && from + shown >= tab.total);
+  $<HTMLButtonElement>("page-next").disabled = tab.view !== "data" || last;
   showPending(tab);
   const [msg, kind] = tab.message ?? ["", ""];
   const m = $("foot-msg");
-  m.textContent = tab.view === "data" && tab.result && !grid.keyOf(tab) ? "Read-only: no primary key" : msg;
-  $("add-row").hidden = tab.view !== "data" || !tab.result || !grid.keyOf(tab);
-  m.className = `foot-msg ${kind}`;
+  const keyless = tab.view === "data" && tab.result ? grid.keylessNote(tab) : null; // read-only, or a warning
+  const readOnly = !!keyless && !grid.findBy(tab);
+  m.textContent = readOnly ? keyless : msg || keyless || "";
+  $("add-row").hidden = tab.view !== "data" || !tab.result || !grid.findBy(tab);
+  m.className = `foot-msg ${readOnly ? "" : msg ? kind : keyless ? "warn" : ""}`;
   if (tab.view === "structure") showStructure($("out"), tab.id, tab.table, !!tab.create);
   else if (tab.error) $("out").replaceChildren(el("p", { className: "hint empty error-text", textContent: tab.error }));
   else if (tab.result) {
@@ -1627,11 +1646,15 @@ function renderMain() {
       const column = tab.result!.columns[ci];
       const value = tab.result!.rows[ri][ci];
       const shown = value === null ? "NULL" : value.length > 24 ? value.slice(0, 24) + "…" : value;
-      return ["-", [`Filter rows where ${column} = ${shown}`, () => filterByCell(tab, column, value)], ...grid.cellMenu(tab, ri, ci, selectedRows())];
+      const follow = keysOf(tab.table).filter((fk) => fk.columns.includes(column))
+        .map((fk): MenuItem => [`Open referenced row in ${fk.ref_table}`, () => followKey(tab, ri, fk)]);
+      return ["-", ...follow, [`Filter rows where ${column} = ${shown}`, () => filterByCell(tab, column, value)], ...grid.cellMenu(tab, ri, ci, selectedRows())];
     };
     render(tab.result, from, {
       sort: tab.sort, onSort: (c, add) => sortBy(tab, c, add), table: tab.table, menu: quickFilter,
-      resize: (column, width, done) => resizeColumn(tab, column, width, done),
+      resize: (column, width, done) => resizeColumn(tab, column, width, done), edit: tab,
+      reorder: (from, to) => reorderColumn(tab, from, to),
+      reference: (column) => keysOf(tab.table).find((fk) => fk.columns.includes(column)),
     });
     grid.decorate(tab);
     paintSelection();
@@ -1699,17 +1722,23 @@ async function loadTable(tab: TableTab) {
   tab.error = undefined;
   if (tab.id === currentId) renderMain();
   try {
-    await loadColumns(tab.table); // structure view, the filter bar's columns, and the primary key for editing
+    // Structure view, the filter bar's columns, and the primary key for editing and the default sort.
+    const columns = await loadColumns(tab.table);
+    loadForeignKeys(tab.table);
     if (tab.view === "data") {
-      // ponytail: exact count(*) can be slow on huge tables; estimate from catalog stats when that hurts.
+      if (!tab.sortSet) {
+        tab.sortSet = true;
+        const key = settings.defaultSort === "none" ? [] : columns.filter((c) => c.primary);
+        if (!tab.sort.length) tab.sort = key.map((c) => ({ column: c.name, desc: settings.defaultSort === "desc" }));
+      }
       const request = {
-        table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort,
-        limit: PAGE, offset: tab.page * PAGE, count: tab.total === undefined, identity: true,
+        ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset, count: tab.total === undefined,
+        estimate_over: settings.estimateOver || null, identity: true, wkt: settings.geometryWkt,
       };
-      const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null; ids?: string[] }>("browse", { name, request });
-      tab.result = { columns: page.columns, rows: page.rows, affected: 0 };
+      const page = await call<{ columns: string[]; rows: (string | null)[][]; total: number | null; estimated: boolean; ids?: string[] }>("browse", { name, request });
+      tab.result = arrange({ columns: page.columns, rows: page.rows, affected: 0 }, tab.layout.order);
       tab.ids = page.ids;
-      if (page.total !== null) tab.total = page.total;
+      if (page.total !== null) (tab.total = page.total), (tab.estimated = page.estimated);
     }
   } catch (e) {
     tab.error = String(e);
@@ -1739,9 +1768,14 @@ function showFilters(tab: Tab) {
   renderFilters(bar, tab, columns, () => applyFilters(tab));
 }
 
+const MAX_PAGE = 100_000; // browse.rs MAX_PAGE
+
+/** The rows a table tab shows, without paging: its table, filters and sort. */
+const browseRequest = (tab: TableTab) => ({ table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort });
+
 async function applyFilters(tab: TableTab) {
   if (!(await okToDiscard(tab))) return;
-  tab.page = 0;
+  tab.offset = 0;
   tab.total = undefined; // a different filter matches a different number of rows
   loadTable(tab);
 }
@@ -1765,8 +1799,48 @@ async function sortBy(tab: TableTab, column: string, add: boolean) {
   else if (i < 0) tab.sort.push(next!);
   else if (next) tab.sort[i] = next;
   else tab.sort.splice(i, 1);
-  tab.page = 0;
+  tab.offset = 0;
   loadTable(tab);
+}
+
+type ForeignKey = { name: string; columns: string[]; ref_table: string; ref_columns: string[] };
+/** Each table's foreign keys, by session key and table; asked for once, as the table first loads. */
+const foreignKeys = new Map<string, ForeignKey[]>();
+const fkKey = (table: string) => `${sessionKey()}\u0000${table}`;
+const keysOf = (table: string) => foreignKeys.get(fkKey(table)) ?? [];
+
+function loadForeignKeys(table: string) {
+  const key = fkKey(table);
+  if (foreignKeys.has(key)) return;
+  foreignKeys.set(key, []); // a failure just means no links
+  call<{ foreign_keys: ForeignKey[] }>("table_structure", { name: sessionKey(), table }).then((s) => {
+    foreignKeys.set(key, s.foreign_keys);
+    const tab = current();
+    if (s.foreign_keys.length && tab?.kind === "table" && tab.table === table && fkKey(table) === key) renderMain(); // mark the headers
+  }, () => {});
+}
+
+/** Opens the row a foreign key's value points at: the referenced table, filtered to it. */
+async function followKey(tab: TableTab, ri: number, fk: ForeignKey) {
+  const values = fk.columns.map((c) => grid.valueAt(tab, ri, tab.result!.columns.indexOf(c)));
+  if (values.some((v) => typeof v !== "string")) return note("The key is NULL, so it references no row", "");
+  let refColumns = fk.ref_columns;
+  // SQLite leaves the columns out of a key that references the primary key.
+  if (refColumns.length !== fk.columns.length || refColumns.some((c) => !c)) {
+    try {
+      refColumns = (await loadColumns(fk.ref_table)).filter((c) => c.primary).map((c) => c.name);
+    } catch (e) {
+      return note(String(e), "error");
+    }
+  }
+  const filters = refColumns.map((column, i): FilterRow => ({ ...blankFilter(), column, op: "eq", value: values[i] as string }));
+  const open = tabs.find((t): t is TableTab => t.kind === "table" && t.table === fk.ref_table);
+  if (!open) return openTable(fk.ref_table, "data", false, filters);
+  if (!(await okToDiscard(open))) return;
+  Object.assign(open, { view: "data", filters, combine: "and", filtersShown: true });
+  filtersDrawnFor = 0;
+  select(open.id);
+  applyFilters(open);
 }
 
 /** Right-click on a cell: filter the table to rows with this value. */
@@ -2010,7 +2084,7 @@ function showResults(tab: SqlTab) {
     else {
       render(rows, 0, {
         table: target.table,
-        menu: (ri, ci) => grid.cellMenu(target, ri, ci, selectedRows()),
+        menu: (ri, ci) => grid.cellMenu(target, ri, ci, selectedRows()), edit: target,
       });
       grid.decorate(target);
       paintSelection();
@@ -2019,6 +2093,7 @@ function showResults(tab: SqlTab) {
   } else {
     $("out").replaceChildren(...shown.map((r) =>
       el("section", { className: "appended" }, el("h4", { textContent: `${r.title} · ${rowsLabel(r.result)}`, title: r.sql }), gridTable(r.result, 0))));
+    vgrid.drawGrids($("out"));
     if (selection && !shown.some((r) => r.result === selection!.r)) selection = null;
   }
   for (const r of shown) {
@@ -2038,7 +2113,7 @@ function editable(r: ResultTab) {
   if (!e || !columns || (current() as SqlTab).out?.search?.trim()) return null;
   const names = new Set(columns.map((c) => c.name));
   const plain = r.result.columns.every((c) => names.has(c)) && new Set(r.result.columns).size === r.result.columns.length;
-  return plain && grid.keyOf(e) ? e : null;
+  return plain && grid.findBy(e) ? e : null;
 }
 
 /** The strip's edit controls for a result edited in place. */
@@ -2183,13 +2258,30 @@ type RenderOptions = {
   menu?: (row: number, col: number) => MenuItem[];
   /** Header drag: a new width while dragging, the final one when `done`; null resets to automatic. */
   resize?: (column: string, width: number | null, done: boolean) => void;
+  /** The staged edits drawn over the rows, when they can be edited. */
+  edit?: grid.EditTab;
+  /** Header drag: the column at `from` moves to `to` (positions in the result). */
+  reorder?: (from: number, to: number) => void;
+  /** The foreign key a column belongs to, marked in its header. */
+  reference?: (column: string) => ForeignKey | undefined;
 };
 
 /** Shows one result grid; see [`gridTable`]. */
 function render(r: QueryResult, offset: number, sorting?: RenderOptions) {
   $("out").replaceChildren(gridTable(r, offset, sorting));
   if (selection?.r !== r) selection = null; // a redraw of the same rows (after an edit) keeps it
+  vgrid.drawGrids($("out"));
 }
+
+// The grids draw the rows near the viewport (vgrid.ts); scrolling and resizing move that window.
+let drawQueued = false;
+const queueDraw = () => {
+  if (drawQueued) return;
+  drawQueued = true;
+  requestAnimationFrame(() => ((drawQueued = false), vgrid.drawGrids($("out"))));
+};
+$("out").addEventListener("scroll", queueDraw, { passive: true });
+new ResizeObserver(queueDraw).observe($("out"));
 
 /** The table each result was last drawn in, for painting the selection when several are on screen. */
 const drawn = new WeakMap<QueryResult, HTMLTableElement>();
@@ -2200,7 +2292,7 @@ function gridTable(r: QueryResult, offset: number, sorting?: RenderOptions): HTM
   const table = el("table");
   const head = table.createTHead().insertRow();
   head.append(el("th", { className: "rownum" }));
-  for (const c of r.columns) {
+  r.columns.forEach((c, ci) => {
     const th = el("th", { textContent: c });
     if (sorting?.onSort && sorting.sort) {
       const { sort, onSort } = sorting;
@@ -2212,23 +2304,38 @@ function gridTable(r: QueryResult, offset: number, sorting?: RenderOptions): HTM
         th.append(el("span", { className: "sort", textContent: `${s.desc ? "▼" : "▲"}${sort.length > 1 ? i + 1 : ""}` }));
         th.setAttribute("aria-sort", s.desc ? "descending" : "ascending");
       }
-      th.onclick = (e) => onSort(c, e.shiftKey);
+      th.onclick = (e) => !columnDragged && onSort(c, e.shiftKey);
+    }
+    const fk = sorting?.reference?.(c);
+    if (fk) {
+      th.append(el("span", { className: "fk-mark", textContent: "→" }));
+      th.title = `References ${fk.ref_table}${fk.ref_columns.some(Boolean) ? ` (${fk.ref_columns.join(", ")})` : ""}. Right-click a value to open its row.`;
     }
     if (sorting?.resize) th.append(resizeGrip(th, c, sorting.resize));
+    const reorder = sorting?.reorder;
+    if (reorder) th.onpointerdown = (e) => e.button === 0 && !(e.target as HTMLElement).closest(".grip") && dragColumn(e, head, ci, reorder);
     head.append(th);
-  }
-  const body = table.createTBody();
-  // ponytail: plain table; switch to a virtualized grid when pages get much larger than 300 rows.
-  r.rows.forEach((row, i) => {
-    const tr = body.insertRow();
-    tr.append(el("td", { className: "rownum", textContent: String(offset + i + 1) }));
-    for (const v of row) fillCell(tr.insertCell(), v);
   });
-  if (!r.rows.length) {
+  const body = table.createTBody();
+  const edit = sorting?.edit;
+  const count = () => r.rows.length + (edit?.staged.added.length ?? 0);
+  const row = (i: number) => {
+    const tr = document.createElement("tr");
+    if (i < r.rows.length) {
+      tr.append(el("td", { className: "rownum", textContent: String(offset + i + 1) }));
+      for (const v of r.rows[i]) fillCell(tr.insertCell(), v);
+    }
+    if (edit) grid.paintRow(edit, tr, i); // staged values; an added row is drawn whole there
+    paintRow(tr, r, i);
+    return tr;
+  };
+  if (count()) {
+    vgrid.virtualize(table, count, row, () => vgrid.widestValues(r.rows, r.columns.length, offset + count()));
+    wireSelection(table, r, sorting);
+  } else {
     const tr = body.insertRow();
     tr.append(el("td", { className: "hint", colSpan: r.columns.length + 1, textContent: "No rows." }));
   }
-  if (r.rows.length) wireSelection(table, r, sorting);
   drawn.set(r, table);
   return table;
 }
@@ -2245,18 +2352,22 @@ function selectedBlock(sel: Selection) {
   return { r0, r1, c0, c1 };
 }
 
+/** Marks the selected cells of drawn row `ri` of `r`. */
+function paintRow(tr: HTMLTableRowElement, r: QueryResult, ri: number) {
+  const b = selection?.r === r ? selectedBlock(selection) : null;
+  const on = !!b && ri >= b.r0 && ri <= b.r1;
+  [...tr.cells].forEach((td, i) => td.classList.toggle("sel", on && i - 1 >= b!.c0 && i - 1 <= b!.c1)); // the row number comes first
+}
+
 function paintSelection() {
-  const block = selection && selectedBlock(selection);
-  const mine = selection && drawn.get(selection.r);
-  $("out").querySelectorAll("table").forEach((table) => {
-    const on = !!block && table === mine;
-    table.querySelectorAll("tbody tr").forEach((tr, ri) => {
-      [...tr.children].forEach((td, i) => {
-        const ci = i - 1; // the row number comes first
-        td.classList.toggle("sel", on && ci >= 0 && ri >= block.r0 && ri <= block.r1 && ci >= block.c0 && ci <= block.c1);
-      });
-    });
-  });
+  $("out").querySelectorAll("td.sel").forEach((td) => td.classList.remove("sel"));
+  const table = selection && drawn.get(selection.r);
+  if (selection && table?.isConnected) {
+    for (const tr of table.tBodies[0].rows) {
+      const ri = vgrid.indexOf(tr);
+      if (ri !== null) paintRow(tr, selection.r, ri);
+    }
+  }
   syncDetail();
 }
 
@@ -2316,11 +2427,75 @@ function resizeGrip(th: HTMLElement, column: string, resize: NonNullable<RenderO
   return grip;
 }
 
+/** Shows `menu` above `anchor`, a footer button; a click outside or Esc closes it. */
+function openPopover(anchor: HTMLElement, menu: HTMLElement) {
+  menuClose?.();
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  const { width, height } = menu.getBoundingClientRect();
+  Object.assign(menu.style, { left: `${clamp(r.left, 8, innerWidth - width - 8)}px`, top: `${Math.max(8, r.top - height - 6)}px` });
+  const onDown = (ev: Event) => !menu.contains(ev.target as Node) && ev.target !== anchor && close();
+  // Esc closes only the menu, not a window it sits in.
+  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && (ev.preventDefault(), ev.stopPropagation(), close());
+  function close() {
+    menu.remove();
+    removeEventListener("pointerdown", onDown, true);
+    removeEventListener("keydown", onKey, true);
+    menuClose = null;
+  }
+  addEventListener("pointerdown", onDown, true);
+  addEventListener("keydown", onKey, true);
+  menuClose = close;
+}
+
+let columnDragged = false; // set while a header drag ends, so its click doesn't sort
+
+/** Drags header `from` sideways; dropping it between two others moves the column there. */
+function dragColumn(start: PointerEvent, head: HTMLTableRowElement, from: number, reorder: (from: number, to: number) => void) {
+  const heads = [...head.cells].slice(1); // after the row number
+  let to = -1;
+  const mark = (at: number) => heads.forEach((h, k) => (h.classList.toggle("drop-before", k === at), h.classList.toggle("drop-after", at === heads.length && k === heads.length - 1)));
+  const move = (e: PointerEvent) => {
+    if (to < 0 && Math.abs(e.clientX - start.clientX) < 6) return;
+    heads[from].classList.add("dragging");
+    // Before the first shown header whose middle is right of the pointer; hidden ones have no width.
+    to = heads.findIndex((h) => {
+      const r = h.getBoundingClientRect();
+      return r.width > 0 && e.clientX < r.left + r.width / 2;
+    });
+    if (to < 0) to = heads.length;
+    mark(to);
+  };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    if (to < 0) return;
+    heads[from].classList.remove("dragging");
+    mark(-1);
+    columnDragged = true;
+    setTimeout(() => (columnDragged = false));
+    const dest = to > from ? to - 1 : to;
+    if (dest !== from) reorder(from, dest);
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+}
+
+/** Moves a table tab's column and remembers the order for the table. Staged edits refer to columns by position,
+ *  so the order holds still while there are some. */
+function reorderColumn(tab: TableTab, from: number, to: number) {
+  if (!tab.result) return;
+  if (tab.staged.count) return note("Save or discard the changes before moving columns", "error");
+  tab.layout.order = moveColumn(tab.result.columns, from, to);
+  saveLayout(active!.name, tab.table, tab.layout);
+  tab.result = arrange(tab.result, tab.layout.order);
+  renderMain();
+}
+
 /** The Columns button: a checklist of the table's columns. Unchecking hides a column. */
 function showColumnsMenu() {
   const tab = current();
   if (tab?.kind !== "table" || !tab.result) return;
-  menuClose?.();
   const t = tab;
   const menu = el("div", { className: "popover columns-menu" });
   const save = () => (saveLayout(active!.name, t.table, t.layout), applyLayout(t));
@@ -2338,25 +2513,66 @@ function showColumnsMenu() {
   showAll.onclick = () => ((t.layout.hidden = []), boxes.forEach((b) => (b.box.checked = true)), save());
   const reset = el("button", { type: "button", textContent: "Reset widths" });
   reset.onclick = () => ((t.layout.widths = {}), save());
+  const resetOrder = el("button", { type: "button", textContent: "Reset order", disabled: !t.layout.order.length });
+  resetOrder.onclick = () => {
+    const own = columnsCache.get(t.table)?.map((c) => c.name);
+    if (!own) return;
+    if (t.staged.count) return note("Save or discard the changes before moving columns", "error");
+    t.layout.order = [];
+    save();
+    t.result = arrange(t.result!, own);
+    menuClose?.();
+    renderMain();
+  };
   const foot = el("footer");
-  foot.append(showAll, el("span", { className: "spacer" }), reset);
+  foot.append(showAll, el("span", { className: "spacer" }), resetOrder, reset);
   menu.append(...boxes.map((b) => b.row), foot);
-  document.body.append(menu);
-  const r = $("columns-button").getBoundingClientRect();
-  const h = menu.getBoundingClientRect().height;
-  Object.assign(menu.style, { left: `${Math.max(8, r.left)}px`, top: `${Math.max(8, r.top - h - 6)}px` });
-  const onDown = (ev: Event) => !menu.contains(ev.target as Node) && ev.target !== $("columns-button") && close();
-  // Esc closes only the menu, not a window it sits in.
-  const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && (ev.preventDefault(), ev.stopPropagation(), close());
-  function close() {
-    menu.remove();
-    removeEventListener("pointerdown", onDown, true);
-    removeEventListener("keydown", onKey, true);
-    menuClose = null;
-  }
-  addEventListener("pointerdown", onDown, true);
-  addEventListener("keydown", onKey, true);
-  menuClose = close;
+  openPopover($("columns-button"), menu);
+}
+
+/** The page settings (Ref: PagingPopover, EstimatedOffsetPopover): rows per page, the row to start at, and the
+ *  row count, which Count makes exact when it is an estimate. */
+function showPagingMenu() {
+  const tab = current();
+  if (tab?.kind !== "table" || tab.view !== "data") return;
+  const t = tab;
+  const size = el("input", { type: "number", min: "1", max: String(MAX_PAGE), value: String(settings.pageSize), className: "num-input" });
+  const start = el("input", { type: "number", min: "1", value: String(t.offset + 1), className: "num-input wide-num" });
+  const total = el("span");
+  const count = el("button", { type: "button", textContent: "Count" });
+  const showTotal = () => {
+    total.textContent = t.total === undefined ? "Not counted" : `${t.estimated ? "About " : ""}${fmt(t.total)} rows${t.estimated ? " (estimated)" : ""}`;
+    count.hidden = t.total !== undefined && !t.estimated;
+  };
+  showTotal();
+  count.onclick = async () => {
+    count.disabled = true;
+    total.textContent = "Counting…";
+    try {
+      const page = await call<{ total: number | null }>("browse", { name: sessionKey(), request: { ...browseRequest(t), limit: 0, offset: 0, count: true } });
+      if (page.total !== null) (t.total = page.total), (t.estimated = false);
+      if (t.id === currentId) renderMain();
+    } catch (e) {
+      total.textContent = String(e);
+    }
+    count.disabled = false;
+    if (total.textContent === "Counting…") showTotal();
+  };
+  const apply = el("button", { type: "submit", className: "primary", textContent: "Go" });
+  const row = (label: string, ...kids: (Node | string)[]) => el("label", { className: "paging-row" }, el("span", { textContent: label }), ...kids);
+  const menu = el("form", { className: "popover paging-menu" },
+    row("Rows per page", size), row("Start at row", start), el("div", { className: "paging-row" }, el("span", { textContent: "Total" }), total, count),
+    el("footer", {}, el("span", { className: "spacer" }), apply));
+  menu.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!(await okToDiscard(t))) return;
+    setSetting("pageSize", clamp(Math.round(Number(size.value)) || settings.pageSize, 1, MAX_PAGE));
+    t.offset = Math.max(0, Math.round(Number(start.value) || 1) - 1);
+    menuClose?.();
+    loadTable(t);
+  };
+  openPopover($("page-info"), menu);
+  start.select();
 }
 
 /** A short note where the current tab shows messages: the run bar for SQL tabs, the footer for table tabs. */
@@ -2391,9 +2607,8 @@ function copySelection(format: "plain" | "csv" | "markdown" | "insert") {
 function wireSelection(table: HTMLTableElement, r: QueryResult, options?: RenderOptions) {
   const cellOf = (target: EventTarget | null): [number, number] | null => {
     const td = (target as HTMLElement | null)?.closest?.("td");
-    const tr = td?.parentElement as HTMLTableRowElement | null;
-    if (!td || !tr || td.querySelector("input")) return null; // an open cell editor keeps its own clicks
-    const ri = tr.sectionRowIndex;
+    const ri = vgrid.indexOf(td?.parentElement as HTMLTableRowElement | null);
+    if (!td || ri === null || td.querySelector("input")) return null; // an open cell editor keeps its own clicks
     const ci = td.cellIndex - 1;
     return ci < 0 ? [ri, -1] : [ri, ci]; // -1: the row number
   };
@@ -2464,6 +2679,30 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Arrow keys move the selection (Shift extends it), Enter edits the focused cell.
+const MOVES: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+document.addEventListener("keydown", (e) => {
+  const sel = selection;
+  const table = sel && drawn.get(sel.r);
+  if (!sel || !table?.isConnected || e.metaKey || e.ctrlKey || e.altKey || typingSomewhere() || document.querySelector("dialog[open]")) return;
+  const tab = current();
+  if (e.key === "Enter") {
+    const rows = tab?.kind === "table" ? (tab.view === "data" ? tab : null) : resultTarget();
+    if (rows && rows.result === sel.r) (e.preventDefault(), grid.editCell(rows, ...sel.focus));
+    return;
+  }
+  const move = MOVES[e.key];
+  if (!move) return;
+  e.preventDefault();
+  const body = table.tBodies[0];
+  const ri = clamp(sel.focus[0] + move[0], 0, vgrid.rowCount(body) - 1);
+  const ci = clamp(sel.focus[1] + move[1], 0, sel.r.columns.length - 1);
+  sel.focus = [ri, ci];
+  if (!e.shiftKey) sel.anchor = [ri, ci];
+  vgrid.reveal($("out"), body, ri)?.cells[ci + 1]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  paintSelection();
+});
+
 // Space toggles the row detail; it's the grid's key only when nothing else has focus (a button would click).
 document.addEventListener("keydown", (e) => {
   if (e.key !== " " || e.metaKey || e.ctrlKey || e.altKey || $("workspace").hidden || document.querySelector("dialog[open]")) return;
@@ -2502,7 +2741,7 @@ for (const b of $("view-seg").querySelectorAll<HTMLElement>("button"))
 const turnPage = async (delta: number) => {
   const tab = current();
   if (tab?.kind !== "table" || !(await okToDiscard(tab))) return;
-  tab.page = Math.max(0, tab.page + delta);
+  tab.offset = Math.max(0, tab.offset + delta * settings.pageSize);
   loadTable(tab);
 };
 $("save-edits").onclick = () => saveEdits();
@@ -2562,6 +2801,7 @@ grid.initGridEdit({
   reload: (tab) => ("kind" in tab ? loadTable(tab as TableTab) : reloadResult(tab)),
   confirm: confirmDialog,
   fill: fillCell,
+  logOriginals: () => settings.logOriginals,
 });
 $("side-items").oncontextmenu = (e) => active && contextMenu(e, [...sidebarMenu(), ["Show diagram", () => showDiagram()], "-", ...treeMenu()]);
 /** The ER diagram of the sidebar's schema, or of `table`'s schema centred on it. */
@@ -2654,7 +2894,7 @@ function transferMenu(table: string): MenuItem[] {
 $("export-table").onclick = () => {
   const tab = current();
   if (tab?.kind !== "table" || !active) return;
-  const request = { table: tab.table, filters: activeFilters(tab), combine: tab.combine, sort: tab.sort, limit: PAGE, offset: tab.page * PAGE, count: false };
+  const request = { ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset, count: false, wkt: settings.geometryWkt };
   const source: ExportSource = { kind: "rows", request, pageRows: tab.result?.rows.length ?? 0 };
   exportDialog(transferCtx(), source);
 };
@@ -2669,6 +2909,7 @@ $("export-result").onclick = (e) => {
 };
 $("columns-button").onclick = () => (menuClose ? menuClose() : showColumnsMenu());
 $("page-prev").onclick = () => turnPage(-1);
+$("page-info").onclick = showPagingMenu;
 $("page-next").onclick = () => turnPage(1);
 /** Leaves the workspace and closes its session; `next` (else the neighbouring workspace, else the launcher) comes
  *  up. */
@@ -2730,12 +2971,25 @@ type Settings = {
   launcherSort: "name" | "kind" | "tag";
   /** Reconnect, at startup, the workspaces open at quit. */
   reopenWorkspaces: boolean;
+  /** Rows on a table tab's page. */
+  pageSize: number;
+  /** Tables the catalog estimates at this many rows or more show the estimate instead of a count; 0 = always count. */
+  estimateOver: number;
+  /** The sort a table tab opens with. */
+  defaultSort: "none" | "asc" | "desc";
+  /** PostGIS geometry and geography as WKT rather than hex WKB. */
+  geometryWkt: boolean;
+  /** Overlay scroll bars on the grid, shown while scrolling. */
+  hideScrollbars: boolean;
+  /** Write the values updated and deleted rows had to the console log when saving. */
+  logOriginals: boolean;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
   shortcuts: {}, launcherSort: "name", reopenWorkspaces: false,
   resultsMode: "tabs", stopOnError: true, historyYears: 0,
+  pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, hideScrollbars: false, logOriginals: false,
 };
 let settings: Settings = loadSettings();
 
@@ -2786,6 +3040,13 @@ function applySettings() {
   $<HTMLSelectElement>("results-mode").value = settings.resultsMode;
   $<HTMLInputElement>("stop-on-error").checked = settings.stopOnError;
   $<HTMLSelectElement>("history-years").value = String(settings.historyYears);
+  $<HTMLInputElement>("page-size").value = String(settings.pageSize);
+  $<HTMLInputElement>("estimate-over").value = String(settings.estimateOver);
+  $<HTMLSelectElement>("default-sort").value = settings.defaultSort;
+  $<HTMLInputElement>("geometry-wkt").checked = settings.geometryWkt;
+  $<HTMLInputElement>("hide-scrollbars").checked = settings.hideScrollbars;
+  $<HTMLInputElement>("log-originals").checked = settings.logOriginals;
+  document.body.classList.toggle("hide-scrollbars", settings.hideScrollbars);
   const tab = current();
   if (tab?.kind === "sql" && !$("workspace").hidden) showResults(tab);
   editor.setDisplay(settings.wrapLines, settings.showInvisibles);
@@ -2875,6 +3136,12 @@ initFavorites({
 $<HTMLSelectElement>("param-format").onchange = (e) => setSetting("paramFormat", (e.target as HTMLSelectElement).value as Settings["paramFormat"]);
 $<HTMLSelectElement>("format-style").onchange = (e) => setSetting("formatStyle", (e.target as HTMLSelectElement).value as FormatStyle);
 $<HTMLSelectElement>("row-limit").onchange = (e) => setSetting("sqlLimit", Number((e.target as HTMLSelectElement).value));
+$<HTMLInputElement>("page-size").onchange = (e) => setSetting("pageSize", clamp(Math.round(Number((e.target as HTMLInputElement).value)) || 300, 1, MAX_PAGE));
+$<HTMLInputElement>("estimate-over").onchange = (e) => setSetting("estimateOver", Math.max(0, Math.round(Number((e.target as HTMLInputElement).value)) || 0));
+$<HTMLSelectElement>("default-sort").onchange = (e) => setSetting("defaultSort", (e.target as HTMLSelectElement).value as Settings["defaultSort"]);
+$<HTMLInputElement>("geometry-wkt").onchange = (e) => setSetting("geometryWkt", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("hide-scrollbars").onchange = (e) => setSetting("hideScrollbars", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("log-originals").onchange = (e) => setSetting("logOriginals", (e.target as HTMLInputElement).checked);
 
 // ---------- Commands (commands.ts): shortcuts, and later the menu bar and Open Anything ----------
 
