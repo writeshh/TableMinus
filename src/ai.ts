@@ -8,6 +8,7 @@ import { $, connName, el } from "./dom";
 import { readPref, writePref } from "./prefs";
 import { docEntry, setDocEntry } from "./locations";
 import { CANCELLED, guarded } from "./safety";
+import { withVault } from "./vault";
 import { blocks, pendingCall, resultText, schemaText, type Call, type DiagramData, type QueryResult, type Turn } from "./ai-text";
 
 export type Provider = "open_ai" | "anthropic";
@@ -154,7 +155,7 @@ settingsTab.addEventListener("click", () => void showSettings());
 async function setKey(key: string) {
   const state = $("ai-key-state");
   try {
-    await invoke("ai_set_key", { provider: prefs().provider, key });
+    await withVault(() => invoke("ai_set_key", { provider: prefs().provider, key }));
     field("ai-key").value = "";
     state.textContent = key ? "The key is saved." : "The key is removed.";
   } catch (e) {

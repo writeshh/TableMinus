@@ -256,24 +256,13 @@ pub fn password_for(c: &Saved) -> Result<Option<SecretString>> {
     }
 }
 
-fn entry(which: Secret, name: &str) -> Result<keyring::Entry> {
-    Ok(keyring::Entry::new(which.service(), name)?)
-}
-
 /// The stored secret, or None when there isn't one.
 pub fn stored(which: Secret, name: &str) -> Result<Option<SecretString>> {
-    match entry(which, name)?.get_password() {
-        Ok(pw) => Ok(Some(pw.into())),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    crate::secrets::get(which.service(), name)
 }
 
 fn forget(which: Secret, name: &str) -> Result<()> {
-    match entry(which, name)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    crate::secrets::delete(which.service(), name)
 }
 
 /// Removes both of a connection's keychain secrets.
@@ -285,9 +274,9 @@ pub fn forget_secrets(name: &str) -> Result<()> {
 
 /// `None` keeps the stored secret; an empty one removes it.
 pub fn update(which: Secret, name: &str, secret: Option<&SecretString>) -> Result<()> {
-    match secret.map(ExposeSecret::expose_secret) {
-        Some("") => forget(which, name),
-        Some(s) => Ok(entry(which, name)?.set_password(s)?),
+    match secret {
+        Some(s) if s.expose_secret().is_empty() => forget(which, name),
+        Some(s) => crate::secrets::set(which.service(), name, s),
         None => Ok(()),
     }
 }
@@ -310,7 +299,7 @@ pub fn save(
     if let Some(old) = previous.filter(|old| *old != c.name) {
         for which in [Secret::Database, Secret::Ssh] {
             if let Some(s) = stored(which, old)? {
-                entry(which, &c.name)?.set_password(s.expose_secret())?;
+                crate::secrets::set(which.service(), &c.name, &s)?;
             }
             forget(which, old)?;
         }
@@ -363,7 +352,7 @@ pub fn duplicate(dir: &Path, name: &str) -> Result<String> {
     copy.name = file.unique_name(&format!("{name} copy"));
     for which in [Secret::Database, Secret::Ssh] {
         if let Some(s) = stored(which, name)? {
-            entry(which, &copy.name)?.set_password(s.expose_secret())?;
+            crate::secrets::set(which.service(), &copy.name, &s)?;
         }
     }
     let new = copy.name.clone();

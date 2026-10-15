@@ -69,6 +69,12 @@ pub enum Error {
     Tls(#[from] native_tls::Error),
     #[error("keychain: {0}")]
     Keychain(#[from] keyring::Error),
+    /// Secrets live in the vault file on this computer (no keychain), and it isn't unlocked yet. The UI matches this
+    /// exact text and asks for the master password.
+    #[error("VAULT LOCKED")]
+    VaultLocked,
+    #[error("wrong master password")]
+    WrongMasterPassword,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("can't read {path}: {source}")]

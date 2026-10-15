@@ -21,6 +21,7 @@ mod processes;
 mod readonly;
 mod rows;
 mod safety;
+mod secrets;
 mod ssh;
 mod store;
 mod structure;
@@ -815,6 +816,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(jobs::Jobs::default())
         .manage(launcher::Opened::default())
         .setup(|app| {
+            secrets::init(&app.path().app_config_dir()?);
             tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
             tauri::async_runtime::spawn(passcode::lock_at_startup(open.clone()));
             mcp::setup(app.handle(), open, prefs)?;
@@ -866,6 +868,9 @@ pub fn run() -> tauri::Result<()> {
             ai::ai_has_key,
             ai::ai_set_key,
             ai_run,
+            secrets::vault_status,
+            secrets::vault_unlock,
+            secrets::vault_reset,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,

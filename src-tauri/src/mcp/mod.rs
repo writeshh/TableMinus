@@ -188,7 +188,7 @@ fn load(dir: &Path) -> Result<Config> {
 }
 
 /// Writes to a temporary file readable only by the user, then renames it over `path`.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let failed = |source| Error::File { path: path.display().to_string(), source };
     if let Some(parent) = path.parent() {

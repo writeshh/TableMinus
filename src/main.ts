@@ -25,6 +25,7 @@ import { syncRowDetail, toggleRowDetail } from "./rowdetail";
 import { divider, initHiding, togglePane } from "./splitters";
 import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
 import "./passcode"; // the lock screen, and its rows in Settings › Security
+import { withVault } from "./vault";
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
@@ -260,7 +261,7 @@ function connMenu(c: Saved): MenuItem[] {
   return [
     ["Connect", () => connect(c)],
     ["Edit…", () => openEditor(c.kind, c)],
-    ["Duplicate", () => invoke<string>("duplicate_connection", { name: c.name }).then((n) => homeNote(`Duplicated as “${n}”.`), (e) => homeNote(String(e), true))],
+    ["Duplicate", () => withVault(() => invoke<string>("duplicate_connection", { name: c.name })).then((n) => homeNote(`Duplicated as “${n}”.`), (e) => homeNote(String(e), true))],
     ["Copy as URL", () => navigator.clipboard.writeText(launcher.connectionUrl(c)).then(() => homeNote("Copied the URL (without the password).")).catch((e) => homeNote(String(e), true))],
     ["Export…", () => launcher.exportConnections({ kind: "connection", name: c.name }, `“${c.name}”`, homeNote)],
     ...(groupItems.length ? ["-" as const, ...groupItems] : []),
@@ -567,12 +568,13 @@ function formToSaved(): Saved {
 
 async function saveForm() {
   const conn = formToSaved();
-  await invoke("save_connection", {
+  const args = {
     conn,
     password: conn.password_mode ? null : secretField().value || null,
     sshPassword: field("ssh_password").value || null,
     previous: editing?.name ?? null,
-  });
+  };
+  await withVault(() => invoke("save_connection", args));
   return conn;
 }
 

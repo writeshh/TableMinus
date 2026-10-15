@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { el } from "./dom";
 import { readPref, writePref } from "./prefs";
+import { withVault } from "./vault";
 
 export type Group = { name: string; icon: string };
 export type Tag = { name: string; color: string };
@@ -279,7 +280,7 @@ export async function importConnections(done: (text: string, error?: boolean) =>
   let error = "";
   for (;;) {
     try {
-      const n = await invoke<number>("import_connections", { path, password });
+      const n = await withVault(() => invoke<number>("import_connections", { path, password }));
       return done(`Imported ${n} connection${n === 1 ? "" : "s"}.`);
     } catch (e) {
       if (e !== "FILE PASSWORD" && !(password !== null && String(e).startsWith("wrong password"))) return done(String(e), true);
