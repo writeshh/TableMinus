@@ -5,7 +5,7 @@ fn main() -> std::process::ExitCode {
     match table_minus_lib::run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("Table Minus could not start: {e}");
+            eprintln!("TableMinus could not start: {e}");
             std::process::ExitCode::FAILURE
         }
     }

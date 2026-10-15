@@ -37,7 +37,7 @@ pub enum Error {
     #[error("{0}")]
     Locations(String),
     /// The passcode lock is on.
-    #[error("Table Minus is locked; unlock it first")]
+    #[error("TableMinus is locked; unlock it first")]
     Locked,
     #[error("not connected")]
     NotConnected,

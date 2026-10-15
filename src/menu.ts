@@ -33,7 +33,7 @@ async function build() {
   ];
   const window: Entry[] = [{ item: "Minimize" }, { item: "Maximize" }, ...(isMac ? [{ item: "Fullscreen" } as Entry] : []), sep];
   const app: SubmenuOptions = {
-    text: "Table Minus",
+    text: "TableMinus",
     items: [
       { item: { About: null } }, sep,
       ...commands.filter((c) => c.id === "settings").map((c) => ({ text: c.label, accelerator: bindings(c.id)[0], action: () => void runCommand(c.id) })),

@@ -191,7 +191,7 @@ export function parseConnectionUrl(text: string): UrlConn {
     throw "That isn't a connection URL, e.g. postgresql://user@localhost:5432/db.";
   }
   const kind = SCHEMES[u.protocol.slice(0, -1).toLowerCase()];
-  if (!kind) throw `Table Minus can't open ${u.protocol}// URLs; it opens postgresql://, mysql://, mariadb:// and SQLite files.`;
+  if (!kind) throw `TableMinus can't open ${u.protocol}// URLs; it opens postgresql://, mysql://, mariadb:// and SQLite files.`;
   if (!u.hostname) throw "The URL has no host.";
   const db = decodeURIComponent(u.pathname.replace(/^\//, ""));
   const ssl = u.searchParams.get("sslmode") ?? u.searchParams.get("ssl-mode") ?? u.searchParams.get("ssl_mode");
@@ -219,7 +219,7 @@ export function connectionUrl(c: { kind: string; url: string; tls?: { mode: stri
 // ---------- Export and import as a file ----------
 
 export type Scope = { kind: "all" } | { kind: "group"; name: string } | { kind: "connection"; name: string };
-const FILES = [{ name: "Table Minus connections", extensions: ["tableminus"] }, { name: "All files", extensions: ["*"] }];
+const FILES = [{ name: "TableMinus connections", extensions: ["tableminus"] }, { name: "All files", extensions: ["*"] }];
 
 const exProtect = el("input", { type: "checkbox" });
 const exPassword = el("input", { type: "password", autocomplete: "new-password", placeholder: "Password" });

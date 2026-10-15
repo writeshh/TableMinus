@@ -23,7 +23,7 @@ pub enum Secret {
 
 impl Secret {
     fn service(self) -> &'static str {
-        // Named for the app before it became Table Minus; renaming would orphan saved passwords.
+        // Named for the app before it became TableMinus; renaming would orphan saved passwords.
         match self {
             Secret::Database => "dev.ritesh.dbmanager",
             Secret::Ssh => "dev.ritesh.dbmanager.ssh",

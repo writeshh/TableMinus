@@ -106,9 +106,9 @@ pub async fn touch_id(reason: &str) -> Result<()> {
             .build()
             .ok_or(Error::TouchId("this Mac can't ask for Touch ID".into()))?;
         let text = Text {
-            android: AndroidText { title: "Table Minus", subtitle: None, description: None },
+            android: AndroidText { title: "TableMinus", subtitle: None, description: None },
             apple: &reason,
-            windows: WindowsText::new_truncated("Table Minus", &reason),
+            windows: WindowsText::new_truncated("TableMinus", &reason),
         };
         let (tx, rx) = std::sync::mpsc::channel();
         Context::new(())

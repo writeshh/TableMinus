@@ -28,7 +28,7 @@ export const initDiagram = (c: Ctx) => void (ctx = c);
 const START_CAP = 80;
 /** The most tables the diagram draws; past this dragging and zooming crawl. */
 const MAX_SHOWN = 500;
-const DIAGRAM_FILES = [{ name: "Table Minus diagram", extensions: ["json"] }];
+const DIAGRAM_FILES = [{ name: "TableMinus diagram", extensions: ["json"] }];
 const NS = "http://www.w3.org/2000/svg";
 
 type View = { zoom: number; x: number; y: number };

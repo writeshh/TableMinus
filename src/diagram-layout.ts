@@ -127,7 +127,7 @@ export const MAX_FILE_TABLES = 10_000;
 export function toFile(schema: string | null, positions: Map<string, Point>): string {
   const tables = [...positions].map(([name, p]) => ({ name, x: Math.round(p.x), y: Math.round(p.y) }));
   const file: DiagramFile = { version: 1, schema, tables };
-  return JSON.stringify({ app: "Table Minus diagram", ...file }, null, 2) + "\n";
+  return JSON.stringify({ app: "TableMinus diagram", ...file }, null, 2) + "\n";
 }
 
 /** Reads a diagram file, or throws an Error saying what's wrong with it. Nothing is changed until it's whole. */

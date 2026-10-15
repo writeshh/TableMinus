@@ -20,7 +20,7 @@ const touch = el("button", { type: "button", textContent: "Use Touch ID" });
 const forgot = el("button", { type: "button", className: "ghost", textContent: "Forgot passcode?" });
 const form = el("form", { className: "lock-form" },
   el("div", { className: "mark", textContent: "db" }),
-  el("h2", { textContent: "Table Minus is locked" }),
+  el("h2", { textContent: "TableMinus is locked" }),
   input, el("button", { className: "primary", textContent: "Unlock" }), touch, message, forgot);
 const screen = el("dialog", { id: "lock" }, form);
 screen.addEventListener("cancel", (e) => e.preventDefault()); // Esc doesn't unlock
@@ -131,7 +131,7 @@ function renderRows() {
     row("Passcode", ...buttons),
     row("Lock", away),
     ...(touchIdAvailable() ? [row("Touch ID", el("label", { className: "check" }, touchBox, " Unlock and approve safe mode with Touch ID"))] : []),
-    el("p", { className: "hint note", textContent: "The passcode locks Table Minus at startup and after time away. Only a hash of it is kept, in the keychain." }),
+    el("p", { className: "hint note", textContent: "The passcode locks TableMinus at startup and after time away. Only a hash of it is kept, in the keychain." }),
   );
 }
 

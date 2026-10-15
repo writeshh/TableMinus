@@ -1,4 +1,4 @@
-# Table Minus
+# TableMinus
 
 Personal database client for macOS and Linux: Tauri 2, a Rust core, a plain TypeScript UI.
 

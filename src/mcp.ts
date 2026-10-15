@@ -22,7 +22,7 @@ type McpEvent =
 const PANE = `
 <div class="row">
   <span class="k">Server</span>
-  <span><label class="check"><input type="checkbox" id="mcp-enabled" /> Let AI agents use Table Minus over MCP</label></span>
+  <span><label class="check"><input type="checkbox" id="mcp-enabled" /> Let AI agents use TableMinus over MCP</label></span>
 </div>
 <div class="row">
   <span class="k">Port</span>

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Merged into the app bundle's Info.plist: database links open in Table Minus (launcher.rs handles them). -->
+<!-- Merged into the app bundle's Info.plist: database links open in TableMinus (launcher.rs handles them). -->
 <plist version="1.0">
 <dict>
   <key>CFBundleURLTypes</key>

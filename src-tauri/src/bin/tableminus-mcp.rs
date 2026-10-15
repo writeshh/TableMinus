@@ -91,7 +91,7 @@ fn bridge_file() -> Option<PathBuf> {
 
 /// Read for every message, so restarting the app (maybe on another port) needs no agent restart.
 fn target() -> Result<(u16, String), String> {
-    let off = "Table Minus isn't running, or its MCP server is off: turn it on in Settings › MCP";
+    let off = "TableMinus isn't running, or its MCP server is off: turn it on in Settings › MCP";
     let path = bridge_file().ok_or(off)?;
     let file: BridgeFile = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).ok_or(off)?;
     let token = std::env::var("TABLEMINUS_MCP_TOKEN").ok().filter(|t| !t.trim().is_empty()).unwrap_or(file.token);
@@ -102,10 +102,10 @@ fn target() -> Result<(u16, String), String> {
 // The reply has no timeout of its own: the server bounds it with the approval and query timeouts.
 async fn post(body: String, version: &Version) -> Result<Vec<Value>, String> {
     let (port, token) = target()?;
-    let off = |_| "Table Minus isn't running, or its MCP server is off: turn it on in Settings › MCP".to_string();
+    let off = |_| "TableMinus isn't running, or its MCP server is off: turn it on in Settings › MCP".to_string();
     let stream = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(("127.0.0.1", port)))
         .await
-        .map_err(|_| "Table Minus's MCP server didn't answer".to_string())?
+        .map_err(|_| "TableMinus's MCP server didn't answer".to_string())?
         .map_err(off)?;
     let (mut sender, conn) =
         hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
@@ -138,9 +138,9 @@ async fn post(body: String, version: &Version) -> Result<Vec<Value>, String> {
     };
     if messages.is_empty() && !status.is_success() {
         return Err(if status == hyper::StatusCode::UNAUTHORIZED {
-            "Table Minus refused the token: it may have been revoked (Settings › MCP)".into()
+            "TableMinus refused the token: it may have been revoked (Settings › MCP)".into()
         } else {
-            format!("Table Minus's MCP server answered {status}: {}", text.trim())
+            format!("TableMinus's MCP server answered {status}: {}", text.trim())
         });
     }
     Ok(messages)

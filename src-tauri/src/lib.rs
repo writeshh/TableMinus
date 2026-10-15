@@ -1,4 +1,4 @@
-//! Table Minus's Tauri commands: the only surface the UI can call.
+//! TableMinus's Tauri commands: the only surface the UI can call.
 
 mod backup;
 mod browse;

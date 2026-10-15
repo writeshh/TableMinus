@@ -109,7 +109,7 @@ pub async fn unlock(open: State<'_, crate::Open>, passcode: SecretString) -> Res
 
 #[tauri::command]
 pub async fn unlock_with_touch_id(open: State<'_, crate::Open>) -> Result<()> {
-    crate::safety::touch_id("unlock Table Minus").await?;
+    crate::safety::touch_id("unlock TableMinus").await?;
     open.locked.store(false, Ordering::SeqCst);
     Ok(())
 }
@@ -119,7 +119,7 @@ pub async fn unlock_with_touch_id(open: State<'_, crate::Open>) -> Result<()> {
 #[tauri::command]
 pub async fn forgot_passcode(app: AppHandle, open: State<'_, crate::Open>) -> Result<()> {
     if cfg!(target_os = "macos") {
-        crate::safety::touch_id("remove the Table Minus passcode").await?;
+        crate::safety::touch_id("remove the TableMinus passcode").await?;
     } else {
         let dir = crate::dir(&app)?;
         blocking(move || crate::store::load(&dir)?.iter().try_for_each(|c| crate::store::forget_secrets(&c.name)))

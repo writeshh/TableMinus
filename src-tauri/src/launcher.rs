@@ -250,10 +250,10 @@ fn import(dir: &Path, path: &Path, password: Option<&SecretString>) -> Result<us
     if std::fs::metadata(path).map_err(failed)?.len() > MAX_FILE {
         return Err(Error::Invalid("the file is over 10 MB, too big for a connections export"));
     }
-    let not_ours = |_| Error::Invalid("not a Table Minus connections file");
+    let not_ours = |_| Error::Invalid("not a TableMinus connections file");
     let file: ExportFile = serde_json::from_slice(&std::fs::read(path).map_err(failed)?).map_err(not_ours)?;
     if file.table_minus_connections > FORMAT {
-        return Err(Error::Invalid("the file is from a newer Table Minus; update the app to import it"));
+        return Err(Error::Invalid("the file is from a newer TableMinus; update the app to import it"));
     }
     let payload: Payload = match (file.data, file.sealed) {
         (Some(p), None) => p,
@@ -261,7 +261,7 @@ fn import(dir: &Path, path: &Path, password: Option<&SecretString>) -> Result<us
             let plain = unseal(password.ok_or(Error::FilePasswordRequired)?, &sealed)?;
             serde_json::from_slice(plain.expose_secret()).map_err(not_ours)?
         }
-        _ => return Err(Error::Invalid("not a Table Minus connections file")),
+        _ => return Err(Error::Invalid("not a TableMinus connections file")),
     };
     if payload.saved.connections.len() > MAX_CONNECTIONS {
         return Err(Error::Invalid("the file has more than 10,000 connections"));
@@ -423,7 +423,7 @@ mod tests {
         let dir = temp_dir("junk");
         let path = dir.join("x.json");
         std::fs::write(&path, "[1, 2]").unwrap();
-        assert_eq!(import(&dir, &path, None).unwrap_err().to_string(), "not a Table Minus connections file");
+        assert_eq!(import(&dir, &path, None).unwrap_err().to_string(), "not a TableMinus connections file");
         std::fs::write(&path, r#"{"table_minus_connections": 99, "data": {"saved": {}}}"#).unwrap();
         assert!(import(&dir, &path, None).unwrap_err().to_string().contains("newer"));
     }

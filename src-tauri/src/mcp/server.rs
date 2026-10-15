@@ -86,7 +86,7 @@ async fn authorized(
     let Some(token) = bearer.and_then(|b| b.strip_prefix("Bearer ")).and_then(|b| shared.caller(b.trim())) else {
         let mut reply = Response::new(
             Full::new(Bytes::from_static(
-                b"A Table Minus MCP token is required: Settings > MCP lists them and shows how to connect.",
+                b"A TableMinus MCP token is required: Settings > MCP lists them and shows how to connect.",
             ))
             .boxed(),
         );
@@ -132,7 +132,7 @@ fn tools() -> Vec<Tool> {
         Tool::new(
             "run_query",
             "Runs SQL and returns columns and rows as JSON (rows are capped; use LIMIT). Anything that isn't \
-             provably read-only may need the user's approval in Table Minus, and read-only tokens can't run it.",
+             provably read-only may need the user's approval in TableMinus, and read-only tokens can't run it.",
             schema(&[CONNECTION, ("sql", "The SQL to run; several statements may be separated by semicolons")]),
         ),
     ]
@@ -167,7 +167,7 @@ impl ServerHandler for Tools {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("table-minus", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Read and query the databases the user has set up in Table Minus. Start with list_connections. \
+                "Read and query the databases the user has set up in TableMinus. Start with list_connections. \
                  Writes may wait for the user to allow them in the app.",
             )
     }
@@ -311,7 +311,7 @@ impl Tools {
             let safe = (level.asks(read_only) && level.wants_password()).then_some(super::SafeCheck(password));
             // The lock on open connections isn't held while waiting, so the app stays usable.
             if !self.0.approve(token, name, &sql, safe).await {
-                return Err(Refusal("the user denied the query in Table Minus (or didn't answer in time)".into()));
+                return Err(Refusal("the user denied the query in TableMinus (or didn't answer in time)".into()));
             }
         }
         let limit = match self.0.prefs.max_rows.load(Ordering::Relaxed) {
