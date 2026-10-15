@@ -129,6 +129,33 @@ function loadPrefs(): ExportPrefs {
   return { ...EXPORT_DEFAULTS, ...readPref<Partial<ExportPrefs>>(PREFS_KEY) };
 }
 
+const DELIMITERS = [[",", "Comma"], [";", "Semicolon"], ["\t", "Tab"], ["|", "Pipe"]];
+const delimiterPick = (value: string) => el("select", {}, ...DELIMITERS.map(([v, t]) => option(v, t, v === value)));
+const lineBreakPick = (crlf: boolean) => el("select", {}, option("lf", "LF (macOS, Linux)", !crlf), option("crlf", "CRLF (Windows)", crlf));
+
+/** Settings › Data: the CSV options the next export starts with. The export dialog keeps its last choices in the
+ *  same place, so this is drawn again each time Settings opens. */
+export function csvDefaults(host: HTMLElement) {
+  const p = loadPrefs();
+  const set = (patch: Partial<ExportPrefs>) => writePref(PREFS_KEY, { ...loadPrefs(), ...patch });
+  const delimiter = delimiterPick(p.delimiter);
+  delimiter.onchange = () => set({ delimiter: delimiter.value });
+  const lineBreak = lineBreakPick(p.crlf);
+  lineBreak.onchange = () => set({ crlf: lineBreak.value === "crlf" });
+  const box = (text: string, key: "header" | "quoteAll" | "nullEmpty") => {
+    const c = check(text, p[key]);
+    c.input.onchange = () => set({ [key]: c.input.checked });
+    return c.label;
+  };
+  host.replaceChildren(
+    el("span", { className: "k", textContent: "CSV export" }),
+    el("span", { className: "checks" },
+      el("span", { className: "row-opts" }, labelled("Delimiter", delimiter), labelled("Line break", lineBreak)),
+      box("Field names in the first row", "header"), box("Quote every field (not only where needed)", "quoteAll"),
+      box("NULL as an empty field (otherwise the text NULL)", "nullEmpty")),
+  );
+}
+
 /** The export dialog: what, format and its options, file names; then a folder to write into. */
 export function exportDialog(ctx: Ctx, source: ExportSource) {
   const p = loadPrefs();
@@ -153,8 +180,8 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
   if (source.kind === "rows") d.append(labelled("Rows", rows));
 
   const format = el("select", {}, option("csv", "CSV", p.format === "csv"), option("json", "JSON", p.format === "json"), option("sql", "SQL", p.format === "sql"));
-  const delimiter = el("select", {}, ...[[",", "Comma"], [";", "Semicolon"], ["\t", "Tab"], ["|", "Pipe"]].map(([v, t]) => option(v, t, v === p.delimiter)));
-  const lineBreak = el("select", {}, option("lf", "LF (macOS, Linux)", !p.crlf), option("crlf", "CRLF (Windows)", p.crlf));
+  const delimiter = delimiterPick(p.delimiter);
+  const lineBreak = lineBreakPick(p.crlf);
   const header = check("Field names in the first row", p.header);
   const quoteAll = check("Quote every field (not only where needed)", p.quoteAll);
   const nullEmpty = check("NULL as an empty field (otherwise the text NULL)", p.nullEmpty);

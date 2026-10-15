@@ -26,7 +26,7 @@ import { applyTheme } from "./themes"; // also adds the theme rows to Settings �
 import "./passcode"; // the lock screen, and its rows in Settings › Security
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
-import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
+import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
 import { addCommands, bindings, commands, isMac, onBindingsChanged, setOverrides } from "./commands";
 import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
@@ -3193,6 +3193,7 @@ function showTab(tab: string) {
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const openSettings = () => {
   const d = $<HTMLDialogElement>("settings");
+  csvDefaults($("csv-defaults")); // the export dialog may have changed them since
   if (!d.open) d.showModal();
 };
 
