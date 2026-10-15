@@ -466,21 +466,7 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
             Change::AddIndex { name, columns, unique, method } => {
                 out.push(index_sql(d, &t, name, columns, *unique, *method)?);
             }
-            Change::DropIndex { name } => {
-                let index = current.indexes.iter().find(|i| &i.name == name);
-                let constraint = index.is_some_and(|i| i.constraint);
-                out.push(match d {
-                    Dialect::Pg if constraint => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
-                    // An index lives in its table's schema.
-                    Dialect::Pg => match table.split_once('.') {
-                        Some((schema, _)) => format!("DROP INDEX {}.{}", d.ident(schema), d.ident(name)),
-                        None => format!("DROP INDEX {}", d.ident(name)),
-                    },
-                    Dialect::My if index.is_some_and(|i| i.primary) => format!("ALTER TABLE {t} DROP PRIMARY KEY"),
-                    Dialect::My => format!("DROP INDEX {} ON {t}", d.ident(name)),
-                    Dialect::Lite => format!("DROP INDEX {}", d.ident(name)),
-                });
-            }
+            Change::DropIndex { name } => out.push(drop_index_sql(d, table, &t, current, name)),
             Change::AddForeignKey { name, columns, ref_table, ref_columns, on_update, on_delete } => {
                 if d == Dialect::Lite {
                     return Err(Error::SqliteRebuild("add a foreign key"));
@@ -512,7 +498,7 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 _ => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
             }),
             Change::AddTrigger { name, timing, events, body } => {
-                out.push(trigger_sql(d, &t, name, *timing, events, body)?)
+                out.push(trigger_sql(d, &t, name, *timing, events, body)?);
             }
             Change::DropTrigger { name } => out.push(drop_trigger_sql(d, &t, name)),
             Change::SetPrimaryKey { columns } => out.extend(primary_key_sql(d, &t, current, columns)?),
@@ -521,20 +507,36 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 out.push(format!("ALTER TABLE {t} COLLATE = {}", mysql_option(d, collation)?));
             }
             Change::Rename { to } => rename = Some(rename_sql(d, &t, not_blank(to, "the table needs a name")?)),
-            Change::Comment { comment } => {
-                let comment = blank_is_none(comment.as_ref());
-                out.push(match d {
-                    Dialect::Pg => {
-                        format!("COMMENT ON TABLE {t} IS {}", comment.map_or_else(|| "NULL".into(), |c| d.literal(c)))
-                    }
-                    Dialect::My => format!("ALTER TABLE {t} COMMENT = {}", d.literal(comment.unwrap_or_default())),
-                    Dialect::Lite => return Err(Error::Invalid("SQLite tables have no comments")),
-                });
-            }
+            Change::Comment { comment } => out.push(comment_sql(d, &t, blank_is_none(comment.as_ref()))?),
         }
     }
     out.extend(rename);
     Ok(out)
+}
+
+/// `table` as given (Postgres: schema-qualified), `t` as an identifier.
+fn drop_index_sql(d: Dialect, table: &str, t: &str, current: &Structure, name: &str) -> String {
+    let index = current.indexes.iter().find(|i| i.name == name);
+    let constraint = index.is_some_and(|i| i.constraint);
+    match d {
+        Dialect::Pg if constraint => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
+        // An index lives in its table's schema.
+        Dialect::Pg => match table.split_once('.') {
+            Some((schema, _)) => format!("DROP INDEX {}.{}", d.ident(schema), d.ident(name)),
+            None => format!("DROP INDEX {}", d.ident(name)),
+        },
+        Dialect::My if index.is_some_and(|i| i.primary) => format!("ALTER TABLE {t} DROP PRIMARY KEY"),
+        Dialect::My => format!("DROP INDEX {} ON {t}", d.ident(name)),
+        Dialect::Lite => format!("DROP INDEX {}", d.ident(name)),
+    }
+}
+
+fn comment_sql(d: Dialect, t: &str, comment: Option<&str>) -> Result<String> {
+    Ok(match d {
+        Dialect::Pg => format!("COMMENT ON TABLE {t} IS {}", comment.map_or_else(|| "NULL".into(), |c| d.literal(c))),
+        Dialect::My => format!("ALTER TABLE {t} COMMENT = {}", d.literal(comment.unwrap_or_default())),
+        Dialect::Lite => return Err(Error::Invalid("SQLite tables have no comments")),
+    })
 }
 
 fn rename_sql(d: Dialect, t: &str, to: &str) -> String {
@@ -645,7 +647,7 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
             }
             Change::AddCheck { name, expression } => defs.push(check_sql(d, name, expression)?),
             Change::AddTrigger { name, timing, events, body } => {
-                after.push(trigger_sql(d, t, name, *timing, events, body)?)
+                after.push(trigger_sql(d, t, name, *timing, events, body)?);
             }
             Change::Engine { engine } => options.push(format!(" ENGINE = {}", mysql_option(d, engine)?)),
             Change::Collation { collation } => options.push(format!(" COLLATE = {}", mysql_option(d, collation)?)),
@@ -1926,7 +1928,7 @@ mod tests {
         c.query("insert into t values (3, 5)").await?;
         assert_eq!(c.query("select n from t where id = 3").await?.rows[0][0].as_deref(), Some("1"));
         apply(c, "t", false, &[Change::DropTrigger { name: "t_bump".into() }]).await?;
-        assert!(c.structure("t").await?.triggers.is_empty());
+        assert_eq!(c.structure("t").await?.triggers, []);
         Ok(())
     }
 
@@ -2000,7 +2002,7 @@ mod tests {
         assert_eq!(tr.events, ["INSERT", "UPDATE"]);
         assert_eq!((tr.timing.as_deref(), tr.body.as_deref()), (Some("BEFORE"), Some("bump()")));
         apply(c, "public.t", false, &[Change::DropTrigger { name: "t_bump".into() }]).await?;
-        assert!(c.structure("public.t").await?.triggers.is_empty());
+        assert_eq!(c.structure("public.t").await?.triggers, []);
         Ok(())
     }
 

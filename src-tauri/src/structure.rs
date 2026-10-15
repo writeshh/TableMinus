@@ -297,9 +297,15 @@ impl Conn {
                 &oid_param,
             )
             .await?;
-        // tgtype bits: 1 row-level, 2 before, 4 insert, 8 delete, 16 update, 64 instead of. The function call is
-        // restated only without arguments (they're kept as bytes) and for a row-level trigger without WHEN.
-        let triggers = self
+        let triggers = self.pg_triggers(&oid_param).await?;
+        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment, options: None })
+    }
+
+    /// A Postgres table's triggers, by its oid. tgtype bits: 1 row-level, 2 before, 4 insert, 8 delete, 16 update,
+    /// 64 instead of. The function call is restated only without arguments (they're kept as bytes), and only for a
+    /// row-level trigger without WHEN or a column list.
+    async fn pg_triggers(&mut self, oid: &[Option<&str>]) -> Result<Vec<TriggerInfo>> {
+        Ok(self
             .fetch_with(
                 "select tgname::text, pg_get_triggerdef(oid, true), \
                  case when tgtype::int & 1 = 0 or tgqual is not null or tgattr::text <> '' then null \
@@ -308,13 +314,12 @@ impl Conn {
                    case when tgtype::int & 16 <> 0 then 'UPDATE' end, case when tgtype::int & 8 <> 0 then 'DELETE' end), \
                  case when tgnargs = 0 then tgfoid::regproc::text || '()' end \
                  from pg_trigger where tgrelid = $1::oid and not tgisinternal order by tgname",
-                &oid_param,
+                oid,
             )
             .await?
             .into_iter()
             .map(trigger)
-            .collect();
-        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment, options: None })
+            .collect())
     }
 
     async fn my_structure(&mut self, table: &str) -> Result<Structure> {
