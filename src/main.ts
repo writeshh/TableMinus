@@ -3211,7 +3211,7 @@ $("engine-search").addEventListener("keydown", (e) => e.key === "Enter" && (e.pr
 $("picker-next").onclick = nextFromPicker;
 $("picker-cancel").onclick = () => $<HTMLDialogElement>("picker").close();
 $("editor-cancel").onclick = () => $<HTMLDialogElement>("editor").close();
-$("back").onclick = () => closeWorkspace();
+$("back").onclick = newWorkspace; // the launcher; this workspace stays connected in its tab
 $("filter").addEventListener("input", renderTables);
 
 $("run").onclick = runCurrent;

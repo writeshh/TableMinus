@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { connName, el } from "./dom";
+import { connName, el, revealButton } from "./dom";
 import { guarded } from "./safety";
 import { fileName, matchColumns } from "./transfer";
 import { readPref, writePref } from "./prefs";
@@ -54,7 +54,8 @@ function modal(title: string, className = "") {
 
 // ---------- Jobs ----------
 
-type Shown = { bar: HTMLProgressElement; text: HTMLElement; button: HTMLButtonElement; after?: (d: Done) => void };
+/** `after` runs once the job ends, with the card's Close button to put more beside it. */
+type Shown = { bar: HTMLProgressElement; text: HTMLElement; button: HTMLButtonElement; after?: (d: Done, close: HTMLButtonElement) => void };
 const shown = new Map<number, Shown>();
 const early = new Map<number, Done>(); // job-done can beat the start command's reply for tiny jobs
 let listening: Promise<unknown> | null = null;
@@ -84,7 +85,7 @@ function finish(d: Done) {
   s.button.textContent = "Close";
   s.button.disabled = false;
   s.button.onclick = () => s.button.closest(".job")?.remove();
-  s.after?.(d);
+  s.after?.(d, s.button);
 }
 
 function jobsPanel() {
@@ -92,7 +93,7 @@ function jobsPanel() {
 }
 
 /** Starts a job, asking first when safe mode wants confirmation, and shows it in the jobs panel. */
-async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<string, unknown>, after?: (d: Done) => void) {
+async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<string, unknown>, after?: Shown["after"]) {
   await listenOnce();
   const bar = el("progress", { max: 1, value: 0 });
   const text = el("span", { textContent: "Starting…" });
@@ -209,9 +210,12 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
       : "json";
     d.close();
     const label = source.kind !== "tables" ? what : tables.length === 1 ? tables[0] : `${tables.length} tables`;
-    const reveal = (d: Done) => {
+    const reveal = (d: Done, close: HTMLButtonElement) => {
+      if (d.error) return;
+      const paths = items.map((i) => i.path);
+      close.before(revealButton(paths));
       // Best effort: the export is done whether or not Finder comes up.
-      if (!d.error && ctx.revealExports?.()) revealItemInDir(items.map((i) => i.path)).catch(() => {});
+      if (ctx.revealExports?.()) revealItemInDir(paths).catch(() => {});
     };
     startJob(ctx, `Export ${label}`, "start_export", { export: { items, format: fmtOpts, gzip: prefs.gzip } }, reveal);
   };

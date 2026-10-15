@@ -314,6 +314,8 @@ td.null { color: var(--grid-null); font-style: italic; }
 .filter-row .clone { grid-column: 7; }
 .filter-row .rm { grid-column: 8; }
 .filter-row .add { grid-column: 9; }
+/* Glyph buttons sized like the inputs beside them, in ink rather than the ghost style's muted grey. */
+.filter-row button.ghost { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--fg); font-size: 17px; line-height: 1; }
 .filter-foot { display: flex; gap: 6px; align-items: center; }
 #toggle-filters[aria-pressed="true"] { color: var(--accent); }
 th.sortable { cursor: default; user-select: none; }
@@ -369,6 +371,7 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .job progress { width: 100%; }
 .job-foot { display: flex; gap: 8px; align-items: center; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
 .job-foot .error-text { color: var(--danger); }
+.job-foot .reveal { margin-left: auto; } /* with Close at the right, not in the middle */
 
 /* ---------- Launcher groups, colors, tags (connections.ts) ---------- */
 #conn-sort { border-radius: 999px; padding: 5px 10px; }
