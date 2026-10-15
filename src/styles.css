@@ -236,6 +236,10 @@ dialog.prefs { width: min(600px, calc(100vw - 32px)); padding: 0; overflow: hidd
 .prefs-tabs button[aria-selected="true"] { color: var(--bg); background: var(--fg); }
 .prefs-tabs svg, .ghost svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .ghost svg { width: 16px; height: 16px; vertical-align: -3px; }
+/* The header's icon toolbar: each button runs a command (data-command), the same as its menu item and shortcut */
+.tool-icons { display: inline-flex; gap: 2px; }
+.tool-icons button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; }
+.tool-icons button[aria-pressed="true"] { color: var(--fg); background: var(--press); }
 dialog.prefs section { padding: 22px 28px 8px; display: grid; gap: 14px; }
 dialog.prefs footer { padding: 12px 18px 16px; margin: 0; }
 .row { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 14px; }

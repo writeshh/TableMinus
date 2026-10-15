@@ -27,7 +27,7 @@ import "./passcode"; // the lock screen, and its rows in Settings › Security
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
-import { addCommands, bindings, commands, isMac, onBindingsChanged, setOverrides } from "./commands";
+import { addCommands, bindings, commands, isMac, onBindingsChanged, runCommand, setOverrides } from "./commands";
 import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
 import { initMenu, setRecent } from "./menu";
@@ -788,6 +788,7 @@ function showHeader() {
   btn.textContent = info?.database ? `${info.database} ▾` : "Choose database ▾";
   btn.title = `Open a database (${keyLabel("open-database")})`;
   $<HTMLInputElement>("filter").hidden = !tables.length;
+  $("users-button").hidden = c.kind === "sqlite"; // one file, no users
   renderWorkspaceButton();
 }
 
@@ -3437,6 +3438,9 @@ addCommands([
 ]);
 initMenu();
 initHiding();
+// The header's icon toolbar runs commands, so a button does what its menu item and shortcut do. Users only exists
+// where there are users to manage.
+for (const b of document.querySelectorAll<HTMLButtonElement>(".tool-icons [data-command]")) b.onclick = () => void runCommand(b.dataset.command!);
 divider({
   host: $("workspace"), className: "side-edge", variable: "--side-w", pref: "layout.sidebar", axis: "x", sign: 1, min: 180,
   max: () => Math.min(560, window.innerWidth / 2), size: () => $("workspace").querySelector("aside")!.getBoundingClientRect().width,

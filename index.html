@@ -389,6 +389,13 @@
         <header id="where">
           <span id="where-conn" class="where-conn" role="button" tabindex="0" title="Workspaces"></span>
           <span class="spacer"></span>
+          <span class="tool-icons" role="toolbar" aria-label="Workspace tools">
+            <button class="ghost" data-command="open-file" title="Open a SQL file" aria-label="Open a SQL file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10V19H3z" /></svg></button>
+            <button class="ghost" data-command="reload-tab" title="Reload the tab" aria-label="Reload the tab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v5h-5" /></svg></button>
+            <button class="ghost" data-command="toggle-row-detail" id="row-detail-button" title="Row detail" aria-label="Row detail" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2" /><path d="M15 4.5v15" /></svg></button>
+            <button class="ghost" data-command="metrics-board" title="Metrics board" aria-label="Metrics board"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20v-8M12 20V5M19 20v-5" /></svg></button>
+            <button class="ghost" data-command="users" id="users-button" title="Users and privileges" aria-label="Users and privileges"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5" /><path d="M5 20c1.2-3.6 3.8-5.5 7-5.5s5.8 1.9 7 5.5" /></svg></button>
+          </span>
           <span id="pill" class="pill" role="button" tabindex="0" title="Connection info"></span>
           <button id="db-button" class="ghost" title="Open a database"></button>
           <button id="tools-button" class="ghost" title="Backup, restore and processes">Tools ▾</button>

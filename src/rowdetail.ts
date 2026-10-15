@@ -13,8 +13,10 @@ let last: { tab: EditTab | null; ri: number | null } = { tab: null, ri: null };
 const NULL_OPTION = "\u0000null";
 const panel = () => $("row-detail");
 
+/** Switches the sidebar on or off (it shows when a table row is selected), with the toolbar button's pressed look. */
 export function toggleRowDetail() {
   open = !open;
+  document.getElementById("row-detail-button")?.setAttribute("aria-pressed", String(open));
   shown = null;
   syncRowDetail(last.tab, last.ri);
 }
