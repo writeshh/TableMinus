@@ -801,6 +801,7 @@ pub fn run() -> tauri::Result<()> {
             console::console_clear,
             set_safety,
             safety::touch_id_available,
+            safety::batch_grant,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,

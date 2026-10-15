@@ -2108,6 +2108,15 @@ async function execute(statements: string[]) {
           break;
         }
         approved = next;
+        // Touch ID for several statements: one prompt for the batch, kept as a grant the rest of it sends.
+        if (next.unlock === "touch_id" && statements.length - i > 1) {
+          try {
+            approved = { confirmed: true, unlock: { grant: await invoke<string>("batch_grant") } };
+          } catch (err) {
+            stopped = i ? `Stopped before statement ${i + 1}: ${err}` : String(err);
+            break;
+          }
+        }
         i--; // run this statement again, approved
         continue;
       }

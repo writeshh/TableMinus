@@ -159,7 +159,8 @@ fn hash(value: &str) -> String {
     hex(&Sha256::digest(value.as_bytes()))
 }
 
-fn random_hex(len: usize) -> Result<String> {
+/// `len` random bytes as hex: MCP tokens, and safe mode's batch grants.
+pub(crate) fn random_hex(len: usize) -> Result<String> {
     let mut bytes = vec![0u8; len];
     getrandom::fill(&mut bytes).map_err(|_| Error::Invalid("the system random number generator failed"))?;
     Ok(hex(&bytes))
