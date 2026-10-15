@@ -1,4 +1,4 @@
-// Saved queries (favorites): the sidebar's Queries tab. Each connection has its own, in folders, kept in
+// Saved queries (favorites): a collapsible section at the top of the sidebar's History pane. Each connection has its own, in folders, kept in
 // favorites.json next to the SQL tabs (Settings › Locations, so a shared folder shares them). A favorite with a
 // keyword is also an autocomplete snippet in the editor.
 
@@ -38,29 +38,35 @@ function save(s: Saved) {
   render();
 }
 
-// ---------- The Queries tab ----------
+// ---------- The Saved queries section ----------
 
-const search = el("input", { type: "search", placeholder: "Search saved queries" });
-const newFolder = el("button", { type: "button", className: "ghost", textContent: "New folder", title: "Add a folder" });
+// One search box for the pane: the history's also filters the saved queries.
+const search = $<HTMLInputElement>("history-search");
+const newFolder = el("button", { type: "button", className: "ghost", textContent: "+ Folder", title: "Add a folder" });
+const count = el("span", { className: "count" });
 const list = el("div", { className: "favorites" });
 const none = el("p", { className: "hint", textContent: "Save a query with Save as Favorite (right-click a history entry, or the command) and it appears here." });
-const pane = el("div", { id: "side-queries", className: "side-pane", hidden: true },
-  el("div", { className: "favorites-head" }, search, newFolder), list, none);
-$("side-history").after(pane);
-const tabButton = el("button", { textContent: "Queries", title: "Saved queries" });
-tabButton.dataset.side = "queries";
-$("side-history").parentElement!.querySelector(".side-tabs")!.querySelector('[data-side="history"]')!.after(tabButton);
+const section = el("details", { className: "saved-queries", open: true },
+  el("summary", {}, el("span", { textContent: "Saved queries" }), count, el("span", { className: "spacer" }), newFolder), list, none);
+search.closest(".history-head")!.after(section, el("div", { className: "side-heading", textContent: "History" }));
+
+/** Opens the section and brings it into view (Navigate › Saved Queries). */
+export function showSaved() {
+  section.open = true;
+  section.scrollIntoView({ block: "nearest" });
+}
 
 export function initFavorites(c: Ctx) {
   ctx = c;
-  search.oninput = render;
-  newFolder.onclick = async () => {
+  search.addEventListener("input", render);
+  newFolder.onclick = async (e) => {
+    e.preventDefault(); // a button inside <summary> would also fold the section
     const name = await askName("New folder", "");
     if (name) save({ ...load(), folders: [...load().folders, name] });
   };
 }
 
-/** Redraws the tab for the active connection, and hands its snippets to the editor. */
+/** Redraws the section for the active connection, and hands its snippets to the editor. */
 export function render() {
   if (!ctx) return;
   const s = load();
@@ -95,6 +101,7 @@ export function render() {
     ...shown.filter((f) => !f.folder).map(row),
   );
   none.hidden = s.items.length > 0 || folders.length > 0;
+  count.textContent = String(s.items.length);
 }
 
 /** A one-field dialog (the webview has no prompt()); resolves to the trimmed name, or null when cancelled. */

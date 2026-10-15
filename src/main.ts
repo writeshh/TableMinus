@@ -39,7 +39,7 @@ import { label } from "./keys";
 import * as launcher from "./connections";
 import { COLORS, GROUP_ICONS, tagColor, tagLabel } from "./connections";
 import "./console"; // the console log panel and its command
-import { addFavorite, initFavorites, render as renderFavorites } from "./favorites"; // also adds the sidebar's Queries tab
+import { addFavorite, initFavorites, render as renderFavorites, showSaved } from "./favorites"; // also adds the History pane's Saved queries
 import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, searchRows, type QueryResult, type ResultTab, type Results } from "./results";
 import "./workspace.css";
 import { chartPanel } from "./charts";
@@ -1320,7 +1320,7 @@ function tableRow(t: string, label: string, first: MenuItem[], last: MenuItem[])
   return li;
 }
 
-type Side = "items" | "history" | "queries" | "search";
+type Side = "items" | "history" | "search";
 function showSide(which: Side) {
   for (const b of document.querySelectorAll<HTMLElement>(".side-tabs button")) b.setAttribute("aria-pressed", String(b.dataset.side === which));
   for (const p of document.querySelectorAll<HTMLElement>("aside > .side-pane")) p.hidden = p.id !== `side-${which}`;
@@ -3292,7 +3292,7 @@ addCommands([
   { id: "shift-left", label: "Shift Left", menu: "Edit", keys: ["Mod+BracketLeft"], when: onSqlTab, run: () => editor.shift(false) },
   { id: "save-favorite", label: "Save Query as Favorite…", menu: "Edit", when: onSqlTab,
     run: () => addFavorite(editor.current().trim() || (current() as SqlTab).sql) },
-  { id: "saved-queries", label: "Saved Queries", menu: "Navigate", when: inWorkspace, run: () => showSide("queries") },
+  { id: "saved-queries", label: "Saved Queries", menu: "Navigate", when: inWorkspace, run: () => (showSide("history"), showSaved()) },
   { id: "filter", label: "Filter Rows", menu: "Edit", keys: ["Mod+KeyF"], when: () => inWorkspace() && current()?.kind === "table",
     run: () => toggleFilters(true) },
   { id: "font-bigger", label: "Increase Font Size", menu: "View", keys: ["Mod+Equal", "Mod+Shift+Equal"], when: inWorkspace,
