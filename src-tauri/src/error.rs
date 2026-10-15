@@ -97,6 +97,11 @@ pub enum Error {
     /// MySQL commits DDL statement by statement, so an error can come after some statements took effect.
     #[error("{source}\n\nMySQL commits each DDL statement, so these had already run:\n{ran}")]
     DdlPartlyApplied { ran: String, source: Box<Error> },
+    /// A MySQL routine was dropped to be replaced, the new definition failed, and the old one is back.
+    #[error("{0}\n\nNothing changed: the original definition was put back.")]
+    DdlRestored(Box<Error>),
+    #[error("{source}\n\nPutting the original definition back failed too ({restore}). It was:\n\n{original}")]
+    DdlRestoreFailed { source: Box<Error>, restore: Box<Error>, original: String },
     #[error("can't write {path}: {source}")]
     Write { path: String, source: std::io::Error },
     /// A backup or restore tool failed; its own error lines.

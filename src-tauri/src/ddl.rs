@@ -559,7 +559,7 @@ impl Conn {
         alter_sql(self.dialect(), table, current.as_ref(), changes)
     }
 
-    async fn is_view(&mut self, table: &str) -> Result<bool> {
+    pub(crate) async fn is_view(&mut self, table: &str) -> Result<bool> {
         let rows = match self {
             Conn::Pg(_) => {
                 let (schema, name) = table.split_once('.').unwrap_or(("public", table));
@@ -889,6 +889,22 @@ impl Conn {
             }
         }
         Ok(())
+    }
+}
+
+impl Conn {
+    /// [`Conn::run_ddl`], and when MySQL fails partway (a routine dropped to be created again, whose new definition
+    /// failed), runs `restore` to put back what was there.
+    pub async fn run_ddl_or_restore(&mut self, statements: &[String], restore: &[String]) -> Result<()> {
+        match self.run_ddl(statements).await {
+            Err(Error::DdlPartlyApplied { source, .. }) if !restore.is_empty() => {
+                Err(match self.run_ddl(restore).await {
+                    Ok(()) => Error::DdlRestored(source),
+                    Err(e) => Error::DdlRestoreFailed { source, restore: Box::new(e), original: restore.join(";\n\n") },
+                })
+            }
+            r => r,
+        }
     }
 }
 

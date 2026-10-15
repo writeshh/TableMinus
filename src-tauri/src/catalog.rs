@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// The most matching rows "search in database" counts in one table; past this it reports "1,000+".
 pub const SEARCH_CAP: u32 = 1000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ItemKind {
     Schema,

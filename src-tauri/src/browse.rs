@@ -118,14 +118,17 @@ impl Conn {
 
     /// One filter on one column. `as_text` compares the column's text form, for "any column" filters where
     /// a value typed for one column would be invalid for another's type.
-    fn compare(&self, column: &str, as_text: bool, f: &Filter, params: &mut Vec<String>) -> Result<String> {
+    fn compare(&self, column: &str, as_text: bool, f: &Filter, params: &mut Values<'_>) -> Result<String> {
         let typed = self.ident(column);
         let text = self.text_expr(column);
         let e = if as_text { &text } else { &typed };
         let like = self.like();
-        let mut bind = |v: String| {
-            params.push(v);
-            self.param(params.len())
+        let mut bind = |v: String| match params {
+            Values::Bound(list) => {
+                list.push(v);
+                self.param(list.len())
+            }
+            Values::Shown => self.dialect().literal(&v),
         };
         let pattern = |prefix, suffix| like_pattern(&f.value, prefix, suffix);
         Ok(match f.op {
@@ -161,7 +164,7 @@ impl Conn {
         })
     }
 
-    fn condition(&self, f: &Filter, columns: &[String], params: &mut Vec<String>) -> Result<String> {
+    fn condition(&self, f: &Filter, columns: &[String], params: &mut Values<'_>) -> Result<String> {
         if f.op == Op::Raw {
             if f.value.trim().is_empty() {
                 return Err(Error::Invalid("a raw SQL filter needs a condition"));
@@ -180,15 +183,13 @@ impl Conn {
         }
     }
 
-    /// The queries behind a browse request, without paging: its rows (filtered and sorted) and their count.
-    pub(crate) async fn select(&mut self, req: &Browse) -> Result<Select> {
+    /// The columns, ` where …` and ` order by …` of a browse request; values go into `params`.
+    async fn clauses(&mut self, req: &Browse, params: &mut Values<'_>) -> Result<(Vec<String>, String, String)> {
         let columns: Vec<String> = self.columns(&req.table).await?.into_iter().map(|c| c.name).collect();
         if columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
         }
-        let mut params = Vec::new();
-        let conditions =
-            req.filters.iter().map(|f| self.condition(f, &columns, &mut params)).collect::<Result<Vec<_>>>()?;
+        let conditions = req.filters.iter().map(|f| self.condition(f, &columns, params)).collect::<Result<Vec<_>>>()?;
         let filter = if conditions.is_empty() {
             String::new()
         } else {
@@ -203,6 +204,13 @@ impl Conn {
             order.push(format!("{} {}", self.ident(&s.column), if s.desc { "desc" } else { "asc" }));
         }
         let order = if order.is_empty() { String::new() } else { format!(" order by {}", order.join(", ")) };
+        Ok((columns, filter, order))
+    }
+
+    /// The queries behind a browse request, without paging: its rows (filtered and sorted) and their count.
+    pub(crate) async fn select(&mut self, req: &Browse) -> Result<Select> {
+        let mut params = Vec::new();
+        let (columns, filter, order) = self.clauses(req, &mut Values::Bound(&mut params)).await?;
         // Postgres's binary protocol would need a decoder per type; every type can be cast to text instead.
         let select: Vec<String> = columns
             .iter()
@@ -222,6 +230,14 @@ impl Conn {
             params,
             identity: identity.is_some(),
         })
+    }
+
+    /// The page a browse request reads, as SQL to show the user (the filter bar's "SQL"): values are written in
+    /// as quoted literals. Only for display; running uses [`Conn::select`], which binds them.
+    pub async fn filter_sql(&mut self, req: &Browse) -> Result<String> {
+        let (_, filter, order) = self.clauses(req, &mut Values::Shown).await?;
+        let from = self.table_ident(&req.table);
+        Ok(format!("select * from {from}{filter}{order} limit {} offset {}", req.limit.min(MAX_PAGE), req.offset))
     }
 
     /// The expression for a row's identity in `from`, if it has one: views and SQLite's WITHOUT ROWID tables
@@ -252,6 +268,12 @@ impl Conn {
         let total = if req.count { self.count(&s).await? } else { None };
         Ok(Page { columns: s.columns, rows, total, ids })
     }
+}
+
+/// Where filter values go: bound as parameters to run the query, or written in as literals to show it.
+enum Values<'p> {
+    Bound(&'p mut Vec<String>),
+    Shown,
 }
 
 /// The SQL for a browse request: see [`Conn::select`].
@@ -424,6 +446,24 @@ mod tests {
             let mut c = people().await;
             assert!(c.browse(&request(vec![filter(None, Op::Raw, "1=1; drop table people")])).await.is_err());
             assert_eq!(ids(&mut c, &request(vec![])).await.len(), 4, "the table is still there");
+        });
+    }
+
+    #[test]
+    fn filter_sql_should_show_values_as_escaped_literals() {
+        tauri::async_runtime::block_on(async {
+            let mut c = people().await;
+            let req = Browse {
+                limit: 300,
+                ..request(vec![filter(Some("name"), Op::Eq, "O'Hara"), filter(None, Op::IsNull, "")])
+            };
+            let sql = c.filter_sql(&req).await.unwrap();
+            assert_eq!(
+                sql,
+                "select * from \"people\" where \"name\" = 'O''Hara' and (\"id\" is null or \"name\" is null or \
+                 \"age\" is null or \"note\" is null) order by \"id\" asc limit 300 offset 0"
+            );
+            assert_eq!(c.fetch_with(&sql, &[]).await.unwrap().len(), 0, "the shown SQL runs as is");
         });
     }
 

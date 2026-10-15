@@ -14,6 +14,7 @@ mod jobs;
 mod launcher;
 mod locations;
 mod mcp;
+mod objects;
 mod passcode;
 mod processes;
 mod readonly;
@@ -596,6 +597,14 @@ async fn structure_sql(
     live.check(r)
 }
 
+/// The filter bar's "SQL": the page a browse request reads, with its values written in as literals for display.
+#[tauri::command]
+async fn filter_sql(open: State<'_, Open>, name: String, request: browse::Browse) -> Result<String> {
+    let mut live = open.get(&name).await?;
+    let r = live.conn.filter_sql(&request).await;
+    live.check(r)
+}
+
 /// The statements a table operation (rename, clone, truncate, drop…) would run, for the confirmation.
 #[tauri::command]
 async fn table_op_sql(open: State<'_, Open>, name: String, op: ddl::TableOp) -> Result<Vec<String>> {
@@ -629,10 +638,11 @@ async fn run_ddl(
     statements: Vec<String>,
     confirmed: bool,
     unlock: Option<safety::Unlock>,
+    restore: Option<Vec<String>>,
 ) -> Result<()> {
     guard(&open, &name, |_| false, confirmed, unlock.as_ref()).await?;
     let mut live = open.get(&name).await?;
-    let r = live.conn.run_ddl(&statements).await;
+    let r = live.conn.run_ddl_or_restore(&statements, restore.as_deref().unwrap_or_default()).await;
     live.check(r)
 }
 
@@ -756,6 +766,7 @@ pub fn run() -> tauri::Result<()> {
             disconnect,
             run_query,
             browse,
+            filter_sql,
             schema,
             read_text_file,
             write_text_file,
@@ -824,7 +835,16 @@ pub fn run() -> tauri::Result<()> {
             users::users,
             users::user_privileges,
             users::user_sql,
-            users::apply_user_edit
+            users::apply_user_edit,
+            objects::item_script,
+            objects::drop_item_sql,
+            objects::view_definition,
+            objects::save_view_sql,
+            objects::routine_definitions,
+            objects::new_routine,
+            objects::save_routine_sql,
+            objects::sequence,
+            objects::save_sequence_sql
         ])
         .build(tauri::generate_context!())?
         .run(launcher::on_event);
