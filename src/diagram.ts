@@ -1,6 +1,7 @@
-// The ER diagram window (TablePlus's DiagramWindow): a schema's tables and views as boxes with their columns,
-// foreign-key lines from referencing to referenced columns, drag to arrange, auto layout, zoom and pan, search,
-// diagram files, and PNG/SVG export. Geometry and the file format live in diagram-layout.ts; the data comes from the
+// The ER diagram window (TablePlus's DiagramWindow): a schema's tables and views as boxes with their columns (and
+// stubs for tables in other schemas that keys point at), foreign-key lines from referencing to referenced columns
+// routed around the boxes, colours and notes on tables, drag to arrange, auto layout, zoom and pan, search, diagram
+// files, PNG/SVG export and printing. Geometry and the file format live in diagram-layout.ts; the data comes from the
 // `diagram` command (diagram.rs) in one round trip.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -8,7 +9,8 @@ import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plug
 import { connName, el } from "./dom";
 import { modal } from "./backup";
 import {
-  HEAD, MAX_COLUMNS, ROW, boxSize, columnY, fromFile, layout, toFile, type Diagram, type Link, type Point, type Table,
+  HEAD, MAX_COLUMNS, MAX_NOTE, ROW, TABLE_COLOURS, boxSize, columnY, fromFile, layout, roundedPath, route, toFile,
+  type Decoration, type Diagram, type Link, type Point, type Rect, type Table, type TableColour,
 } from "./diagram-layout";
 import "./diagram.css";
 
@@ -32,8 +34,8 @@ const DIAGRAM_FILES = [{ name: "TableMinus diagram", extensions: ["json"] }];
 const NS = "http://www.w3.org/2000/svg";
 
 type View = { zoom: number; x: number; y: number };
-/** One schema's diagram: where each shown table sits, and the zoom and scroll. */
-type State = { schema: string | null; pos: Map<string, Point>; view: View; path?: string };
+/** One schema's diagram: where each shown table sits, how each looks, and the zoom and scroll. */
+type State = { schema: string | null; pos: Map<string, Point>; looks: Map<string, Decoration>; view: View; path?: string };
 /** Kept per session and schema until the app quits, so closing the window or opening a table loses nothing. */
 const states = new Map<string, State>();
 const stateKey = (conn: string, schema: string | null) => `${conn}\u0000${schema ?? ""}`;
@@ -63,6 +65,16 @@ const SVG_STYLE = `
 .dg-sel .dg-box { stroke: var(--accent); stroke-width: 2; }
 .dg-match .dg-box { stroke: var(--warn); stroke-width: 2; }
 .dg-dim { opacity: 0.35; }
+.dg-external .dg-box { stroke-dasharray: 2 3; }
+.dg-external .dg-title { fill: var(--muted); }
+.dg-head.c-blue { fill: #0b87d1; fill-opacity: 0.3; }
+.dg-head.c-pink { fill: #f4afc6; fill-opacity: 0.55; }
+.dg-head.c-yellow { fill: #fdd535; fill-opacity: 0.5; }
+.dg-head.c-orange { fill: #eb5e12; fill-opacity: 0.35; }
+.dg-head.c-green { fill: #2fa36b; fill-opacity: 0.32; }
+.dg-head.c-purple { fill: #7a5cc4; fill-opacity: 0.32; }
+.dg-note rect { fill: #fdd535; fill-opacity: 0.22; stroke: #c9a600; stroke-opacity: 0.5; }
+.dg-note text { font: italic 11px -apple-system, system-ui, sans-serif; fill: var(--fg); }
 `;
 const COLOURS = ["--fg", "--bg", "--muted", "--line", "--accent", "--side", "--warn"];
 
@@ -75,7 +87,7 @@ export async function openDiagram(schema: string | null, focus?: string) {
   const pg = conn.kind === "postgres";
   const label = (name: string) => (pg ? name.slice(name.indexOf(".") + 1) : name);
 
-  let st: State = states.get(stateKey(key, schema)) ?? { schema, pos: new Map(), view: { zoom: 1, x: 40, y: 40 } };
+  let st: State = states.get(stateKey(key, schema)) ?? { schema, pos: new Map(), looks: new Map(), view: { zoom: 1, x: 40, y: 40 } };
   let data: Diagram = { tables: [], links: [] };
   let byName = new Map<string, Table>();
   let selected: string | null = null;
@@ -124,6 +136,7 @@ export async function openDiagram(schema: string | null, focus?: string) {
     button("Save…", "Save the tables and their positions to a file", () => saveFile()),
     button("Export PNG…", "Save the diagram as a picture", () => exportImage("png")),
     button("Export SVG…", "Save the diagram as a vector drawing", () => exportImage("svg")),
+    button("Print…", "Print the diagram", () => printDiagram()),
     el("span", { className: "spacer" }),
     Object.assign(button("Close", "", () => d.close()), { className: "primary" }),
   );
@@ -138,8 +151,18 @@ export async function openDiagram(schema: string | null, focus?: string) {
 
   const fetchDiagram = (schemaName: string | null) => ctx.call<Diagram>("diagram", { name: key, schema: schemaName });
   function use(got: Diagram) {
-    data = got;
-    byName = new Map(got.tables.map((t) => [t.name, t]));
+    // A key into another schema gets a stub of that table (the columns it references), so its line has an end.
+    const names = new Set(got.tables.map((t) => t.name));
+    const stubs = new Map<string, Table>();
+    for (const l of got.links) {
+      if (names.has(l.ref_table) || !l.ref_table) continue;
+      const stub = stubs.get(l.ref_table) ?? { name: l.ref_table, view: false, external: true, columns: [] };
+      for (const c of l.ref_columns.filter(Boolean))
+        if (!stub.columns.some((x) => x.name === c)) stub.columns.push({ name: c, data_type: "", primary: false, nullable: true });
+      stubs.set(l.ref_table, stub);
+    }
+    data = { tables: [...got.tables, ...stubs.values()], links: got.links };
+    byName = new Map(data.tables.map((t) => [t.name, t]));
     found.replaceChildren(...got.tables.map((t) => el("option", { value: label(t.name) })));
   }
 
@@ -149,27 +172,31 @@ export async function openDiagram(schema: string | null, focus?: string) {
     zoomLabel.textContent = `${Math.round(st.view.zoom * 100)}%`;
   }
 
-  function linkPath(l: Link, i: number): string | null {
+  /** Every shown table's box (its note included), for routing lines around them. */
+  const boxes = () => shownTables().map((t): Rect & { name: string } => ({ name: t.name, ...st.pos.get(t.name)!, ...boxSize(t), h: boxSize(t).h + noteHeight(t.name) }));
+
+  function linkPath(l: Link, i: number, around: (Rect & { name: string })[]): string | null {
     const [a, b] = [byName.get(l.table), byName.get(l.ref_table)];
     const [pa, pb] = [st.pos.get(l.table), st.pos.get(l.ref_table)];
     if (!a || !b || !pa || !pb) return null;
     const [sa, sb] = [boxSize(a), boxSize(b)];
     const y1 = pa.y + columnY(a, l.columns[i]);
     const y2 = pb.y + columnY(b, l.ref_columns[i] ?? "");
-    let [x1, x2, out1, out2] = [pa.x + sa.w, pb.x, 1, -1]; // referenced table to the right
+    let [x1, x2, out1, out2]: [number, number, 1 | -1, 1 | -1] = [pa.x + sa.w, pb.x, 1, -1]; // referenced table to the right
     if (a === b) [x1, x2, out1, out2] = [pa.x + sa.w, pa.x + sa.w, 1, 1];
     else if (pb.x + sb.w < pa.x) [x1, x2, out1, out2] = [pa.x, pb.x + sb.w, -1, 1];
     else if (pb.x <= pa.x + sa.w) [x1, x2, out1, out2] = [pa.x, pb.x, -1, -1]; // overlapping columns: loop round the left
-    const bend = Math.max(36, Math.abs(x2 - x1) / 2);
-    return `M${x1} ${y1} C${x1 + out1 * bend} ${y1} ${x2 + out2 * bend} ${y2} ${x2} ${y2}`;
+    const others = around.filter((r) => r.name !== a.name && r.name !== b.name);
+    return roundedPath(route({ x: x1, y: y1 }, out1, { x: x2, y: y2 }, out2, others));
   }
 
   function drawLinks() {
     linksG.replaceChildren();
+    const around = boxes();
     for (const l of data.links) {
       const hi = selected !== null && (l.table === selected || l.ref_table === selected);
       l.columns.forEach((col, i) => {
-        const path = linkPath(l, i);
+        const path = linkPath(l, i, around);
         if (!path) return;
         const p = svg("path", {
           d: path, class: hi ? "dg-link hi" : "dg-link",
@@ -181,15 +208,43 @@ export async function openDiagram(schema: string | null, focus?: string) {
     }
   }
 
+  /** A note's lines, wrapped to its table's box (at most four, the last cut short). */
+  function noteLines(name: string): string[] {
+    const note = st.looks.get(name)?.note?.trim();
+    const t = byName.get(name);
+    if (!note || !t) return [];
+    const per = Math.max(10, Math.floor((boxSize(t).w - 16) / 6.4));
+    const lines: string[] = [];
+    for (const word of note.split(/\s+/)) {
+      const last = lines.length - 1;
+      if (last >= 0 && lines[last].length + 1 + word.length <= per) lines[last] += ` ${word}`;
+      else lines.push(word.length > per ? `${word.slice(0, per - 1)}…` : word);
+    }
+    return lines.length > 4 ? [...lines.slice(0, 3), `${lines[3].slice(0, per - 1)}…`] : lines;
+  }
+  const noteHeight = (name: string) => {
+    const n = noteLines(name).length;
+    return n ? 6 + n * 15 + 8 : 0;
+  };
+
   function tableBox(t: Table, p: Point) {
     const { w, h } = boxSize(t);
     const fks = new Set(data.links.filter((l) => l.table === t.name).flatMap((l) => l.columns));
-    const g = svg("g", { class: `dg-table${t.view ? " dg-view" : ""}`, transform: `translate(${p.x} ${p.y})` },
+    const look = st.looks.get(t.name);
+    const head = look?.color ? `dg-head c-${look.color}` : "dg-head";
+    const kind = t.external ? "Table in another schema" : t.view ? "View" : "Table";
+    const g = svg("g", { class: `dg-table${t.view ? " dg-view" : ""}${t.external ? " dg-external" : ""}`, transform: `translate(${p.x} ${p.y})` },
       svg("rect", { class: "dg-box", width: w, height: h, rx: 6 }),
-      svg("rect", { class: "dg-head", x: 0.5, y: 0.5, width: w - 1, height: HEAD - 0.5, rx: 6 }),
-      svg("rect", { class: "dg-head", x: 0.5, y: HEAD - 6, width: w - 1, height: 6 }),
-      svg("text", { class: "dg-title", x: 10, y: 18 }, `${t.view ? "◇ " : ""}${label(t.name)}`, svg("title", {}, `${t.view ? "View" : "Table"} ${t.name}`)),
+      svg("rect", { class: head, x: 0.5, y: 0.5, width: w - 1, height: HEAD - 0.5, rx: 6 }),
+      svg("rect", { class: head, x: 0.5, y: HEAD - 6, width: w - 1, height: 6 }),
+      svg("text", { class: "dg-title", x: 10, y: 18 }, `${t.view ? "◇ " : t.external ? "↗ " : ""}${t.external ? t.name : label(t.name)}`, svg("title", {}, `${kind} ${t.name}`)),
     );
+    const lines = noteLines(t.name);
+    if (lines.length) {
+      const note = svg("g", { class: "dg-note" }, svg("rect", { x: 0, y: h + 6, width: w, height: lines.length * 15 + 8, rx: 5 }),
+        ...lines.map((line, i) => svg("text", { x: 8, y: h + 6 + 15 + i * 15 }, line)), svg("title", {}, look?.note ?? ""));
+      g.append(note);
+    }
     g.dataset.name = t.name;
     t.columns.slice(0, MAX_COLUMNS).forEach((c, i) => {
       const y = HEAD + i * ROW + 17;
@@ -228,7 +283,7 @@ export async function openDiagram(schema: string | null, focus?: string) {
       const [p, t] = [st.pos.get(n), byName.get(n)];
       if (!p || !t) continue;
       const { w, h } = boxSize(t);
-      [x0, y0, x1, y1] = [Math.min(x0, p.x), Math.min(y0, p.y), Math.max(x1, p.x + w), Math.max(y1, p.y + h)];
+      [x0, y0, x1, y1] = [Math.min(x0, p.x), Math.min(y0, p.y), Math.max(x1, p.x + w), Math.max(y1, p.y + h + noteHeight(n))];
     }
     return x0 === Infinity ? null : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
@@ -363,8 +418,25 @@ export async function openDiagram(schema: string | null, focus?: string) {
     selected = name;
     draw();
     const more = related(name).filter((n) => !st.pos.has(n));
+    const look = st.looks.get(name) ?? {};
+    const setLook = (change: Decoration) => {
+      const next = { ...look, ...change };
+      if (!next.color) delete next.color;
+      if (!next.note) delete next.note;
+      if (Object.keys(next).length) st.looks.set(name, next);
+      else st.looks.delete(name);
+      draw();
+    };
+    // A second menu at the same spot, standing in for a submenu.
+    const colours = () => ctx.menu(e, [
+      [`${look.color ? "    " : "✓ "}None`, () => setLook({ color: undefined })],
+      ...TABLE_COLOURS.map((c): MenuItem => [`${look.color === c ? "✓ " : "    "}${c[0].toUpperCase()}${c.slice(1)}`, () => setLook({ color: c as TableColour })]),
+    ]);
     ctx.menu(e, [
       ["Open table", () => (d.close(), ctx.openTable(name))],
+      "-",
+      ["Colour ›", colours],
+      [look.note ? "Edit note…" : "Add note…", () => void editNote(look.note ?? "").then((note) => note !== null && setLook({ note }))],
       "-",
       [more.length ? `Add related tables (${more.length})` : "No related tables to add", () => addTables(more)],
       ["Remove from diagram", () => removeTable(name)],
@@ -454,7 +526,7 @@ export async function openDiagram(schema: string | null, focus?: string) {
     const path = await saveFileDialog({ defaultPath: st.path ?? `${connName(key)}${st.schema ? `-${st.schema}` : ""} diagram.json`, filters: DIAGRAM_FILES });
     if (!path) return;
     try {
-      await invoke("write_text_file", { path, text: toFile(st.schema, st.pos) });
+      await invoke("write_text_file", { path, text: toFile(st.schema, st.pos, st.looks) });
       st.path = path;
       setStatus(`Saved ${path}`, "done");
     } catch (e) {
@@ -471,12 +543,14 @@ export async function openDiagram(schema: string | null, focus?: string) {
       const schemaName = pg ? file.schema : null;
       const got = schemaName === st.schema ? data : await fetchDiagram(schemaName);
       const names = new Set(got.tables.map((t) => t.name));
-      const pos = new Map(file.tables.filter((t) => names.has(t.name)).map((t) => [t.name, { x: t.x, y: t.y }]));
+      const kept = file.tables.filter((t) => names.has(t.name));
+      const pos = new Map(kept.map((t) => [t.name, { x: t.x, y: t.y }]));
+      const looks = new Map(kept.filter((t) => t.color || t.note).map((t): [string, Decoration] => [t.name, { color: t.color, note: t.note }]));
       const missing = file.tables.length - pos.size;
       // Everything's read: now switch. The diagram that was showing stays for next time.
       states.set(stateKey(key, st.schema), st);
       use(got);
-      st = { schema: schemaName, pos, view: st.view, path };
+      st = { schema: schemaName, pos, looks, view: st.view, path };
       selected = null;
       showSchema();
       draw();
@@ -516,6 +590,34 @@ export async function openDiagram(schema: string | null, focus?: string) {
     for (const p of copy.querySelectorAll("[marker-start]")) (p.setAttribute("marker-start", "url(#dg-dot)"), p.setAttribute("marker-end", "url(#dg-arrow)"));
     copy.insertBefore(svg("rect", { x: b.x - m, y: b.y - m, width: w, height: h, fill: background }), copy.querySelector(".dg-world"));
     return { text: new XMLSerializer().serializeToString(copy), w, h };
+  }
+
+  /** Prints the standalone drawing: it's put in the page for print only (diagram.css), and stays until the next. */
+  function printDiagram() {
+    const image = standaloneSvg();
+    if (!image) return setStatus("There's nothing on the diagram to print.", "error");
+    document.querySelector(".dg-print")?.remove();
+    const sheet = el("div", { className: "dg-print" });
+    sheet.innerHTML = image.text; // our own serialized SVG, built from the canvas above
+    document.body.append(sheet);
+    window.print();
+  }
+
+  /** The note dialog: resolves to the note (empty to remove it), or null when cancelled. */
+  function editNote(note: string): Promise<string | null> {
+    const text = el("textarea", { value: note, rows: 4, maxLength: MAX_NOTE, placeholder: "A note shown under the table" });
+    const p = modal("Note", "small", text);
+    const cancel = el("button", { type: "button", textContent: "Cancel" });
+    const ok = el("button", { type: "button", className: "primary", textContent: "Save" });
+    p.footer.append(el("span", { className: "spacer" }), cancel, ok);
+    return new Promise((resolve) => {
+      let result: string | null = null;
+      cancel.onclick = () => p.d.close();
+      ok.onclick = () => ((result = text.value.trim()), p.d.close());
+      p.d.addEventListener("close", () => resolve(result));
+      p.d.showModal();
+      text.focus();
+    });
   }
 
   async function exportImage(kind: "png" | "svg") {

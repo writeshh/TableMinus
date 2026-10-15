@@ -69,7 +69,7 @@ const PG: &str = "select 'c', n.nspname || '.' || c.relname, a.attname::text, fo
      from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace \
      where k.contype = 'f' and not c.relispartition and n.nspname = coalesce($1, current_schema())";
 
-/// The current database. Foreign keys into other databases are left out.
+/// The current database. A foreign key into another database names its table `database.table`.
 const MY: &str = "select 'c', c.table_name, c.column_name, c.column_type, if(c.column_key = 'PRI', 'true', 'false'), \
      if(c.is_nullable = 'YES', 'true', 'false'), if(t.table_type = 'VIEW', 'true', 'false'), \
      cast(c.ordinal_position as char) \
@@ -77,11 +77,12 @@ const MY: &str = "select 'c', c.table_name, c.column_name, c.column_type, if(c.c
        on t.table_schema = c.table_schema and t.table_name = c.table_name \
      where c.table_schema = database() \
      union all select 'f', k.table_name, k.constraint_name, \
-     group_concat(k.column_name order by k.ordinal_position separator 0x1f), min(k.referenced_table_name), \
+     group_concat(k.column_name order by k.ordinal_position separator 0x1f), \
+     min(if(k.referenced_table_schema = database(), k.referenced_table_name, \
+       concat(k.referenced_table_schema, '.', k.referenced_table_name))), \
      group_concat(k.referenced_column_name order by k.ordinal_position separator 0x1f), null, '0' \
      from information_schema.key_column_usage k \
-     where k.table_schema = database() and k.referenced_table_schema = database() \
-       and k.referenced_table_name is not null \
+     where k.table_schema = database() and k.referenced_table_name is not null \
      group by k.table_name, k.constraint_name";
 
 /// SQLite's own tables (`sqlite_sequence`…) are left out. Foreign keys have no names; their id numbers them.
@@ -258,19 +259,22 @@ mod tests {
             let mut c = Conn::open(Engine::Mysql, url, None, &Tls::default(), &Options::default(), None).await.unwrap();
             let db = format!("dbm_diagram_{}", std::process::id());
             c.query(&format!("create database {db}")).await.unwrap();
+            c.query(&format!("create database {db}_x")).await.unwrap();
             c.use_database(&db).await.unwrap();
-            let outcome = mysql_scenario(&mut c).await;
+            let outcome = mysql_scenario(&mut c, &format!("{db}_x")).await;
             c.query(&format!("drop database {db}")).await.unwrap();
+            c.query(&format!("drop database {db}_x")).await.unwrap();
             outcome.unwrap();
         });
     }
 
-    async fn mysql_scenario(c: &mut Conn) -> crate::error::Result<()> {
+    async fn mysql_scenario(c: &mut Conn, other: &str) -> crate::error::Result<()> {
         c.query("create table people(id int primary key, name varchar(20) not null)").await?;
-        c.query(
-            "create table pets(id int primary key, owner int, constraint pets_owner foreign key (owner) \
-             references people(id))",
-        )
+        c.query(&format!("create table {other}.kinds(id int primary key)")).await?;
+        c.query(&format!(
+            "create table pets(id int primary key, owner int, kind int, constraint pets_owner foreign key (owner) \
+                 references people(id), constraint pets_kind foreign key (kind) references {other}.kinds(id))"
+        ))
         .await?;
         c.query("create view names as select name from people").await?;
         let d = c.diagram(None).await?;
@@ -279,13 +283,22 @@ mod tests {
         assert_eq!(d.tables[1].columns, [col("id", "int", true, false), col("name", "varchar(20)", false, false)]);
         assert_eq!(
             d.links,
-            [Link {
-                name: "pets_owner".into(),
-                table: "pets".into(),
-                columns: vec!["owner".into()],
-                ref_table: "people".into(),
-                ref_columns: vec!["id".into()],
-            }]
+            [
+                Link {
+                    name: "pets_kind".into(),
+                    table: "pets".into(),
+                    columns: vec!["kind".into()],
+                    ref_table: format!("{other}.kinds"),
+                    ref_columns: vec!["id".into()],
+                },
+                Link {
+                    name: "pets_owner".into(),
+                    table: "pets".into(),
+                    columns: vec!["owner".into()],
+                    ref_table: "people".into(),
+                    ref_columns: vec!["id".into()],
+                }
+            ]
         );
         Ok(())
     }
