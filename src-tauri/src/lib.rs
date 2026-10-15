@@ -897,6 +897,7 @@ pub fn run() -> tauri::Result<()> {
             mcp::mcp_revoke_token,
             mcp::mcp_activity,
             mcp::mcp_clear_activity,
+            mcp::mcp_clients,
             mcp::mcp_answer,
             jobs::start_export,
             jobs::start_import,

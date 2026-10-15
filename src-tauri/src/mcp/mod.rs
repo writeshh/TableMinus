@@ -91,6 +91,19 @@ pub struct Activity {
     outcome: String,
 }
 
+/// An agent seen calling the server, by token. The server is stateless, so this is what there is of a connected
+/// client: the token it uses, the name it gave when it initialized, and when it called.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Client {
+    token: String,
+    token_name: String,
+    /// `name version` from the client's `initialize`; None until it sends one.
+    agent: Option<String>,
+    first: u64,
+    last: u64,
+    requests: u64,
+}
+
 /// What the server tells the UI.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -120,6 +133,8 @@ pub struct Shared {
     prefs: crate::Prefs,
     config: Mutex<Config>,
     activity: Mutex<VecDeque<Activity>>,
+    /// By token id; forgotten when the token is revoked or the app quits.
+    clients: Mutex<HashMap<String, Client>>,
     pending: Mutex<HashMap<u64, Pending>>,
     next_id: AtomicU64,
     server: Mutex<Option<server::Running>>,
@@ -221,6 +236,7 @@ impl Shared {
             prefs,
             config: Mutex::new(config),
             activity: Mutex::new(VecDeque::new()),
+            clients: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             server: Mutex::new(None),
@@ -243,6 +259,30 @@ impl Shared {
         use subtle::ConstantTimeEq;
         let given = hash(bearer);
         lock(&self.config).tokens.iter().find(|t| bool::from(t.hash.as_bytes().ct_eq(given.as_bytes()))).cloned()
+    }
+
+    /// Notes a request made with `token`.
+    fn seen(&self, token: &Token) {
+        let at = now_ms();
+        let mut clients = lock(&self.clients);
+        let c = clients.entry(token.id.clone()).or_insert_with(|| Client {
+            token: token.id.clone(),
+            token_name: token.name.clone(),
+            agent: None,
+            first: at,
+            last: at,
+            requests: 0,
+        });
+        c.last = at;
+        c.requests += 1;
+    }
+
+    /// Notes the name a client gave in its `initialize`.
+    fn introduced(&self, token: &Token, name: &str, version: &str) {
+        let label: String = format!("{name} {version}").trim().chars().take(80).collect();
+        if let Some(c) = lock(&self.clients).get_mut(&token.id) {
+            c.agent = Some(label);
+        }
     }
 
     fn log(&self, entry: Activity) {
@@ -462,6 +502,7 @@ pub fn mcp_create_token(
 #[expect(clippy::needless_pass_by_value, reason = "Tauri hands command arguments over by value")]
 pub fn mcp_revoke_token(mcp: State<'_, Mcp>, id: String) -> Result<()> {
     mcp.0.update(|c| c.tokens.retain(|t| t.id != id))?;
+    lock(&mcp.0.clients).remove(&id);
     // When it was the bridge's token, the bridge gets a new one straight away.
     let port = lock(&mcp.0.server).as_ref().map(|r| r.port);
     port.map_or(Ok(()), |port| mcp.0.write_bridge_file(port))
@@ -471,6 +512,15 @@ pub fn mcp_revoke_token(mcp: State<'_, Mcp>, id: String) -> Result<()> {
 #[expect(clippy::needless_pass_by_value, reason = "Tauri hands command arguments over by value")]
 pub fn mcp_activity(mcp: State<'_, Mcp>) -> Vec<Activity> {
     lock(&mcp.0.activity).iter().cloned().collect()
+}
+
+/// The clients seen since the app started, the most recent first.
+#[tauri::command]
+#[expect(clippy::needless_pass_by_value, reason = "Tauri hands command arguments over by value")]
+pub fn mcp_clients(mcp: State<'_, Mcp>) -> Vec<Client> {
+    let mut list: Vec<Client> = lock(&mcp.0.clients).values().cloned().collect();
+    list.sort_by_key(|c| std::cmp::Reverse(c.last));
+    list
 }
 
 #[tauri::command]

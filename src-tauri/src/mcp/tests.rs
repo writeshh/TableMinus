@@ -324,3 +324,18 @@ fn a_safe_level_allows_only_with_the_right_password() {
         assert!(!pending.await.unwrap().0, "allowed, so it ran");
     });
 }
+
+#[test]
+fn clients_are_listed_by_token_with_the_name_they_gave() {
+    tauri::async_runtime::block_on(async {
+        let s = server("clients").await;
+        let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "Claude Code", "version": "2.1" } } });
+        assert_eq!(post(s.port, Some(READ_ONLY), &init).await.0, 200);
+        call(s.port, READ_ONLY, "list_connections", json!({})).await;
+        let clients: Vec<_> = super::lock(&s.shared.clients).values().cloned().collect();
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients[0].agent.as_deref(), Some("Claude Code 2.1"));
+        assert_eq!(clients[0].requests, 2);
+    });
+}
