@@ -12,7 +12,6 @@ dialog.processes { width: min(1100px, calc(100vw - 32px)); }
 .process-actions span { display: flex; gap: 4px; }
 .process-list th.process-actions { z-index: 2; }
 
-#jobs { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); }
 .job { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); display: grid; gap: 4px; font-size: 12px; }
 .job-head { display: flex; align-items: center; gap: 8px; }
 .job-file, .job-meta { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }

@@ -392,7 +392,15 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .preview-grid th { position: sticky; top: 0; background: var(--raised); }
 .preview-grid td.null { color: var(--muted); font-style: italic; }
 .sql-preview { max-height: 300px; overflow: auto; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; font: 12px/1.4 var(--mono); white-space: pre-wrap; }
-.jobs { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: 8px; width: min(340px, calc(100vw - 32px)); }
+.jobs { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600; text-align: center; }
+.notes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 60vh; overflow: auto; }
+.notes li { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); }
+.notes li .reveal { justify-self: start; }
+.note-head { display: flex; align-items: center; gap: 8px; }
+.note-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.note-text { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes li.failed .note-text { color: var(--danger); }
 .job { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--raised); box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); }
 .job strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job progress { width: 100%; }

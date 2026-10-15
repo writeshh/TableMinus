@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { el, revealButton } from "./dom";
+import { jobsPanel, notify } from "./jobs";
 import { guarded } from "./safety";
 
 export type Conn = { name: string; kind: string };
@@ -191,7 +192,7 @@ export async function openRestore(c: Conn, database: string | null | undefined, 
 type Progress = { id: number; bytes: number | null; total: number | null; line: string | null };
 type Done = { id: number; error: string | null };
 /** `path` is the backup file to show when done; a restore has nothing new to show. */
-type Card = { bytes: HTMLElement; line: HTMLElement; bar: HTMLProgressElement; button: HTMLButtonElement; root: HTMLElement; path: string | null };
+type Card = { title: string; bytes: HTMLElement; line: HTMLElement; bar: HTMLProgressElement; button: HTMLButtonElement; root: HTMLElement; path: string | null };
 
 const cards = new Map<number, Card>();
 // Events that beat start_backup's answer to the UI, applied once the card exists.
@@ -205,8 +206,7 @@ function size(n: number) {
 }
 
 function addJob(id: number, title: string, file: string, path: string | null = null) {
-  let panel = document.getElementById("jobs");
-  if (!panel) document.body.append((panel = el("div", { id: "jobs" })));
+  const panel = jobsPanel();
   const bytes = el("span", { className: "job-bytes" });
   const line = el("div", { className: "job-line" });
   const bar = el("progress");
@@ -215,7 +215,7 @@ function addJob(id: number, title: string, file: string, path: string | null = n
   const root = el("div", { className: "job" }, el("div", { className: "job-head" }, el("strong", { textContent: title }), el("span", { className: "spacer" }), button),
     el("div", { className: "job-file", textContent: file }), bar, el("div", { className: "job-meta" }, bytes), line);
   panel.append(root);
-  cards.set(id, { bytes, line, bar, button, root, path });
+  cards.set(id, { title, bytes, line, bar, button, root, path });
   for (const e of early.get(id) ?? []) apply(e);
   early.delete(id);
 }
@@ -237,6 +237,7 @@ function apply(e: Progress | Done) {
   card.line.title = card.line.textContent;
   card.button.textContent = "Dismiss";
   if (e.error === null && card.path) card.button.before(revealButton([card.path], "icon"));
+  notify(card.title, card.line.textContent, e.error === null, e.error === null && card.path ? [card.path] : []);
   card.button.onclick = () => {
     card.root.remove();
     cards.delete(e.id);

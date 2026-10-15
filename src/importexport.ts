@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { connName, el, revealButton } from "./dom";
+import { jobsPanel, notify } from "./jobs";
 import { guarded } from "./safety";
 import { fileName, matchColumns } from "./transfer";
 import { readPref, writePref } from "./prefs";
@@ -54,8 +55,8 @@ function modal(title: string, className = "") {
 
 // ---------- Jobs ----------
 
-/** `after` runs once the job ends, with the card's Close button to put more beside it. */
-type Shown = { bar: HTMLProgressElement; text: HTMLElement; button: HTMLButtonElement; after?: (d: Done, close: HTMLButtonElement) => void };
+/** `paths` are the files the job writes, for Show in Finder once it's done; `after` runs once it ends. */
+type Shown = { label: string; paths: string[]; bar: HTMLProgressElement; text: HTMLElement; button: HTMLButtonElement; after?: (d: Done) => void };
 const shown = new Map<number, Shown>();
 const early = new Map<number, Done>(); // job-done can beat the start command's reply for tiny jobs
 let listening: Promise<unknown> | null = null;
@@ -85,21 +86,19 @@ function finish(d: Done) {
   s.button.textContent = "Close";
   s.button.disabled = false;
   s.button.onclick = () => s.button.closest(".job")?.remove();
-  s.after?.(d, s.button);
-}
-
-function jobsPanel() {
-  return document.querySelector<HTMLElement>(".jobs") ?? document.body.appendChild(el("div", { className: "jobs" }));
+  if (!d.error && s.paths.length) s.button.before(revealButton(s.paths));
+  notify(s.label, s.text.textContent, !d.error, d.error ? [] : s.paths);
+  s.after?.(d);
 }
 
 /** Starts a job, asking first when safe mode wants confirmation, and shows it in the jobs panel. */
-async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<string, unknown>, after?: Shown["after"]) {
+async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<string, unknown>, after?: Shown["after"], paths: string[] = []) {
   await listenOnce();
   const bar = el("progress", { max: 1, value: 0 });
   const text = el("span", { textContent: "Starting…" });
   const button = el("button", { type: "button", textContent: "Cancel" });
   jobsPanel().append(el("div", { className: "job" }, el("strong", { textContent: label }), bar, el("div", { className: "job-foot" }, text, button)));
-  const show: Shown = { bar, text, button, after };
+  const show: Shown = { label, paths, bar, text, button, after };
   bar.removeAttribute("value"); // indeterminate until a total arrives
   try {
     const id = await guarded(ctx.conn, (a) => invoke<number>(cmd, { ...args, name: ctx.conn, ...a }),
@@ -210,14 +209,12 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
       : "json";
     d.close();
     const label = source.kind !== "tables" ? what : tables.length === 1 ? tables[0] : `${tables.length} tables`;
-    const reveal = (d: Done, close: HTMLButtonElement) => {
-      if (d.error) return;
-      const paths = items.map((i) => i.path);
-      close.before(revealButton(paths));
+    const paths = items.map((i) => i.path);
+    const reveal = (d: Done) => {
       // Best effort: the export is done whether or not Finder comes up.
-      if (ctx.revealExports?.()) revealItemInDir(paths).catch(() => {});
+      if (!d.error && ctx.revealExports?.()) revealItemInDir(paths).catch(() => {});
     };
-    startJob(ctx, `Export ${label}`, "start_export", { export: { items, format: fmtOpts, gzip: prefs.gzip } }, reveal);
+    startJob(ctx, `Export ${label}`, "start_export", { export: { items, format: fmtOpts, gzip: prefs.gzip } }, reveal, paths);
   };
   d.showModal();
 }
