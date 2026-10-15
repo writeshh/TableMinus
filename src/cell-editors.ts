@@ -26,6 +26,38 @@ const dialog = (title: string, ...body: Node[]) =>
 
 type ValueOptions = { title: string; value: string | null; json: boolean; readOnly: boolean; nullable: boolean };
 
+/** A step of a JSONPath: `.name` where that reads plainly, `["name"]` otherwise. */
+const pathKey = (k: string) => (/^[A-Za-z_$][\w$]*$/.test(k) ? `.${k}` : `[${JSON.stringify(k)}]`);
+
+/** A read-only tree of a parsed JSON value. Objects and arrays fold, and draw their children only when first opened,
+ *  so a large document stays quick; clicking a value hands its path to `pick`. */
+function jsonTree(value: unknown, pick: (path: string) => void): HTMLElement {
+  const node = (key: string | null, v: unknown, path: string, open: boolean): HTMLElement => {
+    const label = key === null ? [] : [el("span", { className: "jt-key", textContent: key }), ": "];
+    if (v === null || typeof v !== "object") {
+      const kind = v === null ? "null" : typeof v;
+      const leaf = el("div", { className: "jt-leaf", title: `${path}: click to copy the path` }, ...label,
+        el("span", { className: `jt-${kind}`, textContent: JSON.stringify(v) }));
+      leaf.onclick = () => pick(path);
+      return leaf;
+    }
+    const list = Array.isArray(v);
+    const entries: [string, unknown][] = list ? v.map((x, i) => [String(i), x]) : Object.entries(v);
+    const d = el("details", { className: "jt-branch" },
+      el("summary", { title: path }, ...label, el("span", { className: "jt-meta", textContent: list ? `[${entries.length}]` : `{${entries.length}}` })));
+    let drawn = false;
+    const draw = () => {
+      if (drawn) return;
+      drawn = true;
+      d.append(...entries.map(([k, x]) => node(k, x, list ? `${path}[${k}]` : path + pathKey(k), false)));
+    };
+    d.ontoggle = () => d.open && draw();
+    if (open) (d.open = true), draw();
+    return d;
+  };
+  return node(null, value, "$", true);
+}
+
 /** Quick Look: the whole value in a window. Resolves with the new value (null for NULL), or undefined when nothing
  *  changed or it was cancelled. JSON values open pretty-printed, with Pretty, Minify and a validity check. */
 export async function valueDialog(o: ValueOptions): Promise<string | null | undefined> {
@@ -65,7 +97,28 @@ export async function valueDialog(o: ValueOptions): Promise<string | null | unde
     const minify = el("button", { type: "button", textContent: "Minify" });
     pretty.onclick = reformat(2);
     minify.onclick = reformat();
-    tools.prepend(pretty, minify, check);
+    // Text or Tree: the tree reads what the text holds now, so edits stay in the text.
+    const tree = el("div", { className: "json-tree", hidden: true });
+    area.after(tree);
+    const textView = el("button", { type: "button", textContent: "Text" });
+    const treeView = el("button", { type: "button", textContent: "Tree" });
+    const view = (asTree: boolean) => {
+      if (asTree && !validate()) return;
+      if (asTree) tree.replaceChildren(jsonTree(JSON.parse(area.value), (path) => {
+        navigator.clipboard.writeText(path).catch(() => {}); // best effort; the line below still shows the path
+        check.textContent = `Copied ${path}`;
+        check.className = "json-check ok";
+      }));
+      area.hidden = asTree;
+      tree.hidden = !asTree;
+      pretty.disabled = minify.disabled = asTree;
+      textView.setAttribute("aria-pressed", String(!asTree));
+      treeView.setAttribute("aria-pressed", String(asTree));
+    };
+    textView.onclick = () => view(false);
+    treeView.onclick = () => view(true);
+    tools.prepend(el("span", { className: "seg" }, textView, treeView), pretty, minify, check);
+    view(false);
     validate();
   }
   const enableSave = () => {
