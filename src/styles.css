@@ -44,7 +44,7 @@
   :root { --accent: AccentColor; } /* follows the system accent colour */
 }
 * { box-sizing: border-box; }
-body { margin: 0; height: 100vh; background: var(--bg); color: var(--fg); -webkit-font-smoothing: antialiased; }
+body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); -webkit-font-smoothing: antialiased; }
 [hidden] { display: none !important; }
 .muted, .hint { color: var(--muted); }
 .hint { margin: 4px 8px; font-size: 12px; }
@@ -78,7 +78,7 @@ kbd { font: 11px var(--mono); opacity: 0.75; margin-left: 4px; }
 .tag.production { color: var(--danger); background: color-mix(in srgb, var(--danger) 16%, transparent); }
 
 /* ---------- Launcher ---------- */
-#home { height: 100vh; display: grid; grid-template-columns: minmax(240px, 34%) 1fr; }
+#home { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 34%) 1fr; }
 .intro { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; }
 .mark { width: 72px; height: 72px; border-radius: 18px; display: grid; place-items: center; font: 700 28px/1 var(--mono); letter-spacing: -0.04em; color: white; background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 80%, white), var(--accent)); box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 30%, transparent); }
 h1 { font-size: 26px; line-height: 1.1; letter-spacing: -0.02em; margin: 12px 0 0; } /* large type, negative tracking */
@@ -221,7 +221,7 @@ dialog.prefs footer { padding: 12px 18px 16px; margin: 0; }
 .ws-head { display: flex; justify-content: space-between; align-items: center; }
 
 /* ---------- Workspace ---------- */
-#workspace { height: 100vh; display: grid; grid-template-columns: 248px 1fr; }
+#workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 248px 1fr; }
 body[data-env="production"] #workspace { box-shadow: inset 0 3px 0 var(--danger); } /* never forget where you are */
 aside { background: var(--side); color: var(--side-fg); border-right: 1px solid var(--line); padding: 8px; overflow: auto; }
 .ws-head { padding: 2px 0 4px; }

@@ -24,6 +24,9 @@
 .db-tab .close { flex: none; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 4px; opacity: 0; font-size: 13px; }
 .db-tab:hover .close, .db-tab[aria-selected="true"] .close { opacity: 0.7; }
 .db-tab .close:hover { opacity: 1; background: var(--press); }
+.db-tab.new-ws { --tag: var(--muted); font-style: italic; }
+.db-tabs .add { flex: none; align-self: center; width: 24px; height: 24px; margin-left: 2px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 16px; line-height: 1; }
+.db-tabs .add:hover { color: var(--fg); background: var(--press); }
 
 /* Split panes: side by side, the focused one live, the others still copies. */
 .panes { flex: 1; min-height: 0; display: flex; }

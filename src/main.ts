@@ -614,6 +614,7 @@ function show(view: "home" | "workspace") {
   $("return-workspace").hidden = view !== "home" || !workspaces.length;
   $("home").hidden = view !== "home";
   $("workspace").hidden = view !== "workspace";
+  renderDbTabs();
   if (view === "home") $("search").focus();
 }
 
@@ -879,16 +880,29 @@ function renderWorkspaceButton() {
   renderDbTabs();
 }
 
-// ---------- Database tabs: one per workspace, above the item tabs, once there are two ----------
+// ---------- Workspace tabs: one per open workspace (a connection, or another database of one), across the top ----------
 
 let draggedTab: Workspace | null = null;
 
 /** Each tab shows its connection's tag colour, its database (or the connection, without one), a mark when its
- *  connection was lost and × to close; drag one to reorder. The order is also ⌃⌘[ / ⌃⌘]'s. */
+ *  connection was lost and × to close; drag one to reorder. The order is also ⌃⌘[ / ⌃⌘]'s. While the launcher shows
+ *  (⌘N, or +) it has a tab of its own, like a browser's new tab, so the open workspaces stay one click away. */
 function renderDbTabs() {
   const strip = $("db-tabs");
-  strip.hidden = workspaces.length < 2;
+  strip.hidden = !workspaces.length;
   if (strip.hidden) return;
+  const home = !$("home").hidden;
+  const launcherTab = () => {
+    const close = el("span", { className: "close", textContent: "×", title: "Back to the workspace" });
+    close.onclick = (e) => (e.stopPropagation(), ws && showWorkspace(ws));
+    const b = el("button", { className: "db-tab new-ws", title: "Connect to open another workspace" },
+      el("span", { className: "dot" }), el("span", { className: "label", textContent: "New workspace" }), close);
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", "true");
+    return b;
+  };
+  const add = el("button", { className: "add", textContent: "+", title: `New workspace (${keyLabel("new-workspace")})` });
+  add.onclick = newWorkspace;
   strip.replaceChildren(
     ...workspaces.map((w) => {
       const database = (w === ws ? info : w.info)?.database;
@@ -906,8 +920,8 @@ function renderDbTabs() {
         close,
       );
       b.setAttribute("role", "tab");
-      b.setAttribute("aria-selected", String(w === ws));
-      b.onclick = () => w !== ws && showWorkspace(w);
+      b.setAttribute("aria-selected", String(!home && w === ws));
+      b.onclick = () => (home || w !== ws) && showWorkspace(w);
       b.onauxclick = (e) => e.button === 1 && closeDbTab(w); // middle-click closes
       b.ondragstart = (e) => ((draggedTab = w), e.dataTransfer?.setData("text/plain", w.conn.name));
       b.ondragend = () => (draggedTab = null);
@@ -923,16 +937,20 @@ function renderDbTabs() {
       };
       return b;
     }),
+    ...(home ? [launcherTab()] : []),
+    add,
   );
   strip.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
-/** Closes a database tab; closing one in the background comes back to the tab on screen. */
+/** Closes a workspace tab; closing one in the background comes back to the tab on screen (or the launcher). */
 async function closeDbTab(w: Workspace) {
-  if (w === ws) return closeWorkspace();
-  const back = ws;
+  const home = !$("home").hidden;
+  if (w === ws && !home) return closeWorkspace();
+  const back = home ? null : ws;
   showWorkspace(w); // its tabs may have unsaved edits to ask about
   await closeWorkspace(back);
+  if (home && workspaces.length) newWorkspace();
 }
 
 function showWorkspaces() {
@@ -1155,7 +1173,7 @@ function renderDbs() {
       li.setAttribute("aria-selected", String(i === dbPick));
       if (name === info?.database) li.append(el("span", { className: "current", textContent: "current" }));
       li.onclick = () => ((dbPick = i), renderDbs());
-      li.ondblclick = (e) => (e.metaKey || e.ctrlKey ? openDbInNewTab(name) : openDb(name));
+      li.ondblclick = (e) => (e.altKey ? openDb(name) : openDbInNewTab(name));
       return li;
     }),
   );
@@ -1177,9 +1195,15 @@ async function openDb(name?: string) {
   }
 }
 
-/** Opens the database in a new database tab: its own session of the connection, sidebar and item tabs. */
+/** Opens the database in a new tab: its own session of the connection, sidebar and item tabs. Its tab comes forward
+ *  when it's open already; the database on screen, or a connection still without one, opens in place. */
 async function openDbInNewTab(name = shownDbs()[dbPick]) {
   if (!name || !active) return;
+  if (name === info?.database) return $<HTMLDialogElement>("dbpicker").close();
+  if (!info?.database) return openDb(name);
+  const conn = active.name;
+  const open = workspaces.find((w) => w.conn.name === conn && (w === ws ? info : w.info)?.database === name);
+  if (open) return $<HTMLDialogElement>("dbpicker").close(), showWorkspace(open);
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
     await openWorkspace(active, name);
@@ -1216,18 +1240,18 @@ $("db-drop").onclick = () => {
     await loadDbs(info?.database ?? "");
   });
 };
-$("db-open-tab").onclick = () => openDbInNewTab();
+$("db-open-here").onclick = () => openDb();
 $("db-search").addEventListener("input", () => ((dbPick = 0), renderDbs()));
 $("db-search").addEventListener("keydown", (e) => {
   const n = shownDbs().length;
   if (e.key === "ArrowDown") dbPick = Math.min(n - 1, dbPick + 1);
   else if (e.key === "ArrowUp") dbPick = Math.max(0, dbPick - 1);
-  else if (e.key === "Enter") return e.preventDefault(), e.metaKey || e.ctrlKey ? openDbInNewTab() : openDb();
+  else if (e.key === "Enter") return e.preventDefault(), e.altKey ? openDb() : openDbInNewTab();
   else return;
   e.preventDefault();
   renderDbs();
 });
-$("db-open").onclick = () => openDb();
+$("db-open").onclick = () => openDbInNewTab();
 $("db-cancel").onclick = () => $<HTMLDialogElement>("dbpicker").close();
 $("db-button").onclick = openDbPicker;
 

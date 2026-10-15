@@ -9,6 +9,7 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
+    <nav id="db-tabs" class="db-tabs" role="tablist" aria-label="Open workspaces" hidden></nav>
     <!-- Launcher: shown until a connection opens -->
     <section id="home">
       <div class="intro">
@@ -158,8 +159,8 @@
         <button id="db-drop" class="ghost" title="Drop the selected database">Drop…</button>
         <span class="spacer"></span>
         <button id="db-cancel">Cancel</button>
-        <button id="db-open-tab" title="Open in a new database tab (⌘↩)">New Tab</button>
-        <button id="db-open" class="primary">Open</button>
+        <button id="db-open-here" title="Open in this tab instead of a new one (⌥↩)">Open Here</button>
+        <button id="db-open" class="primary" title="Open in a new tab, or go to its tab when it's open (↩)">Open</button>
       </footer>
     </dialog>
 
@@ -379,7 +380,6 @@
         </div>
       </aside>
       <main>
-        <nav id="db-tabs" class="db-tabs" role="tablist" aria-label="Open databases" hidden></nav>
         <header id="where">
           <span id="where-conn" class="where-conn" role="button" tabindex="0" title="Workspaces"></span>
           <span class="spacer"></span>
