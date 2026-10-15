@@ -25,7 +25,7 @@ impl Location {
         match self {
             Location::Connections => &["connections.json"],
             Location::Queries => &["sql-tabs.json", "favorites.json", "metrics.json"],
-            Location::History => &["history.json"],
+            Location::History => &["history.json", "ai-chats.json"],
             Location::Settings => &["settings.json"],
         }
     }
@@ -157,6 +157,8 @@ pub enum Doc {
     Favorites,
     /// Metrics boards, which live with the SQL tabs.
     Metrics,
+    /// The AI assistant's chats, which live with the history.
+    Chats,
     Settings,
 }
 
@@ -167,6 +169,7 @@ impl Doc {
             Doc::History => (Location::History, "history.json"),
             Doc::Favorites => (Location::Queries, "favorites.json"),
             Doc::Metrics => (Location::Queries, "metrics.json"),
+            Doc::Chats => (Location::History, "ai-chats.json"),
             Doc::Settings => (Location::Settings, "settings.json"),
         };
         Ok(folder(config, which)?.join(name))

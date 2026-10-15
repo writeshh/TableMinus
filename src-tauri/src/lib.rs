@@ -1,5 +1,6 @@
 //! TableMinus's Tauri commands: the only surface the UI can call.
 
+mod ai;
 mod backup;
 mod browse;
 mod catalog;
@@ -559,6 +560,43 @@ async fn is_read_only(open: State<'_, Open>, name: String, sql: String) -> Resul
     Ok(readonly::is_read_only(kind, &sql))
 }
 
+/// The most rows the AI assistant's query shows the model.
+const AI_ROWS: usize = 50;
+
+/// Runs a query the AI assistant asked for, once the user approved it in the pane (which counts as the safe mode
+/// confirmation; password levels still want `unlock`). Only SQL the parse calls read-only runs, and inside read-only
+/// bounds, so the database refuses a function that writes.
+#[tauri::command]
+async fn ai_run(
+    open: State<'_, Open>,
+    prefs: State<'_, Prefs>,
+    name: String,
+    sql: String,
+    unlock: Option<safety::Unlock>,
+) -> Result<db::QueryResult> {
+    let kind = open.get(&name).await?.saved.kind;
+    if !readonly::is_read_only(kind, &sql) {
+        return Err(Error::Invalid("the assistant may only run read-only SQL; insert it into the editor to run it"));
+    }
+    guard(&open, &name, |_| true, true, unlock.as_ref()).await?;
+    let mut live = open.get(&name).await?;
+    let (start, end) = live.conn.read_only_bounds();
+    let r = live.conn.query(start).await;
+    live.check(r)?;
+    let r = with_limit(&mut live, query_limit(&prefs), move |c| {
+        Box::pin(async move { c.query_limited(&sql, Some(AI_ROWS)).await })
+    })
+    .await;
+    let ended = live.conn.query(end).await;
+    if r.is_ok() {
+        live.check(ended)?;
+    }
+    match r {
+        Err(e) if db::Conn::refused_as_read_only(&e) => Err(Error::Invalid("the database refused it as a write")),
+        r => live.check(r),
+    }
+}
+
 /// The largest SQL file the editor opens.
 const MAX_SQL_FILE: u64 = 20 * 1024 * 1024;
 
@@ -824,6 +862,10 @@ pub fn run() -> tauri::Result<()> {
             safety::touch_id_available,
             safety::batch_grant,
             mcp::mcp_install,
+            ai::ai_chat,
+            ai::ai_has_key,
+            ai::ai_set_key,
+            ai_run,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,

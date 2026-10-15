@@ -56,6 +56,9 @@ pub enum Error {
     /// SQLite's table rebuild couldn't read the table's CREATE statement, or SQL typed for it.
     #[error("can't rebuild the table: {0}")]
     Rebuild(String),
+    /// The AI provider couldn't be reached, or refused or garbled the request.
+    #[error("AI: {0}")]
+    Ai(String),
     #[error("{}", postgres_message(.0))]
     Postgres(#[from] tokio_postgres::Error),
     #[error(transparent)]

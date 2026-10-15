@@ -17,6 +17,7 @@ import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
 import { openUsers } from "./users";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
+import { forgetSchema, initAssistant, renderPane as renderAssistant, toggleAssistant } from "./ai"; // and Settings › AI
 import { Staged } from "./staging";
 import * as grid from "./grid-edit";
 import * as vgrid from "./vgrid";
@@ -2039,6 +2040,8 @@ async function reloadItems() {
 
 /** Columns for every table, for autocomplete. Runs in the background; the editor works without it meanwhile. */
 async function loadSchema() {
+  forgetSchema(); // the assistant's copy, with types, is fetched again when next needed
+  renderAssistant();
   if (!active) return;
   const [conn, key] = [active, sessionKey()];
   try {
@@ -2939,6 +2942,17 @@ function showDiagram(table?: string) {
   openDiagram(pg ? (table?.includes(".") ? table.split(".")[0] : shownSchema()) : null, table);
 }
 initDiagram({ call, conn: hostConn, openTable: (t) => openTable(t), menu: contextMenu });
+initAssistant({
+  conn: hostConn,
+  server: () => info?.server ?? "",
+  schema: () => (active?.kind === "postgres" ? shownSchema() : null),
+  call,
+  insert(sql) {
+    if (current()?.kind === "sql") editor.insert(sql);
+    else openSqlIn(null, sql);
+  },
+  openSettings: () => openSettings(),
+});
 initSidebar({
   conn: hostConn,
   tables: () => tables,
@@ -3362,6 +3376,7 @@ addCommands([
   { id: "toggle-sidebar", label: "Toggle Left Sidebar", menu: "View", keys: ["Alt+Mod+Digit1"], when: inWorkspace, run: () => togglePane("sidebar") },
   { id: "toggle-row-detail", label: "Toggle Row Detail", menu: "View", keys: ["Alt+Mod+Digit2"], when: inWorkspace, run: toggleRowDetail },
   { id: "toggle-results", label: "Toggle Results Pane", menu: "View", keys: ["Alt+Mod+Digit3"], when: inWorkspace, run: () => togglePane("results") },
+  { id: "toggle-assistant", label: "Toggle Assistant", menu: "View", keys: ["Alt+Mod+Digit4"], when: inWorkspace, run: toggleAssistant },
   { id: "font-bigger", sep: true, label: "Increase Font Size", menu: "View", keys: ["Mod+Equal", "Mod+Shift+Equal"], when: inWorkspace,
     run: () => fontBy(settings.fontSize + 1) },
   { id: "font-smaller", label: "Decrease Font Size", menu: "View", keys: ["Mod+Minus"], when: inWorkspace, run: () => fontBy(settings.fontSize - 1) },
@@ -3445,6 +3460,11 @@ divider({
   host: $("workspace"), className: "side-edge", variable: "--side-w", pref: "layout.sidebar", axis: "x", sign: 1, min: 180,
   max: () => Math.min(560, window.innerWidth / 2), size: () => $("workspace").querySelector("aside")!.getBoundingClientRect().width,
   label: "Sidebar width",
+});
+divider({
+  host: $("workspace"), className: "ai-edge", variable: "--ai-w", pref: "layout.assistant", axis: "x", sign: -1, min: 260,
+  max: () => Math.min(720, window.innerWidth * 0.45), size: () => $("assistant").getBoundingClientRect().width,
+  label: "Assistant width",
 });
 divider({
   host: $("sql-pane"), className: "sql-edge", variable: "--sql-h", pref: "layout.editor", axis: "y", sign: 1, min: 120,

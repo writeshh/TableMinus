@@ -96,7 +96,7 @@ settings.querySelector(".prefs-tabs")!.append(tab);
 const pane = el("section", { hidden: true });
 pane.dataset.pane = "mcp";
 pane.append(document.createRange().createContextualFragment(PANE));
-settings.querySelector("footer")!.before(pane);
+settings.querySelector(":scope > footer")!.before(pane);
 
 function svg(path: string) {
   const ns = "http://www.w3.org/2000/svg";

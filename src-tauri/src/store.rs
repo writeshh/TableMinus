@@ -19,6 +19,8 @@ pub enum Secret {
     Database,
     /// The SSH password, or the private key's passphrase.
     Ssh,
+    /// An AI provider's API key, by provider.
+    Ai,
 }
 
 impl Secret {
@@ -27,6 +29,7 @@ impl Secret {
         match self {
             Secret::Database => "dev.ritesh.dbmanager",
             Secret::Ssh => "dev.ritesh.dbmanager.ssh",
+            Secret::Ai => "dev.ritesh.tableminus.ai",
         }
     }
 }
@@ -281,7 +284,7 @@ pub fn forget_secrets(name: &str) -> Result<()> {
 }
 
 /// `None` keeps the stored secret; an empty one removes it.
-fn update(which: Secret, name: &str, secret: Option<&SecretString>) -> Result<()> {
+pub fn update(which: Secret, name: &str, secret: Option<&SecretString>) -> Result<()> {
     match secret.map(ExposeSecret::expose_secret) {
         Some("") => forget(which, name),
         Some(s) => Ok(entry(which, name)?.set_password(s)?),
