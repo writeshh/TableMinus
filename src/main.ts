@@ -627,8 +627,15 @@ type Info = { server: string; database: string | null; can_switch: boolean; tabl
 let info: Info | null = null;
 /** The first shortcut of a command, as it reads on screen; "" when it has none. */
 const keyLabel = (id: string) => label(bindings(id)[0] ?? "", isMac);
-// The macOS window has no visible title bar (tauri.conf.json); the CSS makes room for the traffic lights.
-if (isMac && "__TAURI_INTERNALS__" in window) document.body.classList.add("overlay-title");
+// The macOS window has no visible title bar (tauri.conf.json); the CSS makes room for the traffic lights, except in
+// full screen, where they are hidden.
+if (isMac && "__TAURI_INTERNALS__" in window) {
+  document.body.classList.add("overlay-title");
+  const win = getCurrentWindow();
+  const syncFullScreen = () => void win.isFullscreen().then((f) => document.body.classList.toggle("full-screen", f), () => {});
+  win.onResized(syncFullScreen).catch(() => {}); // a preview without Tauri has no window events
+  syncFullScreen();
+}
 
 /** invoke for workspace commands: a dropped connection shows the reconnect banner before the error moves on. */
 async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
