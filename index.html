@@ -258,6 +258,10 @@
           <span class="k">Saving</span>
           <label class="check"><input type="checkbox" id="log-originals" /> Log the original values of updated and deleted rows</label>
         </div>
+        <div class="row">
+          <span class="k">Export</span>
+          <label class="check"><input type="checkbox" id="reveal-export" /> Show the files in Finder when an export finishes</label>
+        </div>
         <p class="hint note">Above the threshold, a table without filters shows the database's estimate of its rows (Postgres and MySQL); Count in the page settings counts them exactly. The log of original values is in the console (⇧⌘C).</p>
       </section>
       <section data-pane="editor" hidden>
@@ -308,6 +312,7 @@
           <span class="k">Completion</span>
           <span class="checks">
             <label class="check"><input type="checkbox" id="upper-keywords" /> Complete keywords and functions in UPPER CASE</label>
+            <label class="check"><input type="checkbox" id="close-brackets" /> Close brackets and quotes as you type</label>
             <label>Accept with <select id="complete-key"><option value="enter">Enter</option><option value="tab">Tab</option><option value="both">Enter or Tab</option></select></label>
           </span>
         </div>

@@ -130,6 +130,7 @@ export function createEditor(
   const display = new Compartment();
   const binding = new Compartment();
   const completeKeys = new Compartment();
+  const brackets = new Compartment();
   let lang: Extension = sql({ dialect: StandardSQL });
   let unit = "  ";
   let looks: Extension[] = [];
@@ -138,6 +139,9 @@ export function createEditor(
   let upperKeywords = false;
   let vimMode: Extension = [];
   let accept: CompleteKey = "enter";
+  /** basicSetup always closes brackets and quotes; an empty bracket list, ahead of every language's, turns it off. */
+  const noClosing = Prec.highest(EditorState.languageData.of(() => [{ closeBrackets: { brackets: [] } }]));
+  let closing: Extension = [];
 
   /** Completes built-in and database functions after a word of at least two letters. */
   const functionSource = (cx: CompletionContext) => {
@@ -184,6 +188,7 @@ export function createEditor(
     basicSetup,
     autocompletion({ defaultKeymap: false }), // completeKeys below instead, so Enter or Tab can accept
     completeKeys.of(completionKeys(accept)),
+    brackets.of(closing),
     keymap.of([indentWithTab]), // Tab indents; Esc then Tab leaves the editor (CodeMirror's escape hatch)
     language.of(lang),
     indent.of(indentUnit.of(unit)),
@@ -204,7 +209,7 @@ export function createEditor(
     view.dispatch({
       effects: [
         language.reconfigure(lang), indent.reconfigure(indentUnit.of(unit)), display.reconfigure(looks),
-        binding.reconfigure(vimMode), completeKeys.reconfigure(completionKeys(accept)),
+        binding.reconfigure(vimMode), completeKeys.reconfigure(completionKeys(accept)), brackets.reconfigure(closing),
       ],
     });
 
@@ -248,6 +253,11 @@ export function createEditor(
       upperKeywords = upper;
       accept = key;
       setLanguage();
+    },
+    /** Whether typing an opening bracket or quote adds the closing one (Settings › Editor). */
+    setCloseBrackets(on: boolean) {
+      closing = on ? [] : noClosing;
+      refresh();
     },
     /** Where the database's own function names come from (the sidebar's loaded items). */
     setFunctionSource(names: () => string[]) {

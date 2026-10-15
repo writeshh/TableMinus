@@ -7,6 +7,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { connName, el } from "./dom";
 import { guarded } from "./safety";
 import { fileName, matchColumns } from "./transfer";
+import { readPref, writePref } from "./prefs";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /** A browse request, as the table tab sends it. */
 export type BrowseRequest = Record<string, unknown> & { table: string };
@@ -25,6 +27,8 @@ export type Ctx = {
   confirm: (text: string, okLabel: string) => Promise<boolean>;
   /** After an import: refresh the table list and any open tab of `table`. */
   imported: (table: string) => void;
+  /** Whether a finished export shows its files in Finder (Settings › Data). */
+  revealExports?: () => boolean;
 };
 
 type Progress = { item: number; items: number; done: number; total: number | null; rows: number };
@@ -122,11 +126,7 @@ const EXPORT_DEFAULTS: ExportPrefs = {
 const PREFS_KEY = "export-options";
 
 function loadPrefs(): ExportPrefs {
-  try {
-    return { ...EXPORT_DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") };
-  } catch {
-    return { ...EXPORT_DEFAULTS };
-  }
+  return { ...EXPORT_DEFAULTS, ...readPref<Partial<ExportPrefs>>(PREFS_KEY) };
 }
 
 /** The export dialog: what, format and its options, file names; then a folder to write into. */
@@ -193,9 +193,7 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
       structure: structure.input.checked, drop: drop.input.checked, content: content.input.checked,
       gzip: gzip.input.checked, pattern: pattern.value,
     };
-    try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-    } catch {} // only a convenience
+    writePref(PREFS_KEY, prefs);
     const dir = await openDialog({ directory: true, title: "Export into folder" });
     if (typeof dir !== "string") return;
     const ext = prefs.format + (prefs.gzip ? ".gz" : "");
@@ -211,7 +209,11 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
       : "json";
     d.close();
     const label = source.kind !== "tables" ? what : tables.length === 1 ? tables[0] : `${tables.length} tables`;
-    startJob(ctx, `Export ${label}`, "start_export", { export: { items, format: fmtOpts, gzip: prefs.gzip } });
+    const reveal = (d: Done) => {
+      // Best effort: the export is done whether or not Finder comes up.
+      if (!d.error && ctx.revealExports?.()) revealItemInDir(items.map((i) => i.path)).catch(() => {});
+    };
+    startJob(ctx, `Export ${label}`, "start_export", { export: { items, format: fmtOpts, gzip: prefs.gzip } }, reveal);
   };
   d.showModal();
 }

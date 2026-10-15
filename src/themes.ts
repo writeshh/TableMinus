@@ -1,12 +1,13 @@
 // Themes: applying one (CSS variables on the root, plus its colour scheme), the light and dark defaults that Auto
 // switches between, the theme editor, and importing and exporting theme files. The data side is theme-file.ts.
-// ponytail: themes live in this machine's localStorage; installing and updating them from a Git repository is TODO §23.
+// Themes are kept with the settings (prefs.ts). Installing and updating them from a Git repository is TODO §23.
 
 import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { $, el } from "./dom";
 import { modal } from "./backup";
 import { BUNDLED, MAX_THEME_FILE, VARS, parseTheme, validValue, type Scheme, type Theme } from "./theme-file";
+import { readPref, writePref } from "./prefs";
 
 type Mode = "auto" | Scheme;
 type Store = { light: string; dark: string; custom: Theme[] };
@@ -14,7 +15,7 @@ type Store = { light: string; dark: string; custom: Theme[] };
 const store: Store = (() => {
   const defaults: Store = { light: "System Light", dark: "System Dark", custom: [] };
   try {
-    const s = { ...defaults, ...JSON.parse(localStorage.getItem("themes") ?? "{}") };
+    const s = { ...defaults, ...readPref<Partial<Store>>("themes") };
     // Each kept theme is checked again, so a hand-edited entry can't slip anything into the page.
     s.custom = (Array.isArray(s.custom) ? s.custom : []).flatMap((t: unknown) => {
       try {
@@ -29,9 +30,7 @@ const store: Store = (() => {
   }
 })();
 function persist() {
-  try {
-    localStorage.setItem("themes", JSON.stringify(store));
-  } catch {} // unavailable storage: the themes hold for this session
+  writePref("themes", store);
 }
 
 const all = () => [...BUNDLED, ...store.custom];

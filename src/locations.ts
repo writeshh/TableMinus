@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { $, el } from "./dom";
+import { flushPrefs, loadPrefs, prefsProblem } from "./prefs";
 
 type Doc = "sql_tabs" | "history" | "favorites" | "metrics";
 /** Where each doc lived before it had a file: localStorage keys `<prefix><connection>`. */
@@ -75,10 +76,11 @@ export function setDocEntry(doc: Doc, conn: string, value: unknown) {
 
 // ---------- Settings › Locations ----------
 
-type Location = "connections" | "queries" | "history";
+type Location = "connections" | "queries" | "history" | "settings";
 type Folders = Record<Location, string> & { default: string };
 const ROWS: [Location, string, Doc[]][] = [
   ["connections", "Connections", []], ["queries", "SQL tabs, saved queries and metrics boards", ["sql_tabs", "favorites", "metrics"]], ["history", "History", ["history"]],
+  ["settings", "Settings, themes and column layouts", []],
 ];
 
 const settings = $("settings");
@@ -117,7 +119,7 @@ async function render() {
         if (typeof picked === "string") move(which, docs, picked);
       };
       reset.onclick = () => move(which, docs, null);
-      const problem = docs.map((d) => held.get(d)?.problem).filter(Boolean).join("; ");
+      const problem = [...docs.map((d) => held.get(d)?.problem), which === "settings" ? prefsProblem() : ""].filter(Boolean).join("; ");
       return el("div", { className: "row" },
         el("span", { className: "k", textContent: label }),
         el("span", { className: "loc" },
@@ -135,10 +137,13 @@ async function move(which: Location, docs: Doc[], folder: string | null) {
   note.textContent = "";
   try {
     for (const doc of docs) if (held.get(doc)?.timer) await write(doc); // nothing pending is left behind in the old folder
+    if (which === "settings") await flushPrefs();
     await invoke("set_location", { which, folder });
     for (const doc of docs) await load(doc);
-    if (!docs.length) dispatchEvent(new Event("connections-moved")); // main.ts reloads the launcher's list
-    note.textContent = "Moved.";
+    if (which === "connections") dispatchEvent(new Event("connections-moved")); // main.ts reloads the launcher's list
+    // Settings found in the new folder (another Mac's) apply from the next start, rather than mid-session.
+    const found = which === "settings" && (await loadPrefs(false));
+    note.textContent = found ? "Moved. The settings found there apply when TableMinus starts again." : "Moved.";
     note.className = "status done";
   } catch (e) {
     note.textContent = String(e);

@@ -1,28 +1,24 @@
-// Per-table column layout (hidden columns, widths and order), remembered on this machine. Hiding and resizing
+// Per-table column layout (hidden columns, widths and order), remembered with the settings (prefs.ts). Hiding and resizing
 // apply as one generated style sheet, so they never re-render the grid; the order rearranges the loaded rows.
 
 /** `order`: column names in the order shown; empty for the table's own order. */
+import { readPref, writePref } from "./prefs.ts"; // with the extension, for columns.test.ts under node
+
 export type Layout = { hidden: string[]; widths: Record<string, number>; order: string[] };
 
 export const MIN_WIDTH = 40;
 const storageKey = (connection: string, table: string) => `columns:${connection}:${table}`;
 
 export function loadLayout(connection: string, table: string): Layout {
-  try {
-    const saved = JSON.parse(localStorage.getItem(storageKey(connection, table)) ?? "{}");
-    const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-    return { hidden: list(saved.hidden), widths: saved.widths ?? {}, order: list(saved.order) };
-  } catch {
-    return { hidden: [], widths: {}, order: [] };
-  }
+  const saved = readPref<Partial<Layout>>(storageKey(connection, table)) ?? {};
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  const widths = typeof saved.widths === "object" && saved.widths !== null ? saved.widths : {};
+  return { hidden: list(saved.hidden), widths, order: list(saved.order) };
 }
 
 export function saveLayout(connection: string, table: string, layout: Layout) {
   const empty = !layout.hidden.length && !Object.keys(layout.widths).length && !layout.order.length;
-  try {
-    if (empty) localStorage.removeItem(storageKey(connection, table));
-    else localStorage.setItem(storageKey(connection, table), JSON.stringify(layout));
-  } catch {} // unavailable storage: the layout still applies until the tab closes
+  writePref(storageKey(connection, table), empty ? undefined : layout);
 }
 
 /** CSS for `#out` that hides and sizes columns by position; the row number is the first cell of each row. */

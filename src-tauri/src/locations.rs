@@ -1,5 +1,6 @@
 //! Where the app keeps its files (Settings › Locations): saved connections, kept SQL tabs, saved queries, metrics
-//! boards and query history.
+//! boards, query history, and settings (with themes and layouts). MCP settings stay in the config folder: their access
+//! tokens belong to this machine.
 //! `locations.json` in the app config folder names custom folders, e.g. in iCloud Drive or Dropbox; anything it
 //! doesn't name stays in the config folder.
 
@@ -14,6 +15,8 @@ pub enum Location {
     Connections,
     Queries,
     History,
+    /// Settings, themes, column layouts and other choices.
+    Settings,
 }
 
 impl Location {
@@ -23,6 +26,7 @@ impl Location {
             Location::Connections => &["connections.json"],
             Location::Queries => &["sql-tabs.json", "favorites.json", "metrics.json"],
             Location::History => &["history.json"],
+            Location::Settings => &["settings.json"],
         }
     }
 }
@@ -37,6 +41,8 @@ struct Locations {
     queries: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     history: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settings: Option<PathBuf>,
 }
 
 impl Locations {
@@ -45,6 +51,7 @@ impl Locations {
             Location::Connections => &mut self.connections,
             Location::Queries => &mut self.queries,
             Location::History => &mut self.history,
+            Location::Settings => &mut self.settings,
         }
     }
 }
@@ -117,6 +124,7 @@ pub struct Folders {
     connections: PathBuf,
     queries: PathBuf,
     history: PathBuf,
+    settings: PathBuf,
     default: PathBuf,
 }
 
@@ -128,6 +136,7 @@ pub fn locations(app: AppHandle) -> Result<Folders> {
         connections: folder(&config, Location::Connections)?,
         queries: folder(&config, Location::Queries)?,
         history: folder(&config, Location::History)?,
+        settings: folder(&config, Location::Settings)?,
         default: config,
     })
 }
@@ -138,7 +147,7 @@ pub fn set_location(app: AppHandle, which: Location, folder: Option<PathBuf>) ->
     relocate(&config_dir(&app)?, which, folder)
 }
 
-/// The JSON documents the UI keeps in files: one object keyed by connection name each.
+/// The JSON documents the UI keeps in files: one object each, keyed by connection name (settings: by setting).
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Doc {
@@ -148,6 +157,7 @@ pub enum Doc {
     Favorites,
     /// Metrics boards, which live with the SQL tabs.
     Metrics,
+    Settings,
 }
 
 impl Doc {
@@ -157,6 +167,7 @@ impl Doc {
             Doc::History => (Location::History, "history.json"),
             Doc::Favorites => (Location::Queries, "favorites.json"),
             Doc::Metrics => (Location::Queries, "metrics.json"),
+            Doc::Settings => (Location::Settings, "settings.json"),
         };
         Ok(folder(config, which)?.join(name))
     }
@@ -249,6 +260,16 @@ mod tests {
         std::fs::write(config.join("favorites.json"), r#"{"a":{}}"#).unwrap();
         relocate(&config, Location::Queries, Some(elsewhere.clone())).unwrap();
         assert_eq!(std::fs::read_to_string(elsewhere.join("favorites.json")).unwrap(), r#"{"a":{}}"#);
+    }
+
+    #[test]
+    fn relocate_moves_settings_on_their_own() {
+        let config = temp_dir("settings");
+        let elsewhere = temp_dir("settings-dest");
+        std::fs::write(config.join("settings.json"), r#"{"settings":{}}"#).unwrap();
+        relocate(&config, Location::Settings, Some(elsewhere.clone())).unwrap();
+        assert_eq!(std::fs::read_to_string(elsewhere.join("settings.json")).unwrap(), r#"{"settings":{}}"#);
+        assert_eq!(folder(&config, Location::Queries).unwrap(), config, "others stay");
     }
 
     #[test]

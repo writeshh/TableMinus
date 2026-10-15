@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { el } from "./dom";
+import { readPref, writePref } from "./prefs";
 
 export type Group = { name: string; icon: string };
 export type Tag = { name: string; color: string };
@@ -293,18 +294,10 @@ export async function importConnections(done: (text: string, error?: boolean) =>
 
 const RECENT_MAX = 10;
 const read = (key: string): string[] => {
-  try {
-    const v = JSON.parse(localStorage.getItem(key) ?? "[]");
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
+  const v = readPref<unknown>(key);
+  return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 };
-const write = (key: string, v: string[]) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(v));
-  } catch {} // unavailable storage: the list holds for this session only
-};
+const write = (key: string, v: string[]) => writePref(key, v);
 
 /** Connection names, most recently opened first. */
 export const recent = () => read("recent");

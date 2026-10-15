@@ -6,6 +6,7 @@
 import { connName, el } from "./dom";
 import { modal } from "./backup";
 import { dropItem, editable, newMenu, openItem, scriptMenu } from "./objects";
+import { readPref, writePref } from "./prefs";
 
 type MenuItem = [string, () => void] | "-";
 type Kind = "schema" | "view" | "matview" | "function" | "procedure" | "sequence" | "type";
@@ -54,17 +55,9 @@ const SECTIONS: [string, string, Kind[]][] = [
 ];
 
 function load<T>(key: string, fallback: T): T {
-  try {
-    return { ...fallback, ...JSON.parse(localStorage.getItem(key) ?? "{}") };
-  } catch {
-    return fallback;
-  }
+  return { ...fallback, ...readPref<Partial<T>>(key) };
 }
-function store(key: string, value: unknown) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {} // unavailable storage: the choice lasts until the app closes
-}
+const store = writePref;
 
 const prefsKey = () => `sidebar:${connName(ctx.conn()?.name ?? "")}`; // per connection, not per tab
 const prefs = (): Prefs => load<Prefs>(prefsKey(), { pins: [], groups: [] });

@@ -45,6 +45,7 @@ import "./workspace.css";
 import { chartPanel } from "./charts";
 import { guessSpec } from "./chartdata";
 import { openBoard, type BoardCtx } from "./metrics";
+import { readPref, writePref } from "./prefs";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -2928,6 +2929,7 @@ function transferCtx(): TransferCtx {
     tables,
     columns: async (table) => (await loadColumns(table)).map((c) => c.name),
     confirm: confirmDialog,
+    revealExports: () => settings.revealExport,
     imported: async (table) => {
       // A new table appears in the sidebar; an open tab of the table shows the new rows.
       try {
@@ -3051,6 +3053,9 @@ type Settings = {
   hideScrollbars: boolean;
   /** Write the values updated and deleted rows had to the console log when saving. */
   logOriginals: boolean;
+  /** Show an export's files in Finder once it finishes. */
+  revealExport: boolean;
+  closeBrackets: boolean;
 };
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
@@ -3059,26 +3064,21 @@ const DEFAULT_SETTINGS: Settings = {
   shortcuts: {}, launcherSort: "name", reopenWorkspaces: false,
   resultsMode: "tabs", stopOnError: true, historyYears: 0,
   pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, hideScrollbars: false, logOriginals: false,
+  revealExport: false, closeBrackets: true,
 };
 let settings: Settings = loadSettings();
 
-// ponytail: settings live in the webview's localStorage (per machine); move to a file if they need syncing.
+/** Kept with the other preferences in settings.json (prefs.ts). */
 function loadSettings(): Settings {
-  try {
-    const stored = JSON.parse(localStorage.getItem("settings") ?? "{}");
-    if (typeof stored.safeDefault === "boolean" && !stored.safeLevel) stored.safeLevel = stored.safeDefault ? "alert2" : "silent"; // before levels
-    delete stored.safeDefault;
-    return { ...DEFAULT_SETTINGS, ...stored };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
+  const stored = { ...readPref<Record<string, unknown>>("settings") };
+  if (typeof stored.safeDefault === "boolean" && !stored.safeLevel) stored.safeLevel = stored.safeDefault ? "alert2" : "silent"; // before levels
+  delete stored.safeDefault;
+  return { ...DEFAULT_SETTINGS, ...stored };
 }
 
 function setSetting<K extends keyof Settings>(key: K, value: Settings[K]) {
   settings[key] = value;
-  try {
-    localStorage.setItem("settings", JSON.stringify(settings));
-  } catch {} // unavailable storage: settings still apply for this session
+  writePref("settings", settings);
   applySettings();
 }
 
@@ -3115,6 +3115,8 @@ function applySettings() {
   $<HTMLInputElement>("geometry-wkt").checked = settings.geometryWkt;
   $<HTMLInputElement>("hide-scrollbars").checked = settings.hideScrollbars;
   $<HTMLInputElement>("log-originals").checked = settings.logOriginals;
+  $<HTMLInputElement>("reveal-export").checked = settings.revealExport;
+  $<HTMLInputElement>("close-brackets").checked = settings.closeBrackets;
   document.body.classList.toggle("hide-scrollbars", settings.hideScrollbars);
   const tab = current();
   if (tab?.kind === "sql" && !$("workspace").hidden) showResults(tab);
@@ -3126,6 +3128,7 @@ function applySettings() {
   $<HTMLSelectElement>("filter-op").value = settings.filterOp;
   $<HTMLInputElement>("filter-bar").checked = settings.filterBar;
   editor.setCompletion(settings.upperKeywords, settings.completeKey);
+  editor.setCloseBrackets(settings.closeBrackets);
   editor.setKeyBinding(settings.keyBinding).catch((e) => status(`Vim keys: ${e}`, "error"));
   setFilterDefaults({ column: settings.filterColumn, op: settings.filterOp });
   setOverrides(settings.shortcuts);
@@ -3227,6 +3230,8 @@ $<HTMLSelectElement>("default-sort").onchange = (e) => setSetting("defaultSort",
 $<HTMLInputElement>("geometry-wkt").onchange = (e) => setSetting("geometryWkt", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("hide-scrollbars").onchange = (e) => setSetting("hideScrollbars", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("log-originals").onchange = (e) => setSetting("logOriginals", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("reveal-export").onchange = (e) => setSetting("revealExport", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("close-brackets").onchange = (e) => setSetting("closeBrackets", (e.target as HTMLInputElement).checked);
 
 // ---------- Commands (commands.ts): shortcuts, and later the menu bar and Open Anything ----------
 

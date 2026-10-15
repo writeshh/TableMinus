@@ -3,6 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { $, connName, el } from "./dom";
+import { readPref, writePref } from "./prefs";
 
 export type Safety = "silent" | "alert1" | "alert2" | "safe1" | "safe2";
 export const LEVELS: [Safety, string, string][] = [
@@ -19,21 +20,15 @@ export function fillLevels(select: HTMLSelectElement) {
   select.replaceChildren(...LEVELS.map(([value, name, what]) => el("option", { value, textContent: `${name}: ${what}` })));
 }
 
-// ---------- Security preferences (this machine) ----------
+// ---------- Security preferences (kept with the settings, prefs.ts) ----------
 
 export type Security = { touchId: boolean; autoLockMinutes: number };
 export const security: Security = (() => {
   const defaults: Security = { touchId: true, autoLockMinutes: 0 };
-  try {
-    return { ...defaults, ...JSON.parse(localStorage.getItem("security") ?? "{}") };
-  } catch {
-    return defaults;
-  }
+  return { ...defaults, ...readPref<Partial<Security>>("security") };
 })();
 export function saveSecurity() {
-  try {
-    localStorage.setItem("security", JSON.stringify(security));
-  } catch {} // unavailable storage: the choice holds for this session
+  writePref("security", security);
 }
 
 let touchIdHere = false;
