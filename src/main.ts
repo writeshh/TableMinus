@@ -21,6 +21,7 @@ import { Staged } from "./staging";
 import * as grid from "./grid-edit";
 import * as vgrid from "./vgrid";
 import { syncRowDetail, toggleRowDetail } from "./rowdetail";
+import { divider, initHiding, togglePane } from "./splitters";
 import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
 import "./passcode"; // the lock screen, and its rows in Settings › Security
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
@@ -45,7 +46,7 @@ import "./workspace.css";
 import { chartPanel } from "./charts";
 import { guessSpec } from "./chartdata";
 import { openBoard, type BoardCtx } from "./metrics";
-import { readPref, writePref } from "./prefs";
+import { flushPrefs, readPref, writePref } from "./prefs";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -3323,7 +3324,10 @@ addCommands([
   { id: "saved-queries", label: "Saved Queries", menu: "Navigate", when: inWorkspace, run: () => (showSide("history"), showSaved()) },
   { id: "filter", label: "Filter Rows", menu: "Edit", keys: ["Mod+KeyF"], when: () => inWorkspace() && current()?.kind === "table",
     run: () => toggleFilters(true) },
-  { id: "font-bigger", label: "Increase Font Size", menu: "View", keys: ["Mod+Equal", "Mod+Shift+Equal"], when: inWorkspace,
+  { id: "toggle-sidebar", label: "Toggle Left Sidebar", menu: "View", keys: ["Alt+Mod+Digit1"], when: inWorkspace, run: () => togglePane("sidebar") },
+  { id: "toggle-row-detail", label: "Toggle Row Detail", menu: "View", keys: ["Alt+Mod+Digit2"], when: inWorkspace, run: toggleRowDetail },
+  { id: "toggle-results", label: "Toggle Results Pane", menu: "View", keys: ["Alt+Mod+Digit3"], when: inWorkspace, run: () => togglePane("results") },
+  { id: "font-bigger", sep: true, label: "Increase Font Size", menu: "View", keys: ["Mod+Equal", "Mod+Shift+Equal"], when: inWorkspace,
     run: () => fontBy(settings.fontSize + 1) },
   { id: "font-smaller", label: "Decrease Font Size", menu: "View", keys: ["Mod+Minus"], when: inWorkspace, run: () => fontBy(settings.fontSize - 1) },
   { id: "font-reset", label: "Actual Font Size", menu: "View", keys: ["Mod+Digit0"], when: inWorkspace, run: () => fontBy(DEFAULT_SETTINGS.fontSize) },
@@ -3398,13 +3402,24 @@ addCommands([
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
 ]);
 initMenu();
+initHiding();
+divider({
+  host: $("workspace"), className: "side-edge", variable: "--side-w", pref: "layout.sidebar", axis: "x", sign: 1, min: 180,
+  max: () => Math.min(560, window.innerWidth / 2), size: () => $("workspace").querySelector("aside")!.getBoundingClientRect().width,
+  label: "Sidebar width",
+});
+divider({
+  host: $("sql-pane"), className: "sql-edge", variable: "--sql-h", pref: "layout.editor", axis: "y", sign: 1, min: 120,
+  max: () => $("live").getBoundingClientRect().height - 140, size: () => $("sql-pane").getBoundingClientRect().height,
+  label: "Editor height",
+});
 // Closing the window (Quit closes it too, menu.ts) waits until the last typing is in the files. Tauri destroys the
 // window once this handler returns.
 if ("__TAURI_INTERNALS__" in window) {
   getCurrentWindow().onCloseRequested(async () => {
     stashEditor();
     flushSqlTabs();
-    await flushDocs();
+    await Promise.all([flushDocs(), flushPrefs()]);
   }).catch(() => {}); // a preview without Tauri has no window events
 }
 

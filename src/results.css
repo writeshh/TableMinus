@@ -17,7 +17,7 @@
 .message-sql { font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
 .message-text { color: var(--muted); }
 .messages li.error .message-text { color: var(--danger); white-space: pre-wrap; }
-.console { flex: none; height: 30%; min-height: 120px; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--grid-bg); }
+.console { position: relative; flex: none; height: var(--console-h, 30%); min-height: 80px; max-height: calc(100% - 160px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--grid-bg); }
 .console[hidden] { display: none; }
 .console header { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--line); background: var(--tabs-bg); font-size: 12px; }
 .console-body { flex: 1; min-height: 0; overflow: auto; }
