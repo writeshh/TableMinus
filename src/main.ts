@@ -32,7 +32,7 @@ import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
 import { initMenu, setRecent } from "./menu";
 import {
-  columnOrderMenu, forgetItems, initSearch, initSidebar, loadedItems, newItemsMenu, renderTree, shownSchema, sortColumns, treeMenu,
+  columnOrderMenu, forgetItems, initSearch, initSidebar, loadedItems, newItemsMenu, noteOpened, renderTree, shownSchema, sortColumns, treeMenu,
 } from "./sidebar";
 import { replaceCells, type Transform } from "./transforms";
 import { initDiagram, openDiagram } from "./diagram";
@@ -1497,6 +1497,7 @@ function openSqlIn(title: string | null, sql: string) {
  *  with `filters` when given. */
 function openTable(table: string, view: TableTab["view"] = "data", create = false, opts: { filters?: FilterRow[]; fresh?: boolean } = {}) {
   const { filters, fresh = false } = opts;
+  if (!create) noteOpened(table); // the sidebar's Recent section
   const existing = fresh ? undefined : (tabs.find((t) => t.kind === "table" && t.table === table) as TableTab | undefined);
   if (existing) {
     if (existing.view !== view && !pendingCount(existing)) existing.view = view;

@@ -1,4 +1,4 @@
-// The left sidebar's item tree: pinned items, item groups (by name rules), tables, and sections for views,
+// The left sidebar's item tree: pinned items, recently opened ones, item groups (by name rules), tables, and sections for views,
 // materialized views, functions and procedures, sequences and types, each switchable on or off; a schema
 // switcher on Postgres; "search in database"; an item's overview; and each item's menu (Copy Script As, select top
 // 100, insert into the editor, open its editor, drop). Table rows come from main.ts (they expand to columns and carry
@@ -42,8 +42,11 @@ export const initSidebar = (c: Ctx) => void (ctx = c);
 // ---------- Saved per connection: schema, pins, groups; per machine: which sections show ----------
 
 type Rule = "prefix" | "suffix" | "contains" | "equals";
-type Group = { name: string; rule: Rule; value: string };
-type Prefs = { schema?: string | null; pins: string[]; groups: Group[] };
+/** Members are the tables the rule matches (none with an empty `value`) plus the ones added by hand (`items`). */
+type Group = { name: string; rule: Rule; value: string; items?: string[] };
+/** `recent`: the items opened last, newest first. */
+type Prefs = { schema?: string | null; pins: string[]; groups: Group[]; recent?: string[] };
+const RECENT_MAX = 8;
 const RULES: [Rule, string][] = [["prefix", "Name starts with"], ["suffix", "Name ends with"], ["contains", "Name contains"], ["equals", "Name is"]];
 
 const SECTIONS: [string, string, Kind[]][] = [
@@ -62,6 +65,14 @@ const store = writePref;
 const prefsKey = () => `sidebar:${connName(ctx.conn()?.name ?? "")}`; // per connection, not per tab
 const prefs = (): Prefs => load<Prefs>(prefsKey(), { pins: [], groups: [] });
 const savePrefs = (p: Prefs) => (store(prefsKey(), p), ctx.redraw());
+/** Notes an item the user opened, for the Recent section; the caller redraws. */
+export function noteOpened(name: string) {
+  if (!ctx?.conn()) return;
+  const p = prefs();
+  const recent = [name, ...(p.recent ?? []).filter((n) => n !== name)].slice(0, RECENT_MAX);
+  if (recent.join("\u001f") !== (p.recent ?? []).join("\u001f")) store(prefsKey(), { ...p, recent });
+}
+
 /** The Postgres schema the sidebar shows, or null for all schemas (or none chosen yet). */
 export const shownSchema = () => prefs().schema ?? null;
 /** Hidden sections, collapsed headings and the column order, the same for every connection. */
@@ -144,6 +155,16 @@ export function renderTree(host: HTMLElement, query: string): number {
     const browsable = kind === "table" || kind === "view" || kind === "matview";
     if (browsable) {
       const scriptKind = kind === "matview" ? "matview" : null;
+      const handGroups = p.groups.filter((g) => g.items?.includes(name));
+      // A second menu at the same spot, standing in for a submenu: every group, ticked where it's in by hand.
+      const groupsMenu = () => p.groups.map((g, gi): MenuItem => {
+        const inIt = !!g.items?.includes(name);
+        return [`${inIt ? "✓ " : "    "}${g.name}`, () => setHandGroup(p, gi, name, !inIt)];
+      });
+      const grouping: MenuItem[] = [
+        ...(p.groups.length ? [["Add to group ›", () => ctx.menu(last!, groupsMenu())] as MenuItem] : []),
+        ...handGroups.map((g): MenuItem => [`Remove from ${g.name}`, () => setHandGroup(p, p.groups.indexOf(g), name, false)]),
+      ];
       const first: MenuItem[] = [
         ["Open in new tab", () => ctx.openTable(name, true)],
         ["Overview…", () => showOverview(name, row)],
@@ -152,14 +173,14 @@ export function renderTree(host: HTMLElement, query: string): number {
         ["Select top 100", () => void selectTop(scriptKind, name)],
         insert,
       ];
-      const row = ctx.tableRow(name, label(name), first, ["-", pin]);
+      const row = ctx.tableRow(name, label(name), first, ["-", pin, ...grouping]);
       row.addEventListener("contextmenu", (e) => (last = e), true);
       return row;
     }
     const open = editable(kind);
     const row = el("li", {}, el("div", { className: "tree-row", title: `${kind} ${name}${open ? " (click to edit)" : ""}` },
       el("span", { className: "chevron-gap" }), el("span", { className: `item-icon ${kind}` }), el("span", { className: "label", textContent: label(name) })));
-    if (open) row.onclick = () => openItem(kind, name);
+    if (open) row.onclick = () => (noteOpened(name), openItem(kind, name));
     const items: MenuItem[] = [
       ...(open ? [[kind === "sequence" ? "Edit sequence…" : `Edit ${kind}…`, () => openItem(kind, name)], "-"] as MenuItem[] : []),
       ...(kind === "type" ? copy.slice(0, 1) : copy),
@@ -189,11 +210,21 @@ export function renderTree(host: HTMLElement, query: string): number {
 
   const kindOf = new Map(all.map((i) => [i.name, i.kind]));
   const pinRows = p.pins.filter(shows).filter((n) => kindOf.has(n) || ctx.tables().includes(n)).map((n) => rowFor(n, kindOf.get(n) ?? "table"));
+  // Recent: what was opened last that still exists here (another database's names don't show).
+  const recentRows = off.includes("recent") ? []
+    : (p.recent ?? []).filter(shows).filter((n) => kindOf.has(n) || ctx.tables().includes(n)).map((n) => rowFor(n, kindOf.get(n) ?? "table"));
+  const recentSection = section("recent", "Recent", recentRows);
+  recentSection[0]?.querySelector(".section-head")?.addEventListener("contextmenu", (e) => {
+    e.stopPropagation();
+    ctx.menu(e as MouseEvent, [["Clear recent", () => savePrefs({ ...p, recent: [] })]]);
+  });
   const unpinned = tables.filter((t) => !pinned.has(t));
   // Rules see the table's own name, without its schema, whichever schema is shown.
   const matches = (g: Group, t: string) => {
+    if (g.items?.includes(t)) return true;
     const n = (pg ? t.slice(t.indexOf(".") + 1) : t).toLowerCase();
     const v = g.value.toLowerCase();
+    if (!v) return false; // a group of hand-picked tables only
     return g.rule === "prefix" ? n.startsWith(v) : g.rule === "suffix" ? n.endsWith(v) : g.rule === "contains" ? n.includes(v) : n === v;
   };
   const grouped = new Set<string>();
@@ -213,6 +244,7 @@ export function renderTree(host: HTMLElement, query: string): number {
 
   host.replaceChildren(
     ...(pinRows.length ? section("pinned", "Pinned", pinRows) : []),
+    ...recentSection,
     ...groupSections,
     ...section("tables", "Tables", unpinned.filter((t) => !grouped.has(t)).map((t) => rowFor(t, "table"))),
     ...SECTIONS.flatMap(([id, title, kinds]) =>
@@ -244,7 +276,7 @@ export function treeMenu(): MenuItem[] {
   return [
     ["New group…", () => editGroup({ name: "", rule: "prefix", value: "" }, (g) => savePrefs({ ...prefs(), groups: [...prefs().groups, g] }))],
     "-",
-    ...SECTIONS.map(([id, title]) => [`${off.includes(id) ? "    " : "✓ "}${title}`, () => toggle(id)] as MenuItem),
+    ...[["recent", "Recent"], ...SECTIONS].map(([id, title]) => [`${off.includes(id as string) ? "    " : "✓ "}${title}`, () => toggle(id as string)] as MenuItem),
     "-",
     ...columnOrderMenu(),
   ];
@@ -262,22 +294,33 @@ async function selectTop(kind: "matview" | null, name: string) {
   }
 }
 
+/** Adds a table to group `gi` by hand, or takes it out again. */
+function setHandGroup(p: Prefs, gi: number, table: string, add: boolean) {
+  const groups = p.groups.map((g, i) => {
+    if (i !== gi) return g;
+    const items = (g.items ?? []).filter((t) => t !== table);
+    return { ...g, items: add ? [...items, table] : items };
+  });
+  savePrefs({ ...p, groups });
+}
+
 /** A group's name and its rule; `save` gets the result unless cancelled. */
 function editGroup(g: Group, save: (g: Group) => void) {
   const name = el("input", { value: g.name, placeholder: "e.g. Temporary" });
   const rule = el("select", {}, ...RULES.map(([v, t]) => el("option", { value: v, textContent: t })));
   rule.value = g.rule;
-  const value = el("input", { value: g.value, placeholder: "e.g. tmp_", spellcheck: false });
-  const form = el("form", { method: "dialog" }, el("fieldset", {}, el("label", {}, "Name ", name), el("label", {}, "Tables whose ", rule), el("label", {}, "Text ", value)));
+  const value = el("input", { value: g.value, placeholder: "e.g. tmp_ (empty: only tables added by hand)", spellcheck: false });
+  const form = el("form", { method: "dialog" }, el("fieldset", {}, el("label", {}, "Name ", name), el("label", {}, "Tables whose ", rule), el("label", {}, "Text ", value)),
+    el("p", { className: "hint", textContent: "Right-click a table › Add to group to add it by hand, whatever its name." }));
   const { d, footer, setStatus } = modal(g.name ? `Edit ${g.name}` : "New group", "small", form);
   const cancel = el("button", { type: "button", textContent: "Cancel" });
   const ok = el("button", { type: "button", className: "primary", textContent: "Save" });
   footer.append(el("span", { className: "spacer" }), cancel, ok);
   cancel.onclick = () => d.close();
   ok.onclick = () => {
-    if (!name.value.trim() || !value.value.trim()) return setStatus("Enter a name and the text to match.", "error");
+    if (!name.value.trim()) return setStatus("Enter a name.", "error");
     d.close();
-    save({ name: name.value.trim(), rule: rule.value as Rule, value: value.value.trim() });
+    save({ ...g, name: name.value.trim(), rule: rule.value as Rule, value: value.value.trim() });
   };
   form.onsubmit = (e) => (e.preventDefault(), ok.click());
   d.showModal();
