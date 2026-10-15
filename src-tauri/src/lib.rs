@@ -288,6 +288,9 @@ async fn test_connection(
     };
     let password = fallback(password, store::Secret::Database)?;
     let ssh_secret = if conn.ssh.is_some() { fallback(ssh_password, store::Secret::Ssh)? } else { None };
+    if conn.kind == Engine::Redis {
+        return redis::test(conn, password, ssh_secret).await;
+    }
     let (mut db, _tunnel) = open_db(&conn, password.as_ref(), ssh_secret).await?;
     let n = db.tables(conn.options.system_schemas).await?.len();
     Ok(format!("Connected · {n} tables"))

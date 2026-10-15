@@ -102,7 +102,7 @@
         <details class="more">
           <summary>More options</summary>
           <fieldset>
-            <label>Startup SQL <textarea name="opt_startup_sql" rows="2" placeholder="Runs after connecting, e.g. SET search_path TO app"></textarea></label>
+            <label data-engines="postgres mysql mariadb sqlite">Startup SQL <textarea name="opt_startup_sql" rows="2" placeholder="Runs after connecting, e.g. SET search_path TO app"></textarea></label>
             <label>Startup script <textarea name="opt_startup_script" rows="2" placeholder="Shell script run before connecting, e.g. to start a VPN"></textarea></label>
             <div class="opt-row" data-engines="postgres">
               <span>Postgres</span>

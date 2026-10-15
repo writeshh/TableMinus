@@ -28,6 +28,7 @@ import "./passcode"; // the lock screen, and its rows in Settings › Security
 import { withVault } from "./vault";
 import { openScript } from "./scripts";
 import { initPlugins, pluginMenu } from "./plugins"; // also adds Settings › Plugins
+import { forgetRedis, initRedis, syncRedis } from "./redis";
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
@@ -91,6 +92,8 @@ const ENGINES: Engine[] = [
   { kind: "mariadb", label: "MariaDB", mono: "Ma", color: "var(--pink)",
     defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
   { kind: "sqlite", label: "SQLite", mono: "Sl", color: "var(--yellow)" },
+  { kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
+    defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
 const engine = (kind: string) => ENGINES.find((e) => e.kind === kind) ?? ENGINES[0];
 
@@ -424,7 +427,8 @@ function openEditor(kind: string, existing?: Saved, fresh = false, password = ""
   const d = e.defaults;
   if (d) {
     for (const k of ["host", "port", "user"] as const) field(k).placeholder = d[k];
-    field("database").placeholder = "Optional, choose one after connecting";
+    field("database").placeholder = kind === "redis" ? "0 (a number; choose another after connecting)" : "Optional, choose one after connecting";
+    if (kind === "redis") field("user").placeholder = "Optional, an ACL user";
   }
   field("name").placeholder = d ? `${e.label} · ${d.host}` : e.label;
   field("password").placeholder = editing ? "Unchanged (in keychain)" : "None";
@@ -548,8 +552,9 @@ function formToSaved(): Saved {
     const port = field("port").value.trim() || d.port;
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
-    const scheme = editingKind === "postgres" ? "postgres" : "mysql";
-    url = `${scheme}://${encodeURIComponent(user)}@${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
+    const scheme = editingKind === "postgres" ? "postgres" : editingKind === "redis" ? "redis" : "mysql";
+    if (editingKind === "redis" && !/^\d+$/.test(db || "0")) throw "A Redis database is a number, such as 0.";
+    url = `${scheme}://${user ? encodeURIComponent(user) + "@" : ""}${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
   }
   const name = val("name");
   if (name !== editing?.name && saved.some((c) => c.name === name)) throw `A connection named "${name}" already exists.`;
@@ -656,13 +661,15 @@ async function reconnect() {
   btn.disabled = true;
   status("Reconnecting…", "busy");
   try {
-    info = await invoke<Info>("reconnect", { name: sessionKey() });
+    if (isRedis()) await invoke("disconnect", { name: sessionKey() }); // redis_connect then opens a fresh session
+    info = await invoke<Info>(isRedis() ? "redis_connect" : "reconnect", { name: sessionKey(), ...(isRedis() ? { database: info?.database } : {}) });
     $("lost").hidden = true;
     renderDbTabs();
     tables = info.tables;
     columnsCache.clear();
     renderTables();
     loadSchema();
+    syncRedis(true);
     status(`Reconnected · ${info.server}`, "done");
   } catch (e) {
     status(String(e), "error");
@@ -694,7 +701,7 @@ async function showConnectionInfo() {
   Object.assign(pop.style, { top: `${r.bottom + 6}px`, left: `${Math.max(8, r.right - 340)}px` });
   pop.hidden = false;
   try {
-    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>("connection_info", { name: sessionKey() });
+    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>(isRedis() ? "redis_connection_info" : "connection_info", { name: sessionKey() });
     list.replaceChildren(
       ...row("Connection", active.name),
       ...row("Server", i.server),
@@ -741,7 +748,7 @@ function freeKey(name: string) {
 async function openWorkspace(c: Saved, database?: string) {
   await docsReady; // kept tabs and history, read at startup
   const key = freeKey(c.name);
-  const i = await launcher.withAskedPassword(c.name, () => invoke<Info>("connect", { name: key, database }));
+  const i = await launcher.withAskedPassword(c.name, () => invoke<Info>(connectCommand(c.kind), { name: key, database }));
   if (!i) return; // the password prompt was cancelled
   launcher.addRecent(c.name);
   const at = ws && workspaces.includes(ws) ? workspaces.indexOf(ws) + 1 : workspaces.length;
@@ -767,6 +774,12 @@ async function openWorkspace(c: Saved, database?: string) {
   else editor.focus();
 }
 
+/** The command that opens a session: Redis isn't SQL, and has its own (redis.rs). */
+const connectCommand = (kind: string) => (kind === "redis" ? "redis_connect" : "connect");
+const isRedis = () => active?.kind === "redis";
+/** A database as the header shows it: Redis numbers its databases. */
+const dbLabel = (database: string) => (isRedis() ? `db${database}` : database);
+
 /** A new connection or database: fresh tree, and a single empty SQL tab. */
 function applyInfo(i: Info) {
   info = i;
@@ -790,6 +803,7 @@ function applyInfo(i: Info) {
   for (const k of kept) tabs.push({ id: nextId++, kind: "sql", title: k.title, sql: k.sql, path: k.path });
   if (kept.length) select(tabs[0].id);
   renderTables();
+  syncRedis(true);
 }
 
 /** The workspace header, the database button and the sidebar filter for the active connection. */
@@ -799,7 +813,7 @@ function showHeader() {
   document.body.dataset.env = c.tag; // production gets a red edge
   const btn = $("db-button");
   btn.hidden = !info?.can_switch;
-  btn.textContent = info?.database ? `${info.database} ▾` : "Choose database ▾";
+  btn.textContent = info?.database ? `${dbLabel(info.database)} ▾` : "Choose database ▾";
   btn.title = `Open a database (${keyLabel("open-database")})`;
   $<HTMLInputElement>("filter").hidden = !tables.length;
   $("users-button").hidden = c.kind === "sqlite"; // one file, no users
@@ -853,6 +867,7 @@ function showWorkspace(w: Workspace) {
   renderHistory();
   renderFavorites();
   renderMain();
+  syncRedis();
 }
 
 function cycleWorkspace(step: number) {
@@ -923,7 +938,7 @@ function renderDbTabs() {
   add.onclick = newWorkspace;
   strip.replaceChildren(
     ...workspaces.map((w) => {
-      const database = (w === ws ? info : w.info)?.database;
+      const database = ((d) => d && (w.conn.kind === "redis" ? `db${d}` : d))((w === ws ? info : w.info)?.database);
       const lost = w === ws ? !$("lost").hidden : w.lost;
       const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
       close.onclick = (e) => (e.stopPropagation(), closeDbTab(w));
@@ -1184,7 +1199,9 @@ async function openDbPicker() {
 async function loadDbs(pick: string) {
   setStatus("db-status", "Loading…", "busy");
   try {
-    databases = await call<string[]>("list_databases", { name: sessionKey() });
+    databases = isRedis()
+      ? (await call<{ index: number; keys: number }[]>("redis_databases", { name: sessionKey() })).map((d) => String(d.index))
+      : await call<string[]>("list_databases", { name: sessionKey() });
     $<HTMLInputElement>("db-search").value = "";
     dbPick = Math.max(0, databases.indexOf(pick));
     setStatus("db-status", "");
@@ -1222,7 +1239,7 @@ async function openDb(name?: string) {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
-    const next = await call<Info>("use_database", { name: sessionKey(), database: name });
+    const next = await call<Info>(isRedis() ? "redis_connect" : "use_database", { name: sessionKey(), database: name });
     stashEditor();
     saveSqlTabs(); // under the database being left
     applyInfo(next);
@@ -1312,6 +1329,7 @@ async function loadColumns(table: string) {
 
 /** The sidebar tree (sidebar.ts), drawing table rows with `tableRow`. */
 function renderTables() {
+  if (isRedis()) return; // the Redis view lists keys instead (redis.ts)
   const shown = active ? renderTree($("tables"), $<HTMLInputElement>("filter").value) : 0;
   const hint = $("no-tables");
   hint.hidden = shown > 0;
@@ -1682,7 +1700,7 @@ function renderMain() {
   $("tabs").querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 
   const env = active?.tag ? `${tagLabel(active.tag)} | ` : "";
-  $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${info.database}` : ""}${tab ? ` : ${tab.title}` : ""}`;
+  $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${dbLabel(info.database)}` : ""}${tab && !isRedis() ? ` : ${tab.title}` : ""}`;
   $("pill").className = `pill ${active?.tag ?? ""}`;
   if (!tab) return showNoTab();
 
@@ -2049,6 +2067,7 @@ function ask(text: string, detail: string, okLabel: string): Promise<boolean> {
 
 /** The sidebar's items again (new or dropped tables), with columns and autocomplete reloaded. */
 async function reloadItems() {
+  if (isRedis()) return syncRedis(true);
   const i = await call<Info>("connect", { name: sessionKey() }); // reuses the open connection
   forgetItems(sessionKey());
   info = i;
@@ -2062,7 +2081,7 @@ async function reloadItems() {
 async function loadSchema() {
   forgetSchema(); // the assistant's copy, with types, is fetched again when next needed
   renderAssistant();
-  if (!active) return;
+  if (!active || isRedis()) return;
   const [conn, key] = [active, sessionKey()];
   try {
     const pairs = await invoke<[string, string][]>("schema", { name: key });
@@ -2967,6 +2986,7 @@ function showDiagram(table?: string) {
   openDiagram(pg ? (table?.includes(".") ? table.split(".")[0] : shownSchema()) : null, table);
 }
 initDiagram({ call, conn: hostConn, openTable: (t) => openTable(t), menu: contextMenu });
+initRedis({ conn: hostConn, call, confirm: confirmDialog, menu: contextMenu });
 initPlugins({
   conn: hostConn,
   insert(sql) {
@@ -3109,6 +3129,7 @@ async function closeWorkspace(next?: Workspace | null) {
   flushSqlTabs();
   if (ws) {
     invoke("disconnect", { name: ws.key }).catch(() => {});
+    forgetRedis(ws.key);
     // An asked-for password serves every tab of its connection, so it goes with the last one.
     const name = ws.conn.name;
     if (!workspaces.some((w) => w !== ws && w.conn.name === name)) launcher.forgetAskedPassword(name);

@@ -548,6 +548,14 @@ async fn info(prefs: &crate::Prefs, s: &mut Session) -> Result<Info> {
     })
 }
 
+/// Test in the connection form: opens a session, says what answered, and closes it.
+pub async fn test(saved: Saved, password: Option<SecretString>, ssh_secret: Option<SecretString>) -> Result<String> {
+    let mut s = open_session(saved, password, ssh_secret, None).await?;
+    let server = info(&crate::Prefs::default(), &mut s).await?.server;
+    let keys = s.client.call(&[b"DBSIZE"]).await?.ok()?.int();
+    Ok(format!("Connected · {server} · {keys} keys in database {}", s.db))
+}
+
 /// Opens (or reuses) the session `name` of a saved Redis connection, on `database` when given.
 #[tauri::command]
 pub async fn redis_connect(
@@ -1124,6 +1132,32 @@ mod tests {
             let big = vec![b'x'; 3 * 1024 * 1024];
             c.call(&[b"SET", b"big", &big]).await.unwrap();
             assert_eq!(read_value(&mut c, b"big").await.unwrap().size, 3 * 1024 * 1024);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local Redis on 6379; uses database 13"]
+    fn local_redis_session_opens_from_a_saved_connection_and_tests() {
+        tauri::async_runtime::block_on(async {
+            let saved = crate::store::Saved {
+                name: "cache".into(),
+                kind: crate::db::Engine::Redis,
+                url: "redis://127.0.0.1:6379/13".into(),
+                tag: String::new(),
+                safety: crate::safety::Safety::Silent,
+                ssh: None,
+                tls: crate::tls::Tls::default(),
+                options: crate::db::Options::default(),
+                password_mode: crate::store::PasswordMode::NoPassword,
+                color: None,
+                group: String::new(),
+            };
+            let mut s = super::open_session(saved.clone(), None, None, None).await.unwrap();
+            assert_eq!(s.db, 13);
+            let info = super::info(&crate::Prefs::default(), &mut s).await.unwrap();
+            assert!(info.server.starts_with("Redis ") || info.server.starts_with("Valkey "), "{}", info.server);
+            let said = super::test(saved, None, None).await.unwrap();
+            assert!(said.contains("database 13"), "{said}");
         });
     }
 }
