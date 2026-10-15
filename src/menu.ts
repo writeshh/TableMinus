@@ -3,6 +3,7 @@
 // rebinding a shortcut rebuilds the menu with the new accelerator. Only the app window has a menu bar; in a plain
 // browser preview this does nothing.
 import { Menu, type MenuItemOptions, type PredefinedMenuItemOptions, type SubmenuOptions } from "@tauri-apps/api/menu";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { bindings, commands, isMac, onBindingsChanged, runCommand, type MenuName } from "./commands";
 
 type Entry = MenuItemOptions | SubmenuOptions | PredefinedMenuItemOptions;
@@ -37,7 +38,10 @@ async function build() {
     items: [
       { item: { About: null } }, sep,
       ...commands.filter((c) => c.id === "settings").map((c) => ({ text: c.label, accelerator: bindings(c.id)[0], action: () => void runCommand(c.id) })),
-      sep, { item: "Services" }, sep, { item: "Hide" }, { item: "HideOthers" }, { item: "ShowAll" }, sep, { item: "Quit" },
+      sep, { item: "Services" }, sep, { item: "Hide" }, { item: "HideOthers" }, { item: "ShowAll" }, sep,
+      // Not the predefined Quit, which exits at once: closing the window lets main.ts save the last typing first,
+      // and the app exits with its last window.
+      { text: "Quit TableMinus", accelerator: "CmdOrCtrl+Q", action: () => void getCurrentWindow().close() },
     ],
   };
   const menus: SubmenuOptions[] = ORDER.map((name) => {

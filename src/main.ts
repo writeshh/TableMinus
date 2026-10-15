@@ -23,7 +23,7 @@ import * as vgrid from "./vgrid";
 import { syncRowDetail, toggleRowDetail } from "./rowdetail";
 import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
 import "./passcode"; // the lock screen, and its rows in Settings › Security
-import { docEntry, docsReady, setDocEntry } from "./locations"; // also adds Settings › Locations
+import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
 import { addCommands, bindings, commands, isMac, onBindingsChanged, setOverrides } from "./commands";
@@ -812,6 +812,7 @@ const allTabs = () => (ws?.panes ?? [pane]).flatMap((p) => (p === pane ? tabs : 
 function stashWorkspace() {
   if (!ws || $("workspace").hidden) return;
   stashEditor();
+  flushSqlTabs(); // with this workspace's tabs and database, before another's take the screen
   Object.assign(pane, { tabs, currentId });
   Object.assign(ws, {
     info, tables, pane, columns: columnsCache, expanded, lost: !$("lost").hidden, filter: $<HTMLInputElement>("filter").value,
@@ -1062,22 +1063,41 @@ function closePane() {
   renderTables();
 }
 
-// ---------- SQL tabs kept per connection ----------
+// ---------- SQL tabs kept per connection and database ----------
 
 type KeptTab = { title: string; sql: string; path?: string };
+let saveTimer = 0; // a save waiting for typing to pause (saveSqlTabsSoon)
 
-// ponytail: only a connection's first workspace keeps its SQL tabs; key them by database if the others should.
-const keepsTabs = () => !!active && sessionKey() === active.name;
+/** The workspace on screen's entry in sql_tabs: connection and database, or the connection alone without one. */
+const tabsKey = () => (!active ? "" : info?.database ? `${active.name}\u001f${info.database}` : active.name);
+
+const keptTabs = (key: string) => {
+  const kept = docEntry<KeptTab[]>("sql_tabs", key);
+  return Array.isArray(kept) ? kept.filter((k) => typeof k?.title === "string" && typeof k?.sql === "string") : [];
+};
 
 function loadSqlTabs(): KeptTab[] {
-  const kept = keepsTabs() && docEntry<KeptTab[]>("sql_tabs", active!.name);
-  return Array.isArray(kept) ? kept.filter((k) => typeof k?.title === "string" && typeof k?.sql === "string") : [];
+  if (!active) return [];
+  const key = tabsKey();
+  const kept = keptTabs(key);
+  if (kept.length || key === active.name) return kept;
+  // Kept before databases had their own (under the connection's name): the first database opened takes them over.
+  const before = keptTabs(active.name);
+  if (before.length) setDocEntry("sql_tabs", key, before), setDocEntry("sql_tabs", active.name, undefined);
+  return before;
 }
 
 function saveSqlTabs() {
-  if (!active || !keepsTabs() || !settings.keepTabs) return;
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  if (!active || !settings.keepTabs) return;
   const kept: KeptTab[] = allTabs().flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql, path: t.path }] : []));
-  setDocEntry("sql_tabs", active.name, kept.length ? kept : undefined);
+  setDocEntry("sql_tabs", tabsKey(), kept.length ? kept : undefined);
+}
+
+/** Saves now if typing left a save waiting: before the screen's workspace or database changes, and at quit. */
+function flushSqlTabs() {
+  if (saveTimer) saveSqlTabs();
 }
 
 // ---------- .sql files (⌘O, ⌘S, ⌘⇧S on SQL tabs) ----------
@@ -1123,7 +1143,6 @@ async function saveSqlFile(pick: boolean) {
   }
 }
 
-let saveTimer = 0;
 function saveSqlTabsSoon() {
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(saveSqlTabs, 400);
@@ -1187,7 +1206,10 @@ async function openDb(name?: string) {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
-    applyInfo(await call<Info>("use_database", { name: sessionKey(), database: name }));
+    const next = await call<Info>("use_database", { name: sessionKey(), database: name });
+    stashEditor();
+    saveSqlTabs(); // under the database being left
+    applyInfo(next);
     $<HTMLDialogElement>("dbpicker").close();
     status(`${name} · ${tables.length} tables`, "done");
     editor.focus();
@@ -1237,7 +1259,11 @@ $("db-rename").onclick = () => {
 $("db-drop").onclick = () => {
   const db = shownDbs()[dbPick];
   if (db) databaseOp(() => dropDatabase(db), async () => {
-    if (db === info?.database) applyInfo(await call<Info>("connect", { name: sessionKey() })); // MySQL: now on none
+    if (db === info?.database) {
+      stashEditor();
+      saveSqlTabs(); // kept under the dropped database, should it come back
+      applyInfo(await call<Info>("connect", { name: sessionKey() })); // MySQL: now on none
+    }
     await loadDbs(info?.database ?? "");
   });
 };
@@ -2996,6 +3022,8 @@ $("page-next").onclick = () => turnPage(1);
  *  up. */
 async function closeWorkspace(next?: Workspace | null) {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
+  stashEditor();
+  flushSqlTabs();
   if (ws) {
     invoke("disconnect", { name: ws.key }).catch(() => {});
     // An asked-for password serves every tab of its connection, so it goes with the last one.
@@ -3370,6 +3398,15 @@ addCommands([
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
 ]);
 initMenu();
+// Closing the window (Quit closes it too, menu.ts) waits until the last typing is in the files. Tauri destroys the
+// window once this handler returns.
+if ("__TAURI_INTERNALS__" in window) {
+  getCurrentWindow().onCloseRequested(async () => {
+    stashEditor();
+    flushSqlTabs();
+    await flushDocs();
+  }).catch(() => {}); // a preview without Tauri has no window events
+}
 
 /** Shortcut hints next to buttons, kept in step with Settings › Shortcuts. */
 function showKeys() {

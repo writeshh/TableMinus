@@ -57,6 +57,11 @@ async function write(doc: Doc) {
   }
 }
 
+/** Writes every doc with a change still waiting for its timer, so closing the window loses none of it. */
+export async function flushDocs() {
+  await Promise.all([...held].filter(([, h]) => h.timer).map(([doc]) => write(doc)));
+}
+
 /** Every doc read; connect waits for this before reading tabs, history and saved queries. */
 export const docsReady = Promise.all([load("sql_tabs"), load("history"), load("favorites"), load("metrics")]);
 
