@@ -1,0 +1,23 @@
+# Fuzz targets for `cargo fuzz` (see README.md). A crate of its own, outside the app's build and checks.
+[package]
+name = "table-minus-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+table-minus = { path = ".." }
+
+# Not a member of a workspace: only cargo fuzz builds this.
+[workspace]
+
+[[bin]]
+name = "read_only"
+path = "fuzz_targets/read_only.rs"
+test = false
+doc = false
+bench = false

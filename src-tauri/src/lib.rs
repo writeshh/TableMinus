@@ -26,6 +26,16 @@ mod structure;
 mod tls;
 mod users;
 
+/// What `cargo fuzz` drives (`fuzz/fuzz_targets/read_only.rs`): safe mode's read-only check on arbitrary text, for
+/// every engine. Built only with `--cfg fuzzing`, which cargo-fuzz sets, so the app's surface stays as it is.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub fn fuzz_read_only(sql: &str) {
+    for engine in [Engine::Postgres, Engine::Mysql, Engine::Sqlite] {
+        readonly::is_read_only(engine, sql);
+    }
+}
+
 use db::Engine;
 use error::{Error, Result};
 use secrecy::{ExposeSecret, SecretString};

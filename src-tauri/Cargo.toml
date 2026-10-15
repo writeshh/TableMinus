@@ -57,8 +57,14 @@ aes-gcm = { version = "0.11", default-features = false, features = ["aes", "allo
 robius-authentication = "0.3.1"
 
 
+[dev-dependencies]
+# Property tests for the read-only check and SQL quoting (readonly.rs, db.rs).
+proptest = "1"
+
 [lints.rust]
 unsafe_code = "forbid"
+# cargo-fuzz builds with --cfg fuzzing (fuzz/README.md).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }

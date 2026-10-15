@@ -909,6 +909,59 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
+    /// Quoting can't be broken out of: whatever the name or value, the SQL parser reads back exactly it.
+    mod quoting {
+        use crate::db::Dialect;
+        use proptest::prelude::*;
+        use sqlparser::ast::{Expr, ObjectNamePart, SelectItem, SetExpr, Statement, TableFactor, Value};
+        use sqlparser::dialect::{Dialect as Parsing, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+        use sqlparser::parser::Parser;
+
+        fn dialects() -> [(Dialect, Box<dyn Parsing>); 3] {
+            [
+                (Dialect::Pg, Box::new(PostgreSqlDialect {})),
+                (Dialect::My, Box::new(MySqlDialect {})),
+                (Dialect::Lite, Box::new(SQLiteDialect {})),
+            ]
+        }
+
+        /// The one SELECT in `sql`, parsed.
+        fn select(p: &dyn Parsing, sql: &str) -> Box<sqlparser::ast::Select> {
+            let mut stmts = Parser::parse_sql(p, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+            assert_eq!(stmts.len(), 1, "{sql}");
+            let Some(Statement::Query(q)) = stmts.pop() else { panic!("{sql}: not a query") };
+            let SetExpr::Select(s) = *q.body else { panic!("{sql}: not a select") };
+            s
+        }
+
+        proptest! {
+            #[test]
+            fn ident_reads_back_as_the_same_name(name in "\\PC{1,30}") {
+                for (d, p) in dialects() {
+                    let sql = format!("SELECT 1 FROM {}", d.ident(&name));
+                    let s = select(p.as_ref(), &sql);
+                    let TableFactor::Table { name: read, .. } = &s.from[0].relation else { panic!("{sql}") };
+                    let parts: Vec<_> = read.0.iter().filter_map(ObjectNamePart::as_ident).map(|i| i.value.as_str()).collect();
+                    prop_assert_eq!(parts, [name.as_str()], "{}", sql);
+                }
+            }
+
+            #[test]
+            fn literal_reads_back_as_the_same_value(value in "\\PC{0,40}") {
+                for (d, p) in dialects() {
+                    let sql = format!("SELECT {}", d.literal(&value));
+                    let s = select(p.as_ref(), &sql);
+                    let SelectItem::UnnamedExpr(Expr::Value(v)) = &s.projection[0] else { panic!("{sql}") };
+                    let read = match &v.value {
+                        Value::SingleQuotedString(t) | Value::EscapedStringLiteral(t) => t,
+                        other => panic!("{sql}: {other:?}"),
+                    };
+                    prop_assert_eq!(read, &value, "{}", sql);
+                }
+            }
+        }
+    }
+
     #[test]
     fn read_only_bounds_should_make_sqlite_refuse_writes_until_ended() {
         tauri::async_runtime::block_on(async {
