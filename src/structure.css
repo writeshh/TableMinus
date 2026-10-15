@@ -5,7 +5,8 @@
 .structure th { position: static; }
 .structure td { max-width: 360px; }
 .structure td:has(input:not([type="checkbox"]), select) { padding: 2px 4px; }
-.structure td input:not([type="checkbox"]), .structure td select { width: 100%; min-width: 90px; padding: 3px 6px; font: inherit; border-color: transparent; background: none; }
+.structure td input:not([type="checkbox"]), .structure td select { width: 100%; min-width: 90px; padding: 3px 6px; font: inherit; border-color: transparent; background-color: transparent; }
+.structure td select { padding-right: 24px; }
 .structure td input:not([type="checkbox"]):hover, .structure td select:hover { border-color: var(--line); }
 .structure td input:focus { border-color: var(--accent); background: var(--bg); }
 .structure tr.changed td, .structure input.changed { background: color-mix(in srgb, var(--warn) 14%, transparent); }
