@@ -133,9 +133,9 @@ fn list_connections_shows_only_reachable_ones_without_urls() {
     tauri::async_runtime::block_on(async {
         let s = server("list").await;
         let (_, all) = call(s.port, READ_WRITE, "list_connections", json!({})).await;
-        assert_eq!(all, r#"[{"engine":"sqlite","name":"lite","open":true,"tag":"local"}]"#);
+        assert_eq!(all, r#"[{"name":"lite","engine":"sqlite","tag":"local","open":true}]"#);
         let (_, listed) = call(s.port, ELSEWHERE, "list_connections", json!({})).await;
-        assert_eq!(listed, r#"[{"engine":"sqlite","name":"other","open":false,"tag":"local"}]"#);
+        assert_eq!(listed, r#"[{"name":"other","engine":"sqlite","tag":"local","open":false}]"#);
     });
 }
 

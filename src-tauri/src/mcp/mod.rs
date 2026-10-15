@@ -2,6 +2,7 @@
 //! activity log, query approval, and the Tauri commands behind Settings › MCP. The HTTP side is in [`server`].
 
 mod server;
+mod setup;
 
 use crate::error::{Error, Result};
 use crate::safety::Unlock;
@@ -387,11 +388,16 @@ pub struct Status {
     bridge_exists: bool,
 }
 
+/// The stdio bridge binary, next to the app's executable.
+fn bridge_path() -> PathBuf {
+    std::env::current_exe()
+        .map(|exe| exe.with_file_name(format!("tableminus-mcp{}", std::env::consts::EXE_SUFFIX)))
+        .unwrap_or_default()
+}
+
 fn status(shared: &Shared) -> Status {
     let config = lock(&shared.config).clone();
-    let bridge = std::env::current_exe()
-        .map(|exe| exe.with_file_name(format!("tableminus-mcp{}", std::env::consts::EXE_SUFFIX)))
-        .unwrap_or_default();
+    let bridge = bridge_path();
     Status {
         enabled: config.enabled,
         port: config.port,
@@ -407,6 +413,19 @@ fn status(shared: &Shared) -> Status {
 #[expect(clippy::needless_pass_by_value, reason = "Tauri hands command arguments over by value")]
 pub fn mcp_status(mcp: State<'_, Mcp>) -> Status {
     status(&mcp.0)
+}
+
+/// Adds the bridge to `agent`'s MCP config file (one-click setup; see `setup.rs`).
+#[tauri::command]
+pub async fn mcp_install(agent: setup::Agent) -> Result<setup::Installed> {
+    let bridge = bridge_path();
+    if !bridge.is_file() {
+        return Err(Error::Invalid(
+            "the tableminus-mcp bridge isn't next to the app, so there's nothing to point the agent at",
+        ));
+    }
+    let path = agent.config_path()?;
+    tauri::async_runtime::spawn_blocking(move || setup::add_bridge(&path, &bridge.display().to_string())).await?
 }
 
 /// Saves the server settings and starts, stops or moves the server to match.

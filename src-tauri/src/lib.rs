@@ -823,6 +823,7 @@ pub fn run() -> tauri::Result<()> {
             set_safety,
             safety::touch_id_available,
             safety::batch_grant,
+            mcp::mcp_install,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,

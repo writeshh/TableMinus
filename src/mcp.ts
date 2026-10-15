@@ -53,6 +53,11 @@ const PANE = `
 </h4>
 <pre id="mcp-setup" class="mcp-code"></pre>
 <p class="hint" id="mcp-setup-hint"></p>
+<div class="mcp-install" id="mcp-install">
+  <span class="k">Or add it for you</span>
+  <button data-agent="claude_desktop">Claude Desktop</button><button data-agent="cursor">Cursor</button><button data-agent="windsurf">Windsurf</button>
+</div>
+<p class="status" id="mcp-install-status"></p>
 <h4 class="mcp-head">Activity <span><button id="mcp-refresh" class="ghost">Refresh</button><button id="mcp-clear" class="ghost">Clear</button></span></h4>
 <ul id="mcp-activity" class="mcp-list"></ul>
 `;
@@ -72,6 +77,9 @@ section[data-pane="mcp"] { max-height: min(560px, 68vh); overflow-y: auto; }
 .mcp-list code { display: block; font: 11.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mcp-code { margin: 0; padding: 8px 10px; border-radius: 7px; background: var(--hover); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 #mcp-ask pre { max-height: 240px; overflow: auto; }
+.mcp-install { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mcp-install .k { color: var(--muted); margin-right: 4px; }
+#mcp-install-status { overflow-wrap: anywhere; }
 `;
 
 const sheet = new CSSStyleSheet();
@@ -235,6 +243,22 @@ $("mcp-created-done").onclick = () => {
   $("mcp-created").hidden = true;
 };
 $("mcp-agent").onchange = renderSetup;
+
+type Installed = { path: string; backup: string | null; already: boolean };
+// One-click setup: the backend adds the bridge to the agent's config file, after copying the original aside.
+for (const b of $("mcp-install").querySelectorAll<HTMLButtonElement>("[data-agent]")) {
+  b.onclick = async () => {
+    const say = (text: string, kind = "") => (($("mcp-install-status").textContent = text), ($("mcp-install-status").className = `status ${kind}`));
+    say(`Adding TableMinus to ${b.textContent}…`, "busy");
+    try {
+      const done = await invoke<Installed>("mcp_install", { agent: b.dataset.agent });
+      say(done.already ? `${b.textContent} already has TableMinus (${done.path}).`
+        : `Added to ${done.path}${done.backup ? `; the old file is kept as ${done.backup}` : ""}. Restart ${b.textContent} to load it.`, "done");
+    } catch (e) {
+      say(String(e), "error");
+    }
+  };
+}
 $("mcp-refresh").onclick = refresh;
 $("mcp-clear").onclick = async () => {
   await invoke("mcp_clear_activity").catch(() => {});
