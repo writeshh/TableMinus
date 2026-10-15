@@ -1,12 +1,14 @@
 import { EditorView, basicSetup } from "codemirror";
-import { Compartment, EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import { Decoration, ViewPlugin, highlightWhitespace, keymap, placeholder, type DecorationSet, type ViewUpdate } from "@codemirror/view";
-import { indentWithTab } from "@codemirror/commands";
+import { indentLess, indentMore, indentWithTab } from "@codemirror/commands";
+import { acceptCompletion, autocompletion, completionKeymap, type CompletionContext } from "@codemirror/autocomplete";
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { MariaSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
 import { highlightCode, tags as t } from "@lezer/highlight";
 import { statementAt, splitStatements, type Dialect, type Statement } from "./statements";
 import { formatDialect, mariadb, mysql, postgresql, sqlite } from "sql-formatter";
+import { byLine, transformText, type Transform } from "./transforms";
 
 const FORMAT_DIALECTS = { postgres: postgresql, mysql, mariadb, sqlite } as const;
 export type FormatStyle = "standard" | "tabularLeft" | "tabularRight";
@@ -64,18 +66,59 @@ export function highlightSql(text: string, kind: string): HTMLElement {
 export type Snippet = { keyword: string; name: string; sql: string };
 let snippets: Snippet[] = [];
 
-/** Completes saved-query keywords. Typed loosely: @codemirror/autocomplete isn't a direct dependency. */
-function snippetSource(cx: { matchBefore(re: RegExp): { from: number; to: number } | null; explicit: boolean }) {
+/** Completes saved-query keywords. */
+function snippetSource(cx: CompletionContext) {
   const word = cx.matchBefore(/\w+/);
   if (!snippets.length || !word || (word.from === word.to && !cx.explicit)) return null;
   const options = snippets.map((s) => ({ label: s.keyword, detail: s.name, info: s.sql, apply: s.sql, type: "text", boost: 50 }));
   return { from: word.from, options, validFor: /^\w*$/ };
 }
 
+// Built-in functions worth completing, per engine; the database's own come from the sidebar's items.
+const COMMON_FUNCTIONS = ["avg", "count", "max", "min", "sum", "coalesce", "nullif", "lower", "upper", "length", "substring", "trim",
+  "replace", "concat", "round", "floor", "ceil", "abs", "cast", "row_number", "rank", "dense_rank", "lag", "lead", "first_value", "last_value"];
+const FUNCTIONS: Record<string, string[]> = {
+  postgres: ["now", "current_date", "current_timestamp", "date_trunc", "date_part", "extract", "age", "to_char", "to_date", "to_timestamp",
+    "string_agg", "array_agg", "json_agg", "jsonb_agg", "json_build_object", "jsonb_build_object", "jsonb_set", "to_jsonb",
+    "generate_series", "unnest", "array_length", "split_part", "regexp_replace", "regexp_matches", "left", "right", "lpad", "rpad",
+    "position", "greatest", "least", "gen_random_uuid", "nextval", "currval", "setval", "pg_size_pretty", "pg_total_relation_size"],
+  mysql: ["now", "curdate", "curtime", "date_format", "date_add", "date_sub", "datediff", "timestampdiff", "str_to_date", "unix_timestamp",
+    "from_unixtime", "group_concat", "ifnull", "if", "json_extract", "json_object", "json_arrayagg", "json_objectagg", "left", "right",
+    "lpad", "rpad", "locate", "instr", "greatest", "least", "uuid", "last_insert_id", "found_rows", "format"],
+  sqlite: ["date", "time", "datetime", "julianday", "strftime", "ifnull", "iif", "group_concat", "instr", "printf", "json_extract",
+    "json_object", "json_group_array", "random", "last_insert_rowid", "changes", "typeof", "hex", "quote"],
+};
+FUNCTIONS.mariadb = FUNCTIONS.mysql;
+/** The database's own functions and procedures, as the sidebar has loaded them. */
+let databaseFunctions: () => string[] = () => [];
+
 /** Table name → column names, as the backend's `schema` command lists them (Postgres tables are schema.table). */
 export type Schema = Map<string, string[]>;
 
 export type Editor = ReturnType<typeof createEditor>;
+export type CompleteKey = "enter" | "tab" | "both";
+
+/** The completion keymap with the chosen accept keys. Tab falls through to indenting when no completion is open. */
+const completionKeys = (key: CompleteKey) => Prec.highest(keymap.of([
+  ...completionKeymap.filter((b) => b.key !== "Enter"),
+  ...(key !== "tab" ? [{ key: "Enter", run: acceptCompletion }] : []),
+  ...(key !== "enter" ? [{ key: "Tab", run: acceptCompletion }] : []),
+]));
+
+/** A small SQL editor for a definition (a view's SELECT, a function's CREATE): highlighting, brackets and
+ *  undo, without the SQL tab's statement shading or completion. */
+export function miniEditor(parent: HTMLElement, doc: string, kind: string, change: (doc: string) => void): EditorView {
+  return new EditorView({
+    parent,
+    state: EditorState.create({
+      doc,
+      extensions: [
+        basicSetup, keymap.of([indentWithTab]), sql({ dialect: DIALECTS[kind as keyof typeof DIALECTS] ?? StandardSQL }),
+        syntaxHighlighting(highlight), theme, EditorView.updateListener.of((u) => u.docChanged && change(u.state.doc.toString())),
+      ],
+    }),
+  });
+}
 
 /** The SQL editor. Each tab keeps its own EditorState (text + undo history); `setState` swaps them in. */
 export function createEditor(
@@ -85,10 +128,26 @@ export function createEditor(
   const language = new Compartment();
   const indent = new Compartment();
   const display = new Compartment();
+  const binding = new Compartment();
+  const completeKeys = new Compartment();
   let lang: Extension = sql({ dialect: StandardSQL });
   let unit = "  ";
   let looks: Extension[] = [];
   let dialect: Dialect = "postgres";
+  let schema: Schema = new Map();
+  let upperKeywords = false;
+  let vimMode: Extension = [];
+  let accept: CompleteKey = "enter";
+
+  /** Completes built-in and database functions after a word of at least two letters. */
+  const functionSource = (cx: CompletionContext) => {
+    const word = cx.matchBefore(/\w+/);
+    if (!word || (word.to - word.from < 2 && !cx.explicit)) return null;
+    // Built-ins follow the keyword case; the database's own keep theirs, which may matter when quoted.
+    const builtin = [...new Set([...(FUNCTIONS[dialect] ?? []), ...COMMON_FUNCTIONS])].map((n) => (upperKeywords ? n.toUpperCase() : n));
+    const options = [...new Set([...builtin, ...databaseFunctions()])].map((label) => ({ label, type: "function", detail: "function" }));
+    return { from: word.from, options, validFor: /^\w*$/ };
+  };
 
   /** The statement under the cursor, shaded so it's clear what ⌘↩ will run. Off while text is selected. */
   const currentStatement = ViewPlugin.fromClass(
@@ -120,8 +179,11 @@ export function createEditor(
   );
 
   const extensions = () => [
+    binding.of(vimMode), // before the other keymaps, so Vim sees keys first
     currentStatement,
     basicSetup,
+    autocompletion({ defaultKeymap: false }), // completeKeys below instead, so Enter or Tab can accept
+    completeKeys.of(completionKeys(accept)),
     keymap.of([indentWithTab]), // Tab indents; Esc then Tab leaves the editor (CodeMirror's escape hatch)
     language.of(lang),
     indent.of(indentUnit.of(unit)),
@@ -129,7 +191,7 @@ export function createEditor(
     syntaxHighlighting(highlight),
     placeholder("Write SQL here. Run runs the statement under the cursor (or the selection); Run all runs every statement."),
     theme,
-    EditorState.languageData.of(() => [{ autocomplete: snippetSource }]),
+    EditorState.languageData.of(() => [{ autocomplete: snippetSource }, { autocomplete: functionSource }]),
     EditorView.updateListener.of((u) => {
       if (u.docChanged) on.change(u.state.doc.toString());
       if (u.docChanged || u.selectionSet) on.cursor();
@@ -140,8 +202,33 @@ export function createEditor(
   // A stored state may carry an older dialect or indent; bring it up to date.
   const refresh = () =>
     view.dispatch({
-      effects: [language.reconfigure(lang), indent.reconfigure(indentUnit.of(unit)), display.reconfigure(looks)],
+      effects: [
+        language.reconfigure(lang), indent.reconfigure(indentUnit.of(unit)), display.reconfigure(looks),
+        binding.reconfigure(vimMode), completeKeys.reconfigure(completionKeys(accept)),
+      ],
     });
+
+  const setLanguage = () => {
+    const sqlDialect = DIALECTS[dialect as keyof typeof DIALECTS] ?? StandardSQL;
+    if (dialect === "postgres") {
+      // Nested by schema, so "public." completes tables and "people." completes columns.
+      const nested: Record<string, Record<string, string[]>> = {};
+      for (const [table, cols] of schema) {
+        const [ns, name] = table.includes(".") ? table.split(/\.(.*)/s) : ["public", table];
+        (nested[ns] ??= {})[name] = cols;
+      }
+      lang = sql({ dialect: sqlDialect, schema: nested, defaultSchema: "public", upperCaseKeywords: upperKeywords });
+    } else {
+      lang = sql({ dialect: sqlDialect, schema: Object.fromEntries(schema), upperCaseKeywords: upperKeywords });
+    }
+    refresh();
+  };
+
+  /** The lines the selection touches, or the whole text when nothing is selected. */
+  const lineSpan = (from: number, to: number) => {
+    const doc = view.state.doc;
+    return from === to ? { from: 0, to: doc.length } : { from: doc.lineAt(from).from, to: doc.lineAt(to).to };
+  };
 
   return {
     view,
@@ -151,21 +238,48 @@ export function createEditor(
       refresh();
     },
     /** Dialect for highlighting, keywords and statement splitting; the schema feeds autocomplete. */
-    setDialect(kind: string, schema: Schema) {
+    setDialect(kind: string, tables: Schema) {
       dialect = (kind in DIALECTS ? kind : "postgres") as Dialect;
-      const sqlDialect = DIALECTS[kind as keyof typeof DIALECTS] ?? StandardSQL;
-      if (kind === "postgres") {
-        // Nested by schema, so "public." completes tables and "people." completes columns.
-        const nested: Record<string, Record<string, string[]>> = {};
-        for (const [table, cols] of schema) {
-          const [ns, name] = table.includes(".") ? table.split(/\.(.*)/s) : ["public", table];
-          (nested[ns] ??= {})[name] = cols;
-        }
-        lang = sql({ dialect: sqlDialect, schema: nested, defaultSchema: "public", upperCaseKeywords: false });
-      } else {
-        lang = sql({ dialect: sqlDialect, schema: Object.fromEntries(schema), upperCaseKeywords: false });
-      }
+      schema = tables;
+      setLanguage();
+    },
+    /** Completion settings (Settings › Editor): keywords in upper case, and the key that accepts a completion. */
+    setCompletion(upper: boolean, key: CompleteKey) {
+      upperKeywords = upper;
+      accept = key;
+      setLanguage();
+    },
+    /** Where the database's own function names come from (the sidebar's loaded items). */
+    setFunctionSource(names: () => string[]) {
+      databaseFunctions = names;
+    },
+    /** Sublime-style keys (CodeMirror's defaults) or Vim. Vim's code loads the first time it's chosen. */
+    async setKeyBinding(mode: "sublime" | "vim") {
+      vimMode = mode === "vim" ? (await import("@replit/codemirror-vim")).vim() : [];
       refresh();
+    },
+    /** Applies a text transform to the selection (or the word at the cursor), or for whole-line transforms to the
+     *  selected lines (or every line), as one undoable change. */
+    transform(t: Transform) {
+      const width = unit === "\t" ? 4 : unit.length;
+      const state = view.state;
+      view.dispatch(state.changeByRange((r) => {
+        const span = byLine(t) ? lineSpan(r.from, r.to) : r.empty ? (state.wordAt(r.head) ?? r) : r;
+        const text = transformText(state.sliceDoc(span.from, span.to), t, width);
+        const keep = r.empty && !byLine(t) ? EditorSelection.cursor(r.head) : EditorSelection.range(span.from, span.from + text.length);
+        return { changes: { from: span.from, to: span.to, insert: text }, range: keep };
+      }));
+      view.focus();
+    },
+    /** Shifts the selected lines one indent unit right or left. */
+    shift(right: boolean) {
+      (right ? indentMore : indentLess)(view);
+      view.focus();
+    },
+    /** Inserts text at the cursor, replacing the selection. */
+    insert(text: string) {
+      view.dispatch(view.state.replaceSelection(text));
+      view.focus();
     },
     /** The statement under the cursor, or the selection when there is one. */
     current(): string {

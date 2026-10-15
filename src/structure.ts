@@ -1,9 +1,11 @@
 // The structure view (columns, indexes, foreign keys, checks, triggers) with edits staged per tab and run only
-// after their SQL is previewed, plus the sidebar's table operations (new, rename, clone, truncate, drop…).
-// Everything here asks before it acts: the preview dialog is the confirmation, also for safe mode.
+// after their SQL is previewed, a view's structure (its columns and editable SELECT), plus the sidebar's table
+// operations (new, rename, clone, truncate, drop…). Everything here asks before it acts: the preview dialog is the
+// confirmation, also for safe mode.
 
 /// <reference types="vite/client" />
 import { connName, el } from "./dom";
+import { miniEditor } from "./editor";
 import { CANCELLED, guarded } from "./safety";
 import "./structure.css"; // vite injects it
 
@@ -46,10 +48,14 @@ export type Host = {
   note(text: string, kind: "" | "error" | "done"): void;
   /** The staged-change count changed: update the footer without redrawing the view (which would steal focus). */
   pendingChanged(): void;
+  /** The sidebar's kind for an item (view, matview, function…), or null for a table or one not loaded yet. */
+  itemKind(name: string): string | null;
 };
 
 let host: Host;
 export const initStructure = (h: Host) => void (host = h);
+/** The workspace, for the object editors (objects.ts), which share this module's preview and run flow. */
+export const structureHost = () => host;
 
 const drafts = new Map<number, Draft>();
 const RULES = ["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"];
@@ -95,10 +101,12 @@ function changes(d: Draft): Record<string, unknown>[] {
 }
 
 export const structurePending = (tabId: number) => {
+  const v = viewDrafts.get(tabId);
+  if (v) return v.body !== undefined && v.text.trim() !== v.body.trim() ? 1 : 0;
   const d = drafts.get(tabId);
   return d && (d.base || d.create) ? changes(d).length : 0;
 };
-export const dropDraft = (tabId: number) => void drafts.delete(tabId);
+export const dropDraft = (tabId: number) => void (drafts.delete(tabId), viewDrafts.delete(tabId));
 
 function fromBase(table: string, s: Structure): Draft {
   return {
@@ -115,8 +123,68 @@ const newColumn = (): ColumnDraft => ({
 
 // ---------- The view ----------
 
+// ---------- A view's structure: its columns, and its SELECT to edit (Ref: ViewStructureController) ----------
+
+type ViewDraft = { view: string; matview: boolean; columns: { name: string; data_type: string; nullable: boolean }[]; body?: string; text: string; error?: string };
+const viewDrafts = new Map<number, ViewDraft>();
+
+async function showView(out: HTMLElement, tabId: number, view: string, matview: boolean) {
+  let v = viewDrafts.get(tabId);
+  if (!v) {
+    out.replaceChildren(el("p", { className: "hint empty", textContent: "Loading view…" }));
+    const name = host.conn()!.name;
+    try {
+      const [columns, body] = await Promise.all([
+        host.call<ViewDraft["columns"]>("columns", { name, table: view }),
+        host.call<string>("view_definition", { name, view }),
+      ]);
+      v = { view, matview, columns, body, text: body };
+      viewDrafts.set(tabId, v);
+    } catch (e) {
+      out.replaceChildren(el("p", { className: "hint empty error-text", textContent: String(e) }));
+      return;
+    }
+  }
+  const d = v;
+  const page = el("div", { className: "structure" });
+  if (d.error) page.append(el("p", { className: "error-text structure-error", textContent: d.error }));
+  const rows = d.columns.map((c) => el("tr", {}, td(c.name), td(c.data_type), td(c.nullable ? "YES" : "NO")));
+  page.append(section("Columns", ["Name", "Type", "Null"], rows));
+  const box = el("div", { className: "definition-editor" });
+  const note = d.matview
+    ? "Saving drops the materialized view and creates it again (in one transaction), which also drops its indexes and refills it."
+    : kind() === "sqlite" ? "SQLite saves by dropping the view and creating it again, in one transaction." : "";
+  page.append(el("section", {}, el("h4", { textContent: "Definition" }), box,
+    el("p", { className: "hint", textContent: `Edit the SELECT, then Preview SQL… (⌘S). ${note}`.trim() })));
+  out.replaceChildren(page);
+  miniEditor(box, d.text, host.conn()?.kind ?? "", (text) => ((d.text = text), host.pendingChanged()));
+}
+
+async function saveView(tabId: number, out: HTMLElement, v: ViewDraft) {
+  const conn = host.conn();
+  if (!conn) return;
+  const view = v.view;
+  v.error = undefined;
+  try {
+    const statements = await host.call<string[]>("save_view_sql", { name: conn.name, view, matview: v.matview, body: v.text, create: false });
+    if (!(await preview(`Change ${view}`, statements, "Apply", false))) return;
+    await runDdl(conn.name, statements);
+  } catch (e) {
+    if (e === CANCELLED) return;
+    v.error = String(e); // the edited text stays
+    return showView(out, tabId, view, v.matview);
+  }
+  viewDrafts.delete(tabId);
+  host.note(`Changed ${view}`, "done");
+  await host.refreshTables();
+  await showView(out, tabId, view, v.matview);
+  host.pendingChanged();
+}
+
 /** Draws tab `tabId`'s structure into `out`, loading it the first time. */
 export async function showStructure(out: HTMLElement, tabId: number, table: string, create: boolean) {
+  const item = create ? null : host.itemKind(table);
+  if (item === "view" || item === "matview") return showView(out, tabId, table, item === "matview");
   let d = drafts.get(tabId);
   if (!d) {
     if (create) {
@@ -275,6 +343,8 @@ function section(title: string, heads: string[], rows: HTMLTableRowElement[], ..
 
 /** Previews the staged changes as SQL and runs them when confirmed. */
 export async function saveStructure(tabId: number, out: HTMLElement) {
+  const v = viewDrafts.get(tabId);
+  if (v) return structurePending(tabId) ? saveView(tabId, out, v) : host.note("No changes to save", "");
   const d = drafts.get(tabId);
   const conn = host.conn();
   if (!d || !conn) return;
@@ -302,7 +372,7 @@ export async function saveStructure(tabId: number, out: HTMLElement) {
 // ---------- Dialogs ----------
 
 /** A modal built on the fly, so this module needs nothing in index.html. Resolves with the button pressed. */
-function modal(title: string, body: Node[], buttons: [string, string][], wide = false): Promise<string | null> {
+export function modal(title: string, body: Node[], buttons: [string, string][], wide = false): Promise<string | null> {
   const d = el("dialog", { className: wide ? "structure-dialog wide" : "structure-dialog" });
   const foot = el("footer", {}, el("span", { className: "spacer" }));
   d.append(el("h3", { textContent: title }), ...body, foot);
@@ -324,7 +394,7 @@ function modal(title: string, body: Node[], buttons: [string, string][], wide = 
 const sqlText = (statements: string[]) => statements.map((s) => `${s};`).join("\n\n");
 
 /** Shows the statements about to run; true when the user runs them. */
-async function preview(title: string, statements: string[], okLabel: string, danger: boolean) {
+export async function preview(title: string, statements: string[], okLabel: string, danger: boolean) {
   const conn = host.conn();
   const note = kind() === "mysql" && statements.length > 1
     ? "MySQL commits each statement as it runs; if one fails, the ones before it stay applied."
@@ -339,10 +409,10 @@ async function preview(title: string, statements: string[], okLabel: string, dan
   return picked === okLabel;
 }
 
-type Field = { key: string; label: string; value: string | boolean };
+export type Field = { key: string; label: string; value: string | boolean };
 
 /** Asks for an operation's options; null when cancelled. */
-async function ask(title: string, fields: Field[], okLabel: string) {
+export async function ask(title: string, fields: Field[], okLabel: string) {
   const inputs = fields.map((f) => {
     const i = typeof f.value === "boolean" ? el("input", { type: "checkbox", checked: f.value }) : el("input", { value: f.value, spellcheck: false });
     return [f, i] as const;
@@ -359,9 +429,10 @@ async function ask(title: string, fields: Field[], okLabel: string) {
 
 type MenuItem = [string, () => void] | "-";
 
-/** Runs previewed statements; the preview was the confirmation, but the Safe levels still want the password. */
-const runDdl = (name: string, statements: string[]) =>
-  guarded(name, (a) => host.call("run_ddl", { name, statements, confirmed: true, unlock: a.unlock }));
+/** Runs previewed statements; the preview was the confirmation, but the Safe levels still want the password.
+ *  `restore` puts back what MySQL already dropped when a later statement fails (a routine being replaced). */
+export const runDdl = (name: string, statements: string[], restore?: string[]) =>
+  guarded(name, (a) => host.call("run_ddl", { name, statements, confirmed: true, unlock: a.unlock, restore: restore ?? null }));
 
 /** Generates an operation's SQL, shows it, and runs it when confirmed. */
 async function runOp(title: string, op: Record<string, unknown>, okLabel: string, danger: boolean, after?: () => void) {
@@ -432,13 +503,17 @@ export async function renameDatabase(db: string): Promise<string | null> {
 /** Drops the database after its preview; true once dropped. */
 export const dropDatabase = (db: string) => runDatabaseOp(`Drop database ${db}`, { op: "drop", name: db }, "Drop", true);
 
+/** Shows SQL to read, copy or open in a SQL tab (View DDL, the filter bar's SQL). */
+export async function showSql(title: string, sql: string) {
+  const picked = await modal(title, [el("pre", { className: "sql-preview", textContent: sql })],
+    [["Close", ""], ["Copy", ""], ["Open in SQL tab", "primary"]], true);
+  if (picked === "Copy") await navigator.clipboard.writeText(sql).catch(() => {});
+  if (picked === "Open in SQL tab") host.openSql(sql);
+}
+
 async function viewDdl(table: string) {
   try {
-    const ddl = await host.call<string>("table_ddl", { name: host.conn()!.name, table });
-    const picked = await modal(`DDL of ${table}`, [el("pre", { className: "sql-preview", textContent: ddl })],
-      [["Close", ""], ["Copy", ""], ["Open in SQL tab", "primary"]], true);
-    if (picked === "Copy") await navigator.clipboard.writeText(ddl).catch(() => {});
-    if (picked === "Open in SQL tab") host.openSql(ddl);
+    await showSql(`DDL of ${table}`, await host.call<string>("table_ddl", { name: host.conn()!.name, table }));
   } catch (e) {
     host.note(String(e), "error");
   }

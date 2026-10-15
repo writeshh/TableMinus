@@ -1,9 +1,11 @@
 // The left sidebar's item tree: pinned items, item groups (by name rules), tables, and sections for views,
 // materialized views, functions and procedures, sequences and types, each switchable on or off; a schema
-// switcher on Postgres; "search in database"; and an item's overview. Table rows come from main.ts (they expand to
-// columns and carry the table menu); everything else is drawn here.
+// switcher on Postgres; "search in database"; an item's overview; and each item's menu (Copy Script As, select top
+// 100, insert into the editor, open its editor, drop). Table rows come from main.ts (they expand to columns and carry
+// the table menu); everything else is drawn here.
 import { connName, el } from "./dom";
 import { modal } from "./backup";
+import { dropItem, editable, newMenu, openItem, scriptMenu } from "./objects";
 
 type MenuItem = [string, () => void] | "-";
 type Kind = "schema" | "view" | "matview" | "function" | "procedure" | "sequence" | "type";
@@ -17,12 +19,18 @@ export type Ctx = {
   /** Tables as the backend lists them (MySQL and SQLite include views; Postgres names are schema.table). */
   tables: () => string[];
   call: <T>(cmd: string, args: Record<string, unknown>) => Promise<T>;
-  /** A table's row (expandable to its columns, with the table menu); `extra` joins that menu. */
-  tableRow: (table: string, label: string, extra: MenuItem[]) => HTMLElement;
-  openTable: (table: string) => void;
+  /** A table's row (expandable to its columns, with the table menu); `first` and `last` go around that menu. */
+  tableRow: (table: string, label: string, first: MenuItem[], last: MenuItem[]) => HTMLElement;
+  /** Opens a table's tab, or with `fresh` a second tab even if one is open. */
+  openTable: (table: string, fresh?: boolean) => void;
+  /** A new SQL tab holding `sql`, run straight away with `run`. */
+  openSql: (sql: string, run: boolean) => void;
+  /** Types `text` into the SQL editor at the cursor (a new SQL tab when a table tab shows). */
+  insertSql: (text: string) => void;
   /** Opens a table filtered to rows where any column matches, as search in database found them. */
   openFound: (table: string, mode: SearchMode, text: string) => void;
   menu: (e: MouseEvent, items: MenuItem[]) => void;
+  note: (text: string, kind: "" | "error" | "done") => void;
   /** Redraws the tree (main.ts's renderTables, which also updates the empty-list hint). */
   redraw: () => void;
 };
@@ -63,8 +71,19 @@ const prefs = (): Prefs => load<Prefs>(prefsKey(), { pins: [], groups: [] });
 const savePrefs = (p: Prefs) => (store(prefsKey(), p), ctx.redraw());
 /** The Postgres schema the sidebar shows, or null for all schemas (or none chosen yet). */
 export const shownSchema = () => prefs().schema ?? null;
-/** Hidden sections and collapsed headings, the same for every connection. */
-const looks = () => load<{ off: string[]; collapsed: string[] }>("sidebar-looks", { off: [], collapsed: [] });
+/** Hidden sections, collapsed headings and the column order, the same for every connection. */
+const looks = () => load<{ off: string[]; collapsed: string[]; columnsAz?: boolean }>("sidebar-looks", { off: [], collapsed: [] });
+
+/** A table's columns as the sidebar lists them: by position (as defined), or A–Z. */
+export const sortColumns = <T extends { name: string }>(columns: T[]) =>
+  looks().columnsAz ? [...columns].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })) : columns;
+
+/** The two column orders, for the right-click menu of an expanded table's columns. */
+export function columnOrderMenu(): MenuItem[] {
+  const az = !!looks().columnsAz;
+  const set = (columnsAz: boolean) => (store("sidebar-looks", { ...looks(), columnsAz }), ctx.redraw());
+  return [[`${az ? "    " : "✓ "}Columns by position`, () => set(false)], [`${az ? "✓ " : "    "}Columns A–Z`, () => set(true)]];
+}
 
 // ---------- Items other than tables, loaded once per connection and database ----------
 
@@ -122,16 +141,42 @@ export function renderTree(host: HTMLElement, query: string): number {
     const pin: MenuItem = pinned.has(name)
       ? ["Unpin", () => savePrefs({ ...p, pins: p.pins.filter((x) => x !== name) })]
       : ["Pin to top", () => savePrefs({ ...p, pins: [...p.pins, name] })];
-    const common: MenuItem[] = ["-", pin, ["Copy name", () => void navigator.clipboard.writeText(name).catch(() => {})]];
+    const copy: MenuItem[] = [
+      ["Copy name", () => void navigator.clipboard.writeText(name).catch(() => {})],
+      // A second menu at the same spot, standing in for a submenu.
+      ["Copy Script As ›", () => ctx.menu(last!, scriptMenu(kind === "table" || kind === "view" ? null : kind, name))],
+    ];
+    const insert: MenuItem = ["Insert into SQL editor", () => ctx.insertSql(name)];
+    let last: MouseEvent | undefined;
     const browsable = kind === "table" || kind === "view" || kind === "matview";
     if (browsable) {
-      const overview: MenuItem = ["Overview…", () => showOverview(name, row)];
-      const row = ctx.tableRow(name, label(name), [overview, ...common]);
+      const scriptKind = kind === "matview" ? "matview" : null;
+      const first: MenuItem[] = [
+        ["Open in new tab", () => ctx.openTable(name, true)],
+        ["Overview…", () => showOverview(name, row)],
+        "-",
+        ...copy,
+        ["Select top 100", () => void selectTop(scriptKind, name)],
+        insert,
+      ];
+      const row = ctx.tableRow(name, label(name), first, ["-", pin]);
+      row.addEventListener("contextmenu", (e) => (last = e), true);
       return row;
     }
-    const row = el("li", {}, el("div", { className: "tree-row", title: `${kind} ${name}` },
+    const open = editable(kind);
+    const row = el("li", {}, el("div", { className: "tree-row", title: `${kind} ${name}${open ? " (click to edit)" : ""}` },
       el("span", { className: "chevron-gap" }), el("span", { className: `item-icon ${kind}` }), el("span", { className: "label", textContent: label(name) })));
-    row.oncontextmenu = (e) => (e.stopPropagation(), ctx.menu(e, common.slice(1)));
+    if (open) row.onclick = () => openItem(kind, name);
+    const items: MenuItem[] = [
+      ...(open ? [[kind === "sequence" ? "Edit sequence…" : `Edit ${kind}…`, () => openItem(kind, name)], "-"] as MenuItem[] : []),
+      ...(kind === "type" ? copy.slice(0, 1) : copy),
+      insert,
+      "-",
+      [`Drop ${kind}…`, () => dropItem(kind, name)],
+      "-",
+      pin,
+    ];
+    row.oncontextmenu = (e) => (e.stopPropagation(), (last = e), ctx.menu(e, items));
     return row;
   };
 
@@ -207,7 +252,21 @@ export function treeMenu(): MenuItem[] {
     ["New group…", () => editGroup({ name: "", rule: "prefix", value: "" }, (g) => savePrefs({ ...prefs(), groups: [...prefs().groups, g] }))],
     "-",
     ...SECTIONS.map(([id, title]) => [`${off.includes(id) ? "    " : "✓ "}${title}`, () => toggle(id)] as MenuItem),
+    "-",
+    ...columnOrderMenu(),
   ];
+}
+
+/** The sidebar's New entries beyond tables and schemas (views, functions…), in the schema shown. */
+export const newItemsMenu = (): MenuItem[] => newMenu(shownSchema());
+
+/** Select top 100: a new SQL tab with the query, run straight away. */
+async function selectTop(kind: "matview" | null, name: string) {
+  try {
+    ctx.openSql(await ctx.call<string>("item_script", { name: ctx.conn()!.name, kind, item: name, script: "select_top" }), true);
+  } catch (e) {
+    ctx.note(String(e), "error");
+  }
 }
 
 /** A group's name and its rule; `save` gets the result unless cancelled. */
