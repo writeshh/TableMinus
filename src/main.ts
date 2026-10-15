@@ -26,6 +26,7 @@ import { divider, initHiding, togglePane } from "./splitters";
 import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
 import "./passcode"; // the lock screen, and its rows in Settings › Security
 import { withVault } from "./vault";
+import { openScript } from "./scripts";
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
@@ -1975,9 +1976,15 @@ $("tools-button").onclick = () => {
   if (!active) return;
   const items: MenuItem[] = toolsMenu(active, info?.database);
   if (active.kind !== "sqlite") items.push(["Users…", showUsers]); // needs the workspace's connection, so not on launcher rows
-  items.push("-", ["Metrics Board", () => openBoard(boardCtx())]);
+  items.push("-", ["Metrics Board", () => openBoard(boardCtx())], ["Run Custom Script…", showScript]);
   contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), items);
 };
+
+/** The custom script window on the workspace's session (scripts.ts). */
+const showScript = () => void openScript({
+  conn: hostConn, database: () => info?.database ?? null, call,
+  confirm: (sql) => confirmDialog(`Run this from the script? ${sql.length > 200 ? sql.slice(0, 200) + "…" : sql}`, "Run"),
+});
 
 /** The user manager on the workspace's session (users.ts). */
 const showUsers = () => active && openUsers({ conn: { name: sessionKey(), kind: active.kind }, call, confirm: confirmDialog });
@@ -3460,6 +3467,7 @@ addCommands([
     sep: true, run: () => openProcesses(active!, confirmDialog) },
   { id: "users", label: "Users…", menu: "Tools", when: () => hasTools() && active!.kind !== "sqlite", run: () => showUsers() },
   { id: "metrics-board", label: "Metrics Board", menu: "Tools", sep: true, when: hasTools, run: () => openBoard(boardCtx()) },
+  { id: "custom-script", label: "Run Custom Script…", menu: "Tools", when: hasTools, run: showScript },
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
 ]);
 initMenu();

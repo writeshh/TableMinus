@@ -19,3 +19,15 @@ dialog.processes { width: min(1100px, calc(100vw - 32px)); }
 .job progress { width: 100%; }
 .job.finished .job-line { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
 .job.failed .job-line { color: var(--danger); white-space: pre-wrap; max-height: 8em; overflow: auto; }
+
+/* Custom scripts (scripts.ts): the editor over the output */
+.script-dialog { width: min(980px, calc(100vw - 32px)); height: min(760px, calc(100vh - 48px)); flex-direction: column; gap: 8px; }
+.script-dialog[open] { display: flex; } /* only when open: a closed dialog stays display: none */
+.script-editor { flex: 3; min-height: 120px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; --editor-pad: 6px; }
+.script-output { flex: 2; min-height: 80px; overflow: auto; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--side); user-select: text; -webkit-user-select: text; }
+.script-output pre { margin: 0 0 4px; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.script-output pre.error { color: var(--danger); }
+.script-table { margin: 4px 0 8px; overflow-x: auto; }
+.script-table table { border-collapse: collapse; font: 11.5px/1.4 var(--mono); }
+.script-table :is(th, td) { padding: 2px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.script-table .hint { margin: 4px 0 0; }

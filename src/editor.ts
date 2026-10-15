@@ -25,6 +25,7 @@ const highlight = HighlightStyle.define([
   { tag: [t.number, t.bool, t.null], color: "var(--syn-number)" },
   { tag: [t.lineComment, t.blockComment], color: "var(--syn-comment)", fontStyle: "italic" },
   { tag: [t.operator, t.punctuation, t.paren], color: "var(--muted)" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "var(--syn-function)" }, // scripts (scripts.ts)
 ]);
 
 const theme = EditorView.theme({
@@ -121,6 +122,9 @@ const completionKeys = (key: CompleteKey) => Prec.highest(keymap.of([
   ...(key !== "tab" ? [{ key: "Enter", run: acceptCompletion }] : []),
   ...(key !== "enter" ? [{ key: "Tab", run: acceptCompletion }] : []),
 ]));
+
+/** The editors' look, from the theme's colours, for editors of other languages (scripts.ts). */
+export const editorLook: Extension = [syntaxHighlighting(highlight), theme];
 
 /** A small SQL editor for a definition (a view's SELECT, a function's CREATE): highlighting, brackets and
  *  undo, without the SQL tab's statement shading or completion. */
