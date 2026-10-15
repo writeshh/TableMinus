@@ -190,6 +190,13 @@ impl Dialect {
     }
 }
 
+/// Runs blocking SQLite work without stalling the async worker it's on: the pool takes over the worker's other tasks
+/// meanwhile. `block_in_place` rather than `spawn_blocking`, which would need to own the borrowed connection. Every
+/// runtime here (the app's, the tests', the MCP bridge's) is multi-threaded, which it requires.
+fn blocking<T>(work: impl FnOnce() -> T) -> T {
+    tokio::task::block_in_place(work)
+}
+
 /// A quoted identifier for code that only knows whether it's MySQL; [`Dialect::ident`] does the quoting.
 pub(crate) fn quote_ident(mysql: bool, name: &str) -> String {
     if mysql { Dialect::My.ident(name) } else { Dialect::Pg.ident(name) }
@@ -456,7 +463,8 @@ impl Conn {
                 Engine::Mysql | Engine::Mariadb => {
                     Conn::My(open_mysql(url, password, tls, options, tunnel_port).await?)
                 }
-                Engine::Sqlite => Conn::Lite(open_sqlite(url, password)?),
+                // Opening can take a while: SQLCipher derives the key from the passphrase.
+                Engine::Sqlite => Conn::Lite(blocking(|| open_sqlite(url, password))?),
             })
         };
         let mut conn: Conn = tokio::time::timeout(CONNECT_TIMEOUT, open)
@@ -474,7 +482,7 @@ impl Conn {
         match self {
             Conn::Pg(c) => c.batch_execute(sql).await?,
             Conn::My(c) => mysql_async::prelude::Queryable::query_drop(c, sql).await?,
-            Conn::Lite(c) => c.execute_batch(sql)?,
+            Conn::Lite(c) => blocking(|| c.execute_batch(sql))?,
         }
         Ok(())
     }
@@ -600,7 +608,7 @@ impl Conn {
                     }
                 }
             }
-            Conn::Lite(c) => {
+            Conn::Lite(c) => blocking(|| -> Result<()> {
                 use rusqlite::fallible_iterator::FallibleIterator;
                 // SQLite prepares one statement at a time; Batch steps through the rest of the text.
                 let mut batch = rusqlite::Batch::new(c, sql);
@@ -622,7 +630,8 @@ impl Conn {
                     }
                     out.end(0);
                 }
-            }
+                Ok(())
+            })?,
         }
         Ok(out.finish())
     }
@@ -678,7 +687,7 @@ impl Conn {
                 c.exec_drop(sql, params.iter().copied().map(mysql_async::Value::from).collect::<Vec<_>>()).await?;
                 Ok(c.affected_rows())
             }
-            Conn::Lite(c) => Ok(c.execute(sql, rusqlite::params_from_iter(params))? as u64),
+            Conn::Lite(c) => Ok(blocking(|| c.execute(sql, rusqlite::params_from_iter(params)))? as u64),
         }
     }
 
@@ -703,7 +712,7 @@ impl Conn {
                 let rows: Vec<mysql_async::Row> = c.exec(sql, params).await?;
                 Ok(rows.into_iter().map(my_row).collect())
             }
-            Conn::Lite(c) => {
+            Conn::Lite(c) => blocking(|| {
                 let mut st = c.prepare(sql)?;
                 let n = st.column_count();
                 let rows = st
@@ -712,7 +721,7 @@ impl Conn {
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
-            }
+            }),
         }
     }
 
@@ -761,7 +770,7 @@ impl Conn {
                 let params: Vec<_> = params.iter().copied().map(mysql_async::Value::from).collect();
                 my_stream(mysql_async::prelude::Queryable::exec_iter(c, sql, params).await?, sink).await?;
             }
-            Conn::Lite(c) => {
+            Conn::Lite(c) => blocking(|| -> Result<()> {
                 let mut st = c.prepare(sql)?;
                 let n = st.column_count();
                 sink.columns(st.column_names().into_iter().map(String::from).collect())?;
@@ -769,7 +778,8 @@ impl Conn {
                 while let Some(row) = rows.next()? {
                     sink.row((0..n).map(|i| row.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<_>>()?)?;
                 }
-            }
+                Ok(())
+            })?,
         }
         Ok(())
     }
