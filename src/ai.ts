@@ -1,32 +1,46 @@
-// The AI assistant (ai.rs): Settings › AI, and a chat pane on the right of the workspace that writes SQL with the
-// open database's tables and columns as context. Nothing goes to a provider until the user turns the assistant on
-// under the notice that says what is sent. The model may ask to run a query; each one waits for the user's Run and
-// runs read-only (`ai_run`). Chats are kept per connection in ai-chats.json, next to the query history.
+// The AI assistant (ai.rs, acp.rs): Settings › AI, and a chat pane on the right of the workspace that writes SQL with
+// the open database's tables and columns as context. Nothing goes to a provider until the user turns the assistant on
+// under the notice that says what is sent. A model may ask to run a query; each one waits for the user's Run and runs
+// read-only (`ai_run`). An agent on this computer (Claude Code, Codex… over ACP) reaches the database through the MCP
+// server with a read-only token instead, and asks here before using its own tools. Chats are kept per connection in
+// ai-chats.json, next to the query history.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { $, connName, el } from "./dom";
 import { readPref, writePref } from "./prefs";
 import { docEntry, setDocEntry } from "./locations";
 import { CANCELLED, guarded } from "./safety";
 import { withVault } from "./vault";
-import { blocks, pendingCall, resultText, schemaText, type Call, type DiagramData, type QueryResult, type Turn } from "./ai-text";
+import { blocks, pendingCall, providerTurns, resultText, schemaText, splitArgs, type Call, type DiagramData, type QueryResult, type Turn } from "./ai-text";
 
-export type Provider = "open_ai" | "anthropic";
+/** The providers ai.rs talks to over HTTP, and an agent on this computer (acp.rs). */
+type Http = "open_ai" | "anthropic";
+export type Provider = Http | "agent";
+type AgentPrefs = { preset: string; command: string; args: string };
+/** Agents known to speak ACP, and how they start. */
+const PRESETS: Record<string, { label: string; command: string; args: string }> = {
+  claude: { label: "Claude Code", command: "npx", args: "-y @zed-industries/claude-code-acp" },
+  codex: { label: "Codex", command: "npx", args: "-y @zed-industries/codex-acp" },
+  gemini: { label: "Gemini CLI", command: "gemini", args: "--experimental-acp" },
+  custom: { label: "Other", command: "", args: "" },
+};
 type Chat = { id: string; title: string; at: number; turns: Turn[] };
 type Reply = { text: string; call: Call | null };
 
-export type AiPrefs = { enabled: boolean; provider: Provider; urls: Record<Provider, string>; models: Record<Provider, string>; proxy: string };
+export type AiPrefs = { enabled: boolean; provider: Provider; urls: Record<Http, string>; models: Record<Http, string>; proxy: string; agent: AgentPrefs };
 const DEFAULTS: AiPrefs = {
   enabled: false,
   provider: "anthropic",
   urls: { open_ai: "https://api.openai.com/v1", anthropic: "https://api.anthropic.com" },
   models: { open_ai: "", anthropic: "claude-sonnet-5-5" },
   proxy: "",
+  agent: { preset: "claude", command: PRESETS.claude.command, args: PRESETS.claude.args },
 };
 const PREF = "ai";
 const prefs = (): AiPrefs => {
   const kept = readPref<Partial<AiPrefs>>(PREF) ?? {};
-  return { ...DEFAULTS, ...kept, urls: { ...DEFAULTS.urls, ...kept.urls }, models: { ...DEFAULTS.models, ...kept.models } };
+  return { ...DEFAULTS, ...kept, urls: { ...DEFAULTS.urls, ...kept.urls }, models: { ...DEFAULTS.models, ...kept.models }, agent: { ...DEFAULTS.agent, ...kept.agent } };
 };
 
 /** Chats kept per connection; the oldest go first. */
@@ -39,15 +53,19 @@ const DECLINED = "The user chose not to run this query.";
 const SETTINGS = `
 <p class="hint note" id="ai-notice">The assistant sends your messages, the open database's table and column names and types, and the rows of every query you let it run to the provider chosen below. Turn it on only if that is allowed for your data.</p>
 <div class="row"><span class="k">Assistant</span><label class="check"><input type="checkbox" id="ai-enabled" /> Turn on the assistant, and send to the provider what the notice above says</label></div>
-<div class="row"><span class="k">Provider</span><select id="ai-provider"><option value="anthropic">Anthropic</option><option value="open_ai">OpenAI-compatible (OpenAI, Ollama, LM Studio…)</option></select></div>
-<div class="row"><span class="k">Base URL</span><input id="ai-url" spellcheck="false" /></div>
-<div class="row"><span class="k">Model</span><input id="ai-model" spellcheck="false" /></div>
-<div class="row"><span class="k">API key</span>
+<div class="row"><span class="k">Provider</span><select id="ai-provider"><option value="anthropic">Anthropic</option><option value="open_ai">OpenAI-compatible (OpenAI, Ollama, LM Studio…)</option><option value="agent">An agent on this computer (Claude Code, Codex…)</option></select></div>
+<div class="row ai-agent"><span class="k">Agent</span><select id="ai-agent"></select></div>
+<div class="row ai-agent"><span class="k">Command</span><input id="ai-command" spellcheck="false" placeholder="e.g. npx" /></div>
+<div class="row ai-agent"><span class="k">Arguments</span><input id="ai-args" spellcheck="false" placeholder="Separated by spaces; quote one with spaces in it" /></div>
+<p class="hint note ai-agent">The agent runs on this computer and speaks the Agent Client Protocol. It reaches the open connection through the MCP server (turn it on in Settings › MCP) with a read-only token that lasts while it runs, and asks in the assistant before it uses its own tools. It signs in on its own, the way it does in a terminal.</p>
+<div class="row ai-http"><span class="k">Base URL</span><input id="ai-url" spellcheck="false" /></div>
+<div class="row ai-http"><span class="k">Model</span><input id="ai-model" spellcheck="false" /></div>
+<div class="row ai-http"><span class="k">API key</span>
   <span class="ai-key"><input id="ai-key" type="password" autocomplete="off" spellcheck="false" /><button id="ai-key-save">Save</button><button id="ai-key-remove" class="ghost">Remove</button></span>
 </div>
-<p class="hint note" id="ai-key-state"></p>
-<p class="hint note">The key is kept in the system keychain and never shown again. Plain http:// works only for a server on this computer.</p>
-<div class="row"><span class="k">Proxy</span><input id="ai-proxy" spellcheck="false" placeholder="Optional: http://proxy.example.com:8080" /></div>
+<p class="hint note ai-http" id="ai-key-state"></p>
+<p class="hint note ai-http">The key is kept in the system keychain and never shown again. Plain http:// works only for a server on this computer.</p>
+<div class="row ai-http"><span class="k">Proxy</span><input id="ai-proxy" spellcheck="false" placeholder="Optional: http://proxy.example.com:8080" /></div>
 `;
 
 const STYLE = `
@@ -77,6 +95,8 @@ const STYLE = `
 .ai-table :is(th, td) { padding: 2px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 .ai-table .null { color: var(--muted); font-style: italic; }
 .ai-error { color: var(--danger); }
+.ai-tool { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.ai-tool::before { content: "⚙ "; }
 .ai-busy { color: var(--muted); font-style: italic; }
 #ai-form { display: grid; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
 #ai-input { resize: none; field-sizing: content; min-height: 54px; max-height: 200px; padding: 6px 8px; font: inherit; }
@@ -111,12 +131,19 @@ function icon(path: string) {
 }
 
 const field = <T extends HTMLElement = HTMLInputElement>(id: string) => $<T>(id);
+field<HTMLSelectElement>("ai-agent").append(...Object.entries(PRESETS).map(([value, p]) => el("option", { value, textContent: p.label })));
 
 /** Fills the AI pane from the kept settings. */
 function fillSettings() {
   const p = prefs();
   field("ai-enabled").checked = p.enabled;
   field<HTMLSelectElement>("ai-provider").value = p.provider;
+  for (const row of settingsPane.querySelectorAll<HTMLElement>(".ai-agent")) row.hidden = p.provider !== "agent";
+  for (const row of settingsPane.querySelectorAll<HTMLElement>(".ai-http")) row.hidden = p.provider === "agent";
+  field<HTMLSelectElement>("ai-agent").value = p.agent.preset;
+  field("ai-command").value = p.agent.command;
+  field("ai-args").value = p.agent.args;
+  if (p.provider === "agent") return;
   field("ai-url").value = p.urls[p.provider];
   field("ai-model").value = p.models[p.provider];
   field("ai-proxy").value = p.proxy;
@@ -131,6 +158,7 @@ async function showSettings() {
   const p = prefs();
   const state = $("ai-key-state");
   state.textContent = "";
+  if (p.provider === "agent") return renderPane();
   try {
     state.textContent = (await invoke<boolean>("ai_has_key", { provider: p.provider })) ? "A key is saved." : "No key saved.";
   } catch (e) {
@@ -147,19 +175,33 @@ function saveSettings() {
     return void showSettings(); // the other provider's URL, model and key
   }
   p.enabled = field("ai-enabled").checked;
+  if (provider === "agent") {
+    const preset = field<HTMLSelectElement>("ai-agent").value;
+    // Choosing a known agent fills in how it starts; editing those makes it "Other".
+    const known = PRESETS[preset] && preset !== p.agent.preset && preset !== "custom" ? PRESETS[preset] : null;
+    const command = known?.command ?? field("ai-command").value.trim();
+    const args = known?.args ?? field("ai-args").value.trim();
+    const same = PRESETS[preset]?.command === command && PRESETS[preset]?.args === args;
+    p.agent = { preset: same || preset === "custom" ? preset : "custom", command, args };
+    writePref(PREF, p);
+    fillSettings();
+    return renderPane();
+  }
   p.urls[provider] = field("ai-url").value.trim() || DEFAULTS.urls[provider];
   p.models[provider] = field("ai-model").value.trim();
   p.proxy = field("ai-proxy").value.trim();
   writePref(PREF, p);
   renderPane();
 }
-for (const id of ["ai-enabled", "ai-provider", "ai-url", "ai-model", "ai-proxy"]) $(id).addEventListener("change", saveSettings);
+for (const id of ["ai-enabled", "ai-provider", "ai-url", "ai-model", "ai-proxy", "ai-agent", "ai-command", "ai-args"]) $(id).addEventListener("change", saveSettings);
 settingsTab.addEventListener("click", () => void showSettings());
 
 async function setKey(key: string) {
   const state = $("ai-key-state");
   try {
-    await withVault(() => invoke("ai_set_key", { provider: prefs().provider, key }));
+    const provider = prefs().provider;
+    if (provider === "agent") return;
+    await withVault(() => invoke("ai_set_key", { provider, key }));
     field("ai-key").value = "";
     state.textContent = key ? "The key is saved." : "The key is removed.";
   } catch (e) {
@@ -196,25 +238,44 @@ const log = el("div", { className: "ai-log" });
 log.setAttribute("aria-live", "polite");
 const input = el("textarea", { id: "ai-input", placeholder: "Ask for a query, or about the data…", rows: 2 });
 const send = el("button", { className: "primary", textContent: "Send", type: "submit" });
+const stopTurn = el("button", { type: "button", textContent: "Stop", title: "Stop the agent's turn", hidden: true });
 const form = el("form", { id: "ai-form" });
-form.append(input, el("footer", {}, el("span", { className: "hint", textContent: "Enter sends, Shift+Enter starts a new line" }), send));
+form.append(input, el("footer", {}, el("span", { className: "hint", textContent: "Enter sends, Shift+Enter starts a new line" }), stopTurn, send));
 pane.append(el("header", {}, el("strong", { textContent: "Assistant" }), chatPick, newChat), log, form);
 
 /** The chat on screen, by connection; `busy` while waiting for the provider. */
 let chat: Chat | null = null;
 let chatOf = "";
 let busy = false;
+let busyText = "Thinking…";
 let problem = "";
+
+type AcpEvent =
+  | { kind: "update"; agent: number; update: Record<string, any> }
+  | { kind: "permission"; agent: number; key: number; tool_call: Record<string, any>; options: { optionId: string; name: string; kind: string }[] }
+  | { kind: "exited"; agent: number; message: string };
+/** Running agents (acp.rs): each belongs to one chat, whose turns its updates add to. */
+const agentOf = new Map<Chat, number>();
+/** The agents' permission questions waiting for the user. */
+let asks: Extract<AcpEvent, { kind: "permission" }>[] = [];
 
 const conn = () => ctx.conn();
 const chatsOf = (name: string) => docEntry<Chat[]>("chats", name) ?? [];
 
-function keep() {
-  const c = conn();
-  if (!c || !chat?.turns.length) return;
-  const name = connName(c.name);
-  const rest = chatsOf(name).filter((x) => x.id !== chat!.id);
-  setDocEntry("chats", name, [chat, ...rest].slice(0, MAX_CHATS));
+/** Saves `target` (the chat on screen by default) with its connection's chats. */
+function keep(target = chat, name = connName(conn()?.name ?? "")) {
+  if (!name || !target?.turns.length) return;
+  const rest = chatsOf(name).filter((x) => x.id !== target.id);
+  setDocEntry("chats", name, [target, ...rest].slice(0, MAX_CHATS));
+}
+
+/** Stops the chat's agent, if it has one. */
+function dropAgent(target: Chat | null) {
+  const id = target && agentOf.get(target);
+  if (id === undefined || id === null) return;
+  agentOf.delete(target!);
+  asks = asks.filter((a) => a.agent !== id);
+  invoke("acp_stop", { agent: id }).catch(() => {}); // gone already is as good as stopped
 }
 
 function fresh(): Chat {
@@ -225,6 +286,7 @@ function fresh(): Chat {
 function current(): Chat {
   const name = connName(conn()?.name ?? "");
   if (!chat || chatOf !== name) {
+    dropAgent(chat);
     chat = fresh();
     chatOf = name;
     problem = "";
@@ -259,12 +321,14 @@ chatPick.onchange = () => {
   const c = conn();
   const found = c && chatsOf(connName(c.name)).find((x) => x.id === chatPick.value);
   if (!found || busy) return;
+  dropAgent(chat);
   chat = structuredClone(found);
   problem = "";
   renderPane();
 };
 newChat.onclick = () => {
   if (busy) return;
+  dropAgent(chat);
   chat = fresh();
   problem = "";
   renderPane();
@@ -301,6 +365,8 @@ function renderTurn(t: Turn, pending: Call | null): HTMLElement | null {
     else if (!r && t.text !== DECLINED) box.append(el("pre", { textContent: t.text }));
     return box;
   }
+  if (t.kind === "tool") return el("p", { className: "ai-tool", textContent: `${t.title} · ${t.status.replace(/_/g, " ")}` });
+  if (!t.text && !t.call) return null;
   const msg = el("div", { className: "ai-msg" });
   for (const b of blocks(t.text)) msg.append(b.code ? codeBlock(b.text) : el("p", { textContent: b.text }));
   if (t.call) {
@@ -333,13 +399,16 @@ export function renderPane() {
     open.onclick = () => (ctx.openSettings(), settingsTab.click());
     items.push(el("p", { className: "hint", textContent: "The assistant is off. Turn it on in Settings › AI, which says what it sends to the provider." }), open);
   } else if (!c) items.push(el("p", { className: "hint", textContent: "Connect to a database to use the assistant." }));
+  else if (!now.turns.length && p.provider === "agent") items.push(el("p", { className: "hint", textContent: `Ask ${PRESETS[p.agent.preset]?.label ?? "the agent"} about ${connName(c.name)}. It reaches the database through the MCP server with a read-only token, and asks here before it uses its own tools.` }));
   else if (!now.turns.length) items.push(el("p", { className: "hint", textContent: `Ask for a query on ${connName(c.name)}, or about its data. The assistant sees the table and column names; it asks before it runs anything, and runs only reads.` }));
   const pending = pendingCall(now.turns);
   for (const t of now.turns) {
     const node = renderTurn(t, busy ? null : pending);
     if (node) items.push(node);
   }
-  if (busy) items.push(el("p", { className: "ai-busy", textContent: "Thinking…" }));
+  const mine = agentOf.get(now);
+  for (const a of asks.filter((x) => x.agent === mine)) items.push(permissionCard(a));
+  if (busy) items.push(el("p", { className: "ai-busy", textContent: busyText }));
   if (problem) {
     const retry = el("button", { textContent: "Try again" });
     retry.onclick = () => void step();
@@ -350,6 +419,31 @@ export function renderPane() {
   const usable = p.enabled && !!c;
   input.disabled = !usable;
   send.disabled = !usable || busy;
+  stopTurn.hidden = !(busy && mine !== undefined);
+}
+
+/** An agent's question before a tool call: what it wants to do, and its options. */
+function permissionCard(a: Extract<AcpEvent, { kind: "permission" }>) {
+  const raw = a.tool_call?.rawInput === undefined ? "" : JSON.stringify(a.tool_call.rawInput, null, 2);
+  const note = el("span", { className: "grow", textContent: `The agent asks: ${String(a.tool_call?.title ?? "use a tool")}` });
+  const box = el("div", { className: "ai-code ai-ask" }, ...(raw ? [el("pre", { textContent: raw.length > 2000 ? raw.slice(0, 2000) + "…" : raw })] : []), el("footer", {}, note));
+  const answer = (option: string | null) => {
+    asks = asks.filter((x) => x !== a);
+    renderPane();
+    invoke("acp_permission", { agent: a.agent, key: a.key, option }).catch((e) => ((problem = String(e)), renderPane()));
+  };
+  const footer = box.querySelector("footer")!;
+  for (const o of a.options ?? []) {
+    const b = el("button", { textContent: o.name, className: o.kind.startsWith("allow") ? "primary" : "" });
+    b.onclick = () => answer(o.optionId);
+    footer.append(b);
+  }
+  if (!a.options?.some((o) => o.kind.startsWith("reject"))) {
+    const no = el("button", { textContent: "Don't allow" });
+    no.onclick = () => answer(null);
+    footer.append(no);
+  }
+  return box;
 }
 
 /** The schema text by session and Postgres schema, fetched once and kept until the table list is reloaded. */
@@ -370,7 +464,9 @@ async function step() {
   const p = prefs();
   if (!c || !p.enabled || busy) return;
   const now = current();
+  if (p.provider === "agent") return;
   busy = true;
+  busyText = "Thinking…";
   problem = "";
   renderPane();
   try {
@@ -380,7 +476,7 @@ async function step() {
       model: p.models[p.provider],
       server: ctx.server() || c.kind,
       schema: await schemaFor(c.name),
-      turns: now.turns,
+      turns: providerTurns(now.turns),
       proxy: p.proxy,
     };
     const reply = await invoke<Reply>("ai_chat", { request });
@@ -402,8 +498,92 @@ async function ask(text: string) {
   now.turns.push({ kind: "user", text });
   if (!now.title) now.title = text.length > 48 ? text.slice(0, 47) + "…" : text;
   keep();
-  await step();
+  await (prefs().provider === "agent" ? agentTurn(text) : step());
 }
+
+/** What the agent is told first: where it is and how to reach the data. */
+function agentContext(name: string) {
+  return `(From TableMinus, a database client: the user is working on the connection "${name}", a ${ctx.server() || "database"} server. ` +
+    `Use the tableminus MCP server's tools (list_tables, describe_table, run_query) with connection "${name}" to look at its schema and data; ` +
+    `they are read-only. Write SQL meant for the user in \`\`\`sql blocks: the user can insert those into the editor.)`;
+}
+
+/** Sends the user's message to the chat's agent, starting it first if needed; its answer streams in as events. */
+async function agentTurn(text: string) {
+  const c = conn();
+  const p = prefs();
+  if (!c || busy) return;
+  const now = current();
+  const name = connName(c.name);
+  busy = true;
+  problem = "";
+  try {
+    let id = agentOf.get(now);
+    let first = false;
+    if (id === undefined) {
+      busyText = `Starting ${PRESETS[p.agent.preset]?.label ?? "the agent"}…`;
+      renderPane();
+      id = await invoke<number>("acp_start", { connection: name, agent: { command: p.agent.command, args: splitArgs(p.agent.args) } });
+      agentOf.set(now, id);
+      first = true;
+    }
+    busyText = "Working…";
+    renderPane();
+    const stop = await invoke<string>("acp_prompt", { agent: id, text: first ? `${agentContext(name)}\n\n${text}` : text });
+    if (stop !== "end_turn" && stop !== "cancelled") problem = `The agent stopped: ${stop.replace(/_/g, " ")}.`;
+  } catch (e) {
+    problem = String(e);
+  } finally {
+    busy = false;
+    keep(now, name);
+    if (chat === now) renderPane();
+  }
+}
+
+/** Adds an agent's message chunk to the chat: to its last answer, or as a new one after a tool call. */
+function appendText(target: Chat, text: string) {
+  const last = target.turns.at(-1);
+  if (last?.kind === "assistant" && !last.call) last.text += text;
+  else target.turns.push({ kind: "assistant", text });
+}
+
+let drawQueued = false;
+/** Redraws once per frame however many chunks arrive. */
+function drawSoon() {
+  if (drawQueued) return;
+  drawQueued = true;
+  requestAnimationFrame(() => ((drawQueued = false), renderPane()));
+}
+
+listen<AcpEvent>("acp", ({ payload: e }) => {
+  const target = [...agentOf].find(([, id]) => id === e.agent)?.[0];
+  if (e.kind === "exited") {
+    if (target) agentOf.delete(target);
+    asks = asks.filter((a) => a.agent !== e.agent);
+    if (target && target === chat && busy) problem = e.message;
+    return drawSoon();
+  }
+  if (!target) return;
+  if (e.kind === "permission") asks.push(e);
+  else {
+    const u = e.update;
+    if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") appendText(target, String(u.content.text ?? ""));
+    else if (u.sessionUpdate === "tool_call") target.turns.push({ kind: "tool", id: String(u.toolCallId), title: String(u.title ?? "A tool"), status: String(u.status ?? "pending") });
+    else if (u.sessionUpdate === "tool_call_update") {
+      const t = target.turns.find((x) => x.kind === "tool" && x.id === u.toolCallId);
+      if (t?.kind === "tool") {
+        if (u.status) t.status = String(u.status);
+        if (u.title) t.title = String(u.title);
+      }
+    } else return; // thoughts, plans and the rest aren't shown
+  }
+  if (target === chat) drawSoon();
+}).catch(() => {}); // outside the app (a plain browser preview) there are no events
+
+stopTurn.onclick = () => {
+  const id = chat && agentOf.get(chat);
+  if (id !== undefined && id !== null) invoke("acp_cancel", { agent: id }).catch((e) => ((problem = String(e)), renderPane()));
+};
 
 async function answer(call: Call, run: boolean) {
   const c = conn();

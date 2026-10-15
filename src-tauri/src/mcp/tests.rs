@@ -339,3 +339,16 @@ fn clients_are_listed_by_token_with_the_name_they_gave() {
         assert_eq!(clients[0].requests, 2);
     });
 }
+
+#[test]
+fn a_temporary_token_works_until_dropped_and_is_never_saved() {
+    tauri::async_runtime::block_on(async {
+        let s = server("temporary").await;
+        let (id, value) = s.shared.temporary_token("Assistant agent", vec!["lite".into()], true).unwrap();
+        let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+        assert_eq!(post(s.port, Some(&value), &list).await.0, 200);
+        assert!(!std::fs::read_to_string(s.dir.join("mcp.json")).unwrap().contains(&id), "not in mcp.json");
+        s.shared.drop_temporary(&id);
+        assert_eq!(post(s.port, Some(&value), &list).await.0, 401);
+    });
+}

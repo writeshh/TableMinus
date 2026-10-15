@@ -5,7 +5,9 @@ export type Call = { id: string; sql: string };
 export type Turn =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; call?: Call | null }
-  | { kind: "result"; id: string; text: string };
+  | { kind: "result"; id: string; text: string }
+  /** An agent's tool call (acp.rs), shown in the chat; never sent to a provider. */
+  | { kind: "tool"; id: string; title: string; status: string };
 export type QueryResult = { columns: string[]; rows: (string | null)[][]; affected: number; truncated: boolean };
 export type DiagramData = {
   tables: { name: string; view: boolean; columns: { name: string; data_type: string; primary: boolean; nullable: boolean }[] }[];
@@ -71,3 +73,9 @@ export function pendingCall(turns: Turn[]): Call | null {
   const last = turns.at(-1);
   return last?.kind === "assistant" && last.call ? last.call : null;
 }
+
+/** The turns a provider is sent: an agent's tool calls, and the empty answers around them, are for the pane only. */
+export const providerTurns = (turns: Turn[]) => turns.filter((t) => t.kind !== "tool" && !(t.kind === "assistant" && !t.text && !t.call));
+
+/** An agent's arguments as typed: split at spaces, with "double quotes" keeping spaces in one. */
+export const splitArgs = (args: string) => (args.match(/"[^"]*"|\S+/g) ?? []).map((a) => a.replace(/^"(.*)"$/, "$1"));

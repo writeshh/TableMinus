@@ -58,6 +58,9 @@ pub enum Error {
     Rebuild(String),
     #[error("git: {0}")]
     Git(String),
+    /// An assistant agent (acp.rs) failed to start, stopped, or refused a request.
+    #[error("agent: {0}")]
+    Agent(String),
     /// The AI provider couldn't be reached, or refused or garbled the request.
     #[error("AI: {0}")]
     Ai(String),

@@ -1,5 +1,6 @@
 //! TableMinus's Tauri commands: the only surface the UI can call.
 
+mod acp;
 mod ai;
 mod backup;
 mod browse;
@@ -815,6 +816,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(backup::Jobs::default())
         .manage(processes::Sessions::default())
         .manage(jobs::Jobs::default())
+        .manage(acp::Agents::default())
         .manage(launcher::Opened::default())
         .setup(|app| {
             secrets::init(&app.path().app_config_dir()?);
@@ -873,6 +875,11 @@ pub fn run() -> tauri::Result<()> {
             secrets::vault_unlock,
             secrets::vault_reset,
             themes::theme_git_fetch,
+            acp::acp_start,
+            acp::acp_prompt,
+            acp::acp_cancel,
+            acp::acp_permission,
+            acp::acp_stop,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,
@@ -930,7 +937,12 @@ pub fn run() -> tauri::Result<()> {
             objects::save_sequence_sql
         ])
         .build(tauri::generate_context!())?
-        .run(launcher::on_event);
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                acp::stop_all(&app.state::<acp::Agents>());
+            }
+            launcher::on_event(app, event);
+        });
     Ok(())
 }
 

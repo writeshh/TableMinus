@@ -135,6 +135,8 @@ pub struct Shared {
     activity: Mutex<VecDeque<Activity>>,
     /// By token id; forgotten when the token is revoked or the app quits.
     clients: Mutex<HashMap<String, Client>>,
+    /// Tokens kept in memory only, for as long as an assistant agent runs (acp.rs); never written to mcp.json.
+    temporary: Mutex<Vec<Token>>,
     pending: Mutex<HashMap<u64, Pending>>,
     next_id: AtomicU64,
     server: Mutex<Option<server::Running>>,
@@ -237,6 +239,7 @@ impl Shared {
             config: Mutex::new(config),
             activity: Mutex::new(VecDeque::new()),
             clients: Mutex::new(HashMap::new()),
+            temporary: Mutex::new(Vec::new()),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             server: Mutex::new(None),
@@ -258,7 +261,33 @@ impl Shared {
     fn caller(&self, bearer: &str) -> Option<Token> {
         use subtle::ConstantTimeEq;
         let given = hash(bearer);
-        lock(&self.config).tokens.iter().find(|t| bool::from(t.hash.as_bytes().ct_eq(given.as_bytes()))).cloned()
+        let matches = |t: &&Token| bool::from(t.hash.as_bytes().ct_eq(given.as_bytes()));
+        let kept = lock(&self.config).tokens.iter().find(matches).cloned();
+        kept.or_else(|| lock(&self.temporary).iter().find(matches).cloned())
+    }
+
+    /// A token that lives in memory only, reaching `connections`; returns its id and its value.
+    pub(crate) fn temporary_token(
+        &self,
+        name: &str,
+        connections: Vec<String>,
+        read_only: bool,
+    ) -> Result<(String, String)> {
+        let value = format!("dbm_{}", random_hex(32)?);
+        let token = new_token(name, &value, Some(connections), read_only, false)?;
+        let id = token.id.clone();
+        lock(&self.temporary).push(token);
+        Ok((id, value))
+    }
+
+    pub(crate) fn drop_temporary(&self, id: &str) {
+        lock(&self.temporary).retain(|t| t.id != id);
+        lock(&self.clients).remove(id);
+    }
+
+    /// The port the server listens on, when it runs.
+    pub(crate) fn running_port(&self) -> Option<u16> {
+        lock(&self.server).as_ref().map(|r| r.port)
     }
 
     /// Notes a request made with `token`.
@@ -429,7 +458,7 @@ pub struct Status {
 }
 
 /// The stdio bridge binary, next to the app's executable.
-fn bridge_path() -> PathBuf {
+pub(crate) fn bridge_path() -> PathBuf {
     std::env::current_exe()
         .map(|exe| exe.with_file_name(format!("tableminus-mcp{}", std::env::consts::EXE_SUFFIX)))
         .unwrap_or_default()

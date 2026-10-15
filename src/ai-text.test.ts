@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blocks, pendingCall, resultText, schemaText, type DiagramData } from "./ai-text.ts";
+import { blocks, pendingCall, providerTurns, resultText, schemaText, splitArgs, type DiagramData } from "./ai-text.ts";
 
 const data: DiagramData = {
   tables: [
@@ -57,4 +57,19 @@ test("pendingCall is the last turn's call, and none once a result follows", () =
   assert.deepEqual(pendingCall([{ kind: "user", text: "q" }, { kind: "assistant", text: "", call }]), call);
   assert.equal(pendingCall([{ kind: "assistant", text: "", call }, { kind: "result", id: "c", text: "1" }]), null);
   assert.equal(pendingCall([{ kind: "assistant", text: "hi" }]), null);
+});
+
+test("providerTurns drops an agent's tool calls and empty answers", () => {
+  const turns = [
+    { kind: "user" as const, text: "q" },
+    { kind: "assistant" as const, text: "" },
+    { kind: "tool" as const, id: "t", title: "run_query", status: "completed" },
+    { kind: "assistant" as const, text: "a" },
+  ];
+  assert.deepEqual(providerTurns(turns), [turns[0], turns[3]]);
+});
+
+test("splitArgs splits at spaces and keeps quoted spaces", () => {
+  assert.deepEqual(splitArgs(' -y  @zed-industries/claude-code-acp "--name=a b" '), ["-y", "@zed-industries/claude-code-acp", "--name=a b"]);
+  assert.deepEqual(splitArgs(""), []);
 });
