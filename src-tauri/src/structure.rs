@@ -15,6 +15,17 @@ pub struct Structure {
     pub checks: Vec<NamedDef>,
     pub triggers: Vec<NamedDef>,
     pub comment: Option<String>,
+    /// MySQL's engine and collation; None elsewhere.
+    pub options: Option<TableOptions>,
+}
+
+/// A MySQL table's engine and default collation, with the ones the server offers to choose from.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct TableOptions {
+    pub engine: Option<String>,
+    pub collation: Option<String>,
+    pub engines: Vec<String>,
+    pub collations: Vec<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -240,7 +251,7 @@ impl Conn {
                 &oid_param,
             )
             .await?;
-        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment })
+        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment, options: None })
     }
 
     async fn my_structure(&mut self, table: &str) -> Result<Structure> {
@@ -325,17 +336,39 @@ impl Conn {
                 &t,
             )
             .await?;
-        let comment = self
+        let (comment, options) = self.my_table_options(table).await?;
+        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment, options: Some(options) })
+    }
+
+    /// A MySQL table's comment, engine and collation, with the engines and collations the server offers.
+    async fn my_table_options(&mut self, table: &str) -> Result<(Option<String>, TableOptions)> {
+        let mut row = self
             .fetch_with(
-                "select table_comment from information_schema.tables where table_schema = database() and table_name = ?",
-                &t,
+                "select table_comment, engine, table_collation from information_schema.tables \
+                 where table_schema = database() and table_name = ?",
+                &[Some(table)],
             )
             .await?
             .into_iter()
             .next()
-            .and_then(|mut r| take(&mut r, 0))
-            .filter(|c| !c.is_empty());
-        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment })
+            .unwrap_or_default();
+        let names = |rows: Vec<Vec<Option<String>>>| rows.into_iter().filter_map(|mut r| take(&mut r, 0)).collect();
+        let engines = self
+            .fetch_with(
+                "select engine from information_schema.engines where support in ('YES', 'DEFAULT') order by engine",
+                &[],
+            )
+            .await?;
+        let collations = self
+            .fetch_with("select collation_name from information_schema.collations order by collation_name", &[])
+            .await?;
+        let options = TableOptions {
+            engine: take(&mut row, 1),
+            collation: take(&mut row, 2),
+            engines: names(engines),
+            collations: names(collations),
+        };
+        Ok((take(&mut row, 0).filter(|c| !c.is_empty()), options))
     }
 
     async fn lite_structure(&mut self, table: &str) -> Result<Structure> {
@@ -421,7 +454,7 @@ impl Conn {
         let triggers = self
             .named("select name, sql from sqlite_master where type = 'trigger' and tbl_name = $1 order by name", &t)
             .await?;
-        Ok(Structure { columns, indexes, foreign_keys, checks: vec![], triggers, comment: None })
+        Ok(Structure { columns, indexes, foreign_keys, checks: vec![], triggers, comment: None, options: None })
     }
 
     async fn named(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<NamedDef>> {

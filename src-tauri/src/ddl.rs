@@ -1,4 +1,5 @@
-//! DDL from typed requests: structure edits (columns, indexes, foreign keys, name, comment) and table operations
+//! DDL from typed requests: structure edits (columns, indexes, foreign keys, checks, the primary key, name, comment,
+//! MySQL's engine and collation) and table operations
 //! (clone, truncate, drop, reset auto-increment, schemas). Statements are generated first, so the UI can show
 //! them, then run as shown by [`Conn::run_ddl`].
 //!
@@ -38,6 +39,35 @@ impl Rule {
     }
 }
 
+/// An index's access method, where the engine has a choice: Postgres has them all, MySQL `BTREE` and `HASH`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IndexMethod {
+    Btree,
+    Hash,
+    Gist,
+    Gin,
+    Brin,
+    Spgist,
+}
+
+impl IndexMethod {
+    fn sql(self, d: Dialect) -> Result<&'static str> {
+        match (d, self) {
+            (Dialect::Pg, IndexMethod::Btree) => Ok("btree"),
+            (Dialect::Pg, IndexMethod::Hash) => Ok("hash"),
+            (Dialect::Pg, IndexMethod::Gist) => Ok("gist"),
+            (Dialect::Pg, IndexMethod::Gin) => Ok("gin"),
+            (Dialect::Pg, IndexMethod::Brin) => Ok("brin"),
+            (Dialect::Pg, IndexMethod::Spgist) => Ok("spgist"),
+            (Dialect::My, IndexMethod::Btree) => Ok("BTREE"),
+            (Dialect::My, IndexMethod::Hash) => Ok("HASH"),
+            (Dialect::My, _) => Err(Error::Invalid("MySQL indexes are BTREE or HASH")),
+            (Dialect::Lite, _) => Err(Error::Invalid("SQLite has only one kind of index")),
+        }
+    }
+}
+
 /// A column as the structure editor wants it. Blank defaults and comments mean none.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +101,9 @@ pub enum Change {
         name: String,
         columns: Vec<String>,
         unique: bool,
+        /// None: the engine's default (btree).
+        #[serde(default)]
+        method: Option<IndexMethod>,
     },
     DropIndex {
         name: String,
@@ -86,6 +119,26 @@ pub enum Change {
     },
     DropForeignKey {
         name: String,
+    },
+    /// `expression` is SQL the user typed, inserted as written, like a default.
+    AddCheck {
+        name: String,
+        expression: String,
+    },
+    DropCheck {
+        name: String,
+    },
+    /// Replaces an existing table's primary key with one on `columns`, in order; none when empty.
+    SetPrimaryKey {
+        columns: Vec<String>,
+    },
+    /// MySQL's storage engine (`InnoDB`…).
+    Engine {
+        engine: String,
+    },
+    /// MySQL's default collation for the table's new columns.
+    Collation {
+        collation: String,
     },
     Rename {
         to: String,
@@ -221,6 +274,64 @@ fn column_sql(d: Dialect, c: &ColumnDef, on_update: Option<&str>) -> Result<Stri
     Ok(s)
 }
 
+fn index_sql(
+    d: Dialect,
+    t: &str,
+    name: &str,
+    columns: &[String],
+    unique: bool,
+    method: Option<IndexMethod>,
+) -> Result<String> {
+    if columns.is_empty() {
+        return Err(Error::Invalid("an index needs at least one column"));
+    }
+    let unique = if unique { "UNIQUE " } else { "" };
+    let name = d.ident(not_blank(name, "every index needs a name")?);
+    let cols = idents(d, columns);
+    Ok(match (d, method.map(|m| m.sql(d)).transpose()?) {
+        (Dialect::Pg, Some(m)) => format!("CREATE {unique}INDEX {name} ON {t} USING {m} ({cols})"),
+        (Dialect::My, Some(m)) => format!("CREATE {unique}INDEX {name} ON {t} ({cols}) USING {m}"),
+        _ => format!("CREATE {unique}INDEX {name} ON {t} ({cols})"),
+    })
+}
+
+fn check_sql(d: Dialect, name: &str, expression: &str) -> Result<String> {
+    let expression = not_blank(expression, "a check needs an expression")?;
+    let named = if name.trim().is_empty() { String::new() } else { format!("CONSTRAINT {} ", d.ident(name.trim())) };
+    Ok(format!("{named}CHECK ({expression})"))
+}
+
+/// The statements that put the primary key on `columns` (none when empty) in place of the current one.
+fn primary_key_sql(d: Dialect, t: &str, current: &Structure, columns: &[String]) -> Result<Vec<String>> {
+    let old = current.indexes.iter().find(|i| i.primary);
+    let add = (!columns.is_empty()).then(|| format!("ADD PRIMARY KEY ({})", idents(d, columns)));
+    Ok(match d {
+        Dialect::Lite => return Err(Error::SqliteRebuild("change the primary key")),
+        // One statement, so MySQL (which commits DDL as it goes) never leaves the table without its key.
+        Dialect::My => {
+            let parts: Vec<String> = old.map(|_| "DROP PRIMARY KEY".to_string()).into_iter().chain(add).collect();
+            if parts.is_empty() { vec![] } else { vec![format!("ALTER TABLE {t} {}", parts.join(", "))] }
+        }
+        Dialect::Pg => old
+            .map(|i| format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(&i.name)))
+            .into_iter()
+            .chain(add.map(|a| format!("ALTER TABLE {t} {a}")))
+            .collect(),
+    })
+}
+
+/// A MySQL table option's value (an engine or a collation). It can't be a bound parameter, so it must be a plain name.
+fn mysql_option(d: Dialect, value: &str) -> Result<&str> {
+    if d != Dialect::My {
+        return Err(Error::Invalid("only MySQL tables have an engine and a collation"));
+    }
+    let value = value.trim();
+    if value.is_empty() || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(Error::Invalid("an engine or collation is a name of letters, digits and _"));
+    }
+    Ok(value)
+}
+
 fn foreign_key_sql(d: Dialect, name: &str, columns: &[String], ref_table: &str, ref_columns: &[String]) -> String {
     let named = if name.trim().is_empty() { String::new() } else { format!("CONSTRAINT {} ", d.ident(name.trim())) };
     format!(
@@ -268,13 +379,8 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                     .ok_or(Error::Invalid("a changed column no longer exists; reopen the structure"))?;
                 out.extend(modify_column_sql(d, &t, cur, column)?);
             }
-            Change::AddIndex { name, columns, unique } => {
-                if columns.is_empty() {
-                    return Err(Error::Invalid("an index needs at least one column"));
-                }
-                let unique = if *unique { "UNIQUE " } else { "" };
-                let name = d.ident(not_blank(name, "every index needs a name")?);
-                out.push(format!("CREATE {unique}INDEX {name} ON {t} ({})", idents(d, columns)));
+            Change::AddIndex { name, columns, unique, method } => {
+                out.push(index_sql(d, &t, name, columns, *unique, *method)?);
             }
             Change::DropIndex { name } => {
                 let index = current.indexes.iter().find(|i| &i.name == name);
@@ -310,6 +416,22 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 Dialect::My => format!("ALTER TABLE {t} DROP FOREIGN KEY {}", d.ident(name)),
                 Dialect::Lite => return Err(Error::SqliteRebuild("drop a foreign key")),
             }),
+            Change::AddCheck { name, expression } => {
+                if d == Dialect::Lite {
+                    return Err(Error::SqliteRebuild("add a check constraint"));
+                }
+                out.push(format!("ALTER TABLE {t} ADD {}", check_sql(d, name, expression)?));
+            }
+            Change::DropCheck { name } => out.push(match d {
+                Dialect::Lite => return Err(Error::SqliteRebuild("drop a check constraint")),
+                // MariaDB and MySQL 8.0.19+ both read DROP CONSTRAINT; MySQL's own DROP CHECK isn't MariaDB's.
+                _ => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
+            }),
+            Change::SetPrimaryKey { columns } => out.extend(primary_key_sql(d, &t, current, columns)?),
+            Change::Engine { engine } => out.push(format!("ALTER TABLE {t} ENGINE = {}", mysql_option(d, engine)?)),
+            Change::Collation { collation } => {
+                out.push(format!("ALTER TABLE {t} COLLATE = {}", mysql_option(d, collation)?));
+            }
             Change::Rename { to } => rename = Some(rename_sql(d, &t, not_blank(to, "the table needs a name")?)),
             Change::Comment { comment } => {
                 let comment = blank_is_none(comment.as_ref());
@@ -403,12 +525,14 @@ fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) ->
     Ok(out)
 }
 
-/// CREATE TABLE with the added columns and foreign keys inline, then its indexes and (Postgres) comments.
+/// CREATE TABLE with the added columns, foreign keys and checks inline (MySQL: its engine and collation too), then
+/// its indexes and (Postgres) comments.
 fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
     let mut defs = Vec::new();
     let mut primary = Vec::new();
     let mut after = Vec::new();
     let mut table_comment = None;
+    let mut options = Vec::new();
     for change in changes {
         match change {
             Change::AddColumn { column } => {
@@ -428,14 +552,12 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
                     _ => {}
                 }
             }
-            Change::AddIndex { name, columns, unique } => {
-                if columns.is_empty() {
-                    return Err(Error::Invalid("an index needs at least one column"));
-                }
-                let unique = if *unique { "UNIQUE " } else { "" };
-                let name = d.ident(not_blank(name, "every index needs a name")?);
-                after.push(format!("CREATE {unique}INDEX {name} ON {t} ({})", idents(d, columns)));
+            Change::AddIndex { name, columns, unique, method } => {
+                after.push(index_sql(d, t, name, columns, *unique, *method)?);
             }
+            Change::AddCheck { name, expression } => defs.push(check_sql(d, name, expression)?),
+            Change::Engine { engine } => options.push(format!(" ENGINE = {}", mysql_option(d, engine)?)),
+            Change::Collation { collation } => options.push(format!(" COLLATE = {}", mysql_option(d, collation)?)),
             Change::AddForeignKey { name, columns, ref_table, ref_columns, on_update, on_delete } => {
                 if columns.is_empty() || columns.len() != ref_columns.len() {
                     return Err(Error::Invalid("a foreign key needs as many referenced columns as columns"));
@@ -448,7 +570,11 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
                 ));
             }
             Change::Comment { comment } => table_comment = blank_is_none(comment.as_ref()),
-            _ => return Err(Error::Invalid("a new table can only have columns, indexes and foreign keys added")),
+            _ => {
+                return Err(Error::Invalid(
+                    "a new table can only have columns, indexes, foreign keys and checks added",
+                ));
+            }
         }
     }
     if !changes.iter().any(|c| matches!(c, Change::AddColumn { .. })) {
@@ -459,7 +585,7 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
         let n = changes.iter().filter(|c| matches!(c, Change::AddColumn { .. })).count();
         defs.insert(n, format!("PRIMARY KEY ({})", idents(d, &primary)));
     }
-    let mut create = format!("CREATE TABLE {t} (\n  {}\n)", defs.join(",\n  "));
+    let mut create = format!("CREATE TABLE {t} (\n  {}\n){}", defs.join(",\n  "), options.concat());
     match (d, table_comment) {
         (Dialect::My, Some(c)) => create = format!("{create} COMMENT = {}", d.literal(c)),
         (Dialect::Pg, Some(c)) => after.insert(0, format!("COMMENT ON TABLE {t} IS {}", d.literal(c))),
@@ -920,7 +1046,8 @@ fn without_fk_checks(ignore: bool, statement: String) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Change, ColumnDef, DbOp, Rule, TableOp, alter_sql, create_database_sql, pg_create_sql, sqlite_renamed_create,
+        Change, ColumnDef, DbOp, IndexMethod, Rule, TableOp, alter_sql, create_database_sql, pg_create_sql,
+        sqlite_renamed_create,
     };
     use crate::db::{Conn, Dialect, Engine, Options};
     use crate::error::Error;
@@ -953,7 +1080,15 @@ mod tests {
     }
 
     fn structure(columns: Vec<ColumnInfo>) -> Structure {
-        Structure { columns, indexes: vec![], foreign_keys: vec![], checks: vec![], triggers: vec![], comment: None }
+        Structure {
+            columns,
+            indexes: vec![],
+            foreign_keys: vec![],
+            checks: vec![],
+            triggers: vec![],
+            comment: None,
+            options: None,
+        }
     }
 
     #[test]
@@ -1026,6 +1161,134 @@ mod tests {
         );
     }
 
+    fn add_index(method: Option<IndexMethod>) -> Change {
+        Change::AddIndex { name: "i".into(), columns: vec!["a".into()], unique: false, method }
+    }
+
+    fn primary_index(name: &str) -> IndexInfo {
+        IndexInfo {
+            name: name.into(),
+            columns: vec!["id".into()],
+            unique: true,
+            primary: true,
+            method: None,
+            constraint: true,
+        }
+    }
+
+    #[test]
+    fn alter_sql_should_put_the_index_method_where_each_engine_wants_it() {
+        let current = structure(vec![info("a", "text")]);
+        let pg = alter_sql(Dialect::Pg, "s.t", Some(&current), &[add_index(Some(IndexMethod::Gin))]).unwrap();
+        assert_eq!(pg, [r#"CREATE INDEX "i" ON "s"."t" USING gin ("a")"#]);
+        let my = alter_sql(Dialect::My, "t", Some(&current), &[add_index(Some(IndexMethod::Hash))]).unwrap();
+        assert_eq!(my, ["CREATE INDEX `i` ON `t` (`a`) USING HASH"]);
+        let default = alter_sql(Dialect::Lite, "t", Some(&current), &[add_index(None)]).unwrap();
+        assert_eq!(default, [r#"CREATE INDEX "i" ON "t" ("a")"#]);
+    }
+
+    #[test]
+    fn alter_sql_should_refuse_an_index_method_the_engine_lacks() {
+        let current = structure(vec![info("a", "text")]);
+        assert!(matches!(
+            alter_sql(Dialect::My, "t", Some(&current), &[add_index(Some(IndexMethod::Gist))]),
+            Err(Error::Invalid(_))
+        ));
+        assert!(matches!(
+            alter_sql(Dialect::Lite, "t", Some(&current), &[add_index(Some(IndexMethod::Btree))]),
+            Err(Error::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn alter_sql_should_add_and_drop_named_checks() {
+        let current = structure(vec![info("a", "integer")]);
+        let changes = [
+            Change::AddCheck { name: "a_positive".into(), expression: "a > 0".into() },
+            Change::DropCheck { name: "old check".into() },
+        ];
+        assert_eq!(
+            alter_sql(Dialect::Pg, "t", Some(&current), &changes).unwrap(),
+            [
+                r#"ALTER TABLE "t" ADD CONSTRAINT "a_positive" CHECK (a > 0)"#,
+                r#"ALTER TABLE "t" DROP CONSTRAINT "old check""#
+            ]
+        );
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &changes).unwrap(),
+            [
+                "ALTER TABLE `t` ADD CONSTRAINT `a_positive` CHECK (a > 0)",
+                "ALTER TABLE `t` DROP CONSTRAINT `old check`"
+            ]
+        );
+    }
+
+    #[test]
+    fn alter_sql_should_refuse_a_blank_check_and_sqlite_check_changes() {
+        let current = structure(vec![info("a", "integer")]);
+        let blank = [Change::AddCheck { name: String::new(), expression: "  ".into() }];
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &blank), Err(Error::Invalid(_))));
+        let add = [Change::AddCheck { name: String::new(), expression: "a > 0".into() }];
+        assert!(matches!(alter_sql(Dialect::Lite, "t", Some(&current), &add), Err(Error::SqliteRebuild(_))));
+    }
+
+    #[test]
+    fn alter_sql_should_replace_a_mysql_primary_key_in_one_statement() {
+        let mut current = structure(vec![info("id", "int"), info("b", "int")]);
+        current.indexes = vec![primary_index("PRIMARY")];
+        let set = |columns: &[&str]| [Change::SetPrimaryKey { columns: columns.iter().map(|c| (*c).into()).collect() }];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &set(&["id", "b"])).unwrap(),
+            ["ALTER TABLE `t` DROP PRIMARY KEY, ADD PRIMARY KEY (`id`, `b`)"]
+        );
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &set(&[])).unwrap(),
+            ["ALTER TABLE `t` DROP PRIMARY KEY"]
+        );
+        current.indexes.clear();
+        assert_eq!(alter_sql(Dialect::My, "t", Some(&current), &set(&[])).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn alter_sql_should_drop_the_postgres_primary_key_constraint_by_name_then_add_the_new_one() {
+        let mut current = structure(vec![info("id", "int"), info("b", "int")]);
+        current.indexes = vec![primary_index("t_pkey")];
+        let changes = [Change::SetPrimaryKey { columns: vec!["b".into()] }];
+        assert_eq!(
+            alter_sql(Dialect::Pg, "s.t", Some(&current), &changes).unwrap(),
+            [r#"ALTER TABLE "s"."t" DROP CONSTRAINT "t_pkey""#, r#"ALTER TABLE "s"."t" ADD PRIMARY KEY ("b")"#]
+        );
+        assert!(matches!(alter_sql(Dialect::Lite, "t", Some(&current), &changes), Err(Error::SqliteRebuild(_))));
+    }
+
+    #[test]
+    fn alter_sql_should_set_mysql_engine_and_collation_only_as_plain_names() {
+        let current = structure(vec![info("a", "int")]);
+        let ok = [Change::Engine { engine: "MyISAM".into() }, Change::Collation { collation: "utf8mb4_bin".into() }];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &ok).unwrap(),
+            ["ALTER TABLE `t` ENGINE = MyISAM", "ALTER TABLE `t` COLLATE = utf8mb4_bin"]
+        );
+        let sneaky = [Change::Engine { engine: "InnoDB; drop table t".into() }];
+        assert!(matches!(alter_sql(Dialect::My, "t", Some(&current), &sneaky), Err(Error::Invalid(_))));
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &ok), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn create_sql_should_put_checks_inline_and_mysql_options_after_the_columns() {
+        let changes = [
+            Change::AddColumn { column: ColumnDef { primary: true, nullable: false, ..col("id", "int") } },
+            Change::AddCheck { name: "id_positive".into(), expression: "id > 0".into() },
+            Change::Engine { engine: "InnoDB".into() },
+        ];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", None, &changes).unwrap(),
+            [
+                "CREATE TABLE `t` (\n  `id` int NOT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `id_positive` CHECK (id > 0)\n) ENGINE = InnoDB"
+            ]
+        );
+    }
+
     #[test]
     fn alter_sql_should_run_the_table_rename_last() {
         let current = structure(vec![info("a", "text")]);
@@ -1083,7 +1346,12 @@ mod tests {
                 on_update: Rule::NoAction,
                 on_delete: Rule::Cascade,
             },
-            Change::AddIndex { name: "pets_owner_idx".into(), columns: vec!["owner".into()], unique: false },
+            Change::AddIndex {
+                name: "pets_owner_idx".into(),
+                columns: vec!["owner".into()],
+                unique: false,
+                method: None,
+            },
         ];
         assert_eq!(
             alter_sql(Dialect::Pg, "public.pets", None, &changes).unwrap(),
@@ -1131,8 +1399,15 @@ mod tests {
             {"op":"drop_column","name":"c"},{"op":"add_index","name":"i","columns":["id"],"unique":false},
             {"op":"drop_index","name":"j"},{"op":"add_foreign_key","name":"f","columns":["a"],"ref_table":"public.o",
             "ref_columns":["id"],"on_update":"NO ACTION","on_delete":"SET NULL"},{"op":"drop_foreign_key","name":"g"},
-            {"op":"rename","to":"u"},{"op":"comment","comment":null}]"#;
-        assert_eq!(serde_json::from_str::<Vec<Change>>(sent).unwrap().len(), 9);
+            {"op":"rename","to":"u"},{"op":"comment","comment":null},
+            {"op":"add_index","name":"k","columns":["id"],"unique":true,"method":"gin"},
+            {"op":"add_index","name":"m","columns":["id"],"unique":false,"method":null},
+            {"op":"add_check","name":"c","expression":"a > 0"},{"op":"drop_check","name":"d"},
+            {"op":"set_primary_key","columns":["id","a"]},{"op":"engine","engine":"InnoDB"},
+            {"op":"collation","collation":"utf8mb4_bin"}]"#;
+        assert_eq!(serde_json::from_str::<Vec<Change>>(sent).unwrap().len(), 16);
+        let unknown_method = r#"[{"op":"add_index","name":"k","columns":["id"],"unique":true,"method":"rtree"}]"#;
+        assert!(serde_json::from_str::<Vec<Change>>(unknown_method).is_err());
         let ops = r#"[{"op":"truncate","table":"t","cascade":false,"restart_identity":true,"ignore_fk":false},
             {"op":"drop","table":"t","cascade":true,"ignore_fk":false},{"op":"clone","table":"t","to":"u","data":true},
             {"op":"rename","table":"t","to":"u"},{"op":"reset_auto_increment","table":"t"},
@@ -1186,6 +1461,7 @@ mod tests {
             checks: vec![NamedDef { name: "owner_positive".into(), definition: "CHECK (owner > 0)".into() }],
             triggers: vec![NamedDef { name: "touch".into(), definition: "CREATE TRIGGER touch …".into() }],
             comment: Some("pets".into()),
+            options: None,
         };
         assert_eq!(
             pg_create_sql("public.pets", &s),
@@ -1248,7 +1524,7 @@ mod tests {
             let changes = [
                 Change::AddColumn { column: ColumnDef { default: Some("'?'".into()), ..col("kind", "text") } },
                 Change::ModifyColumn { from: "name".into(), column: col("label", "text") },
-                Change::AddIndex { name: "pets_kind".into(), columns: vec!["kind".into()], unique: true },
+                Change::AddIndex { name: "pets_kind".into(), columns: vec!["kind".into()], unique: true, method: None },
                 Change::Rename { to: "animals".into() },
             ];
             apply(&mut c, "pets", false, &changes).await.unwrap();
@@ -1423,6 +1699,120 @@ mod tests {
         Ok(())
     }
 
+    /// Checks, a new primary key, an index method and the table options, on a scratch database dropped afterwards.
+    #[test]
+    #[ignore = "needs a local MySQL 8.0.19+ or MariaDB; creates and drops a scratch database"]
+    fn local_mysql_checks_primary_key_index_method_and_options() {
+        tauri::async_runtime::block_on(async {
+            let url = "mysql://root@127.0.0.1:3306";
+            let mut c = Conn::open(Engine::Mysql, url, None, &Tls::default(), &Options::default(), None).await.unwrap();
+            let db = format!("dbm_keys_{}", std::process::id());
+            c.query(&format!("create database {db}")).await.unwrap();
+            c.use_database(&db).await.unwrap();
+            let outcome = mysql_keys_scenario(&mut c).await;
+            c.query(&format!("drop database {db}")).await.unwrap();
+            outcome.unwrap();
+        });
+    }
+
+    async fn mysql_keys_scenario(c: &mut Conn) -> crate::error::Result<()> {
+        let create = [
+            Change::AddColumn { column: ColumnDef { nullable: false, primary: true, ..col("id", "int") } },
+            Change::AddColumn { column: ColumnDef { nullable: false, ..col("n", "int") } },
+            Change::AddCheck { name: "n_small".into(), expression: "n < 100".into() },
+            Change::Engine { engine: "InnoDB".into() },
+            Change::Collation { collation: "utf8mb4_bin".into() },
+        ];
+        apply(c, "t", true, &create).await?;
+        let s = c.structure("t").await?;
+        assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["n_small"]);
+        let options = s.options.as_ref().expect("MySQL tables have options");
+        assert_eq!((options.engine.as_deref(), options.collation.as_deref()), (Some("InnoDB"), Some("utf8mb4_bin")));
+        assert!(options.engines.iter().any(|e| e == "InnoDB") && options.collations.iter().any(|c| c == "utf8mb4_bin"));
+        assert!(c.query("insert into t values (1, 500)").await.is_err(), "the check holds");
+
+        let changes = [
+            Change::DropCheck { name: "n_small".into() },
+            Change::AddCheck { name: "n_positive".into(), expression: "n > 0".into() },
+            Change::SetPrimaryKey { columns: vec!["id".into(), "n".into()] },
+            Change::AddIndex {
+                name: "t_n".into(),
+                columns: vec!["n".into()],
+                unique: false,
+                method: Some(IndexMethod::Btree),
+            },
+            Change::Collation { collation: "utf8mb4_general_ci".into() },
+        ];
+        apply(c, "t", false, &changes).await?;
+        let s = c.structure("t").await?;
+        assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["n_positive"]);
+        assert_eq!(
+            s.indexes.iter().find(|i| i.primary).map(|i| i.columns.clone()),
+            Some(vec!["id".into(), "n".into()])
+        );
+        assert_eq!(s.indexes.iter().find(|i| i.name == "t_n").and_then(|i| i.method.as_deref()), Some("BTREE"));
+        assert_eq!(s.options.and_then(|o| o.collation).as_deref(), Some("utf8mb4_general_ci"));
+        c.query("insert into t values (1, 500)").await?;
+        Ok(())
+    }
+
+    /// The same on Postgres, where the edits run in one transaction. `DBM_PG_URL` points elsewhere than the default.
+    #[test]
+    #[ignore = "needs a local Postgres; creates and drops a scratch database"]
+    fn local_postgres_checks_primary_key_and_index_method() {
+        tauri::async_runtime::block_on(async {
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+            let open = |url: String| async move {
+                Conn::open(Engine::Postgres, &url, None, &Tls::default(), &Options::default(), None).await.unwrap()
+            };
+            let mut admin = open(url.clone()).await;
+            let db = format!("dbm_keys_{}", std::process::id());
+            admin.query(&format!("create database {db}")).await.unwrap();
+            let mut u = url::Url::parse(&url).unwrap();
+            u.set_path(&db);
+            let mut c = open(u.to_string()).await;
+            let outcome = postgres_keys_scenario(&mut c).await;
+            drop(c);
+            admin.query(&format!("drop database {db}")).await.unwrap();
+            outcome.unwrap();
+        });
+    }
+
+    async fn postgres_keys_scenario(c: &mut Conn) -> crate::error::Result<()> {
+        let create = [
+            Change::AddColumn { column: ColumnDef { nullable: false, primary: true, ..col("id", "integer") } },
+            Change::AddColumn { column: ColumnDef { nullable: false, ..col("tags", "text[]") } },
+            Change::AddCheck { name: "tags_some".into(), expression: "cardinality(tags) > 0".into() },
+        ];
+        apply(c, "public.t", true, &create).await?;
+        let changes = [
+            Change::DropCheck { name: "tags_some".into() },
+            Change::AddCheck { name: "id_positive".into(), expression: "id > 0".into() },
+            Change::SetPrimaryKey { columns: vec!["id".into(), "tags".into()] },
+            Change::AddIndex {
+                name: "t_tags".into(),
+                columns: vec!["tags".into()],
+                unique: false,
+                method: Some(IndexMethod::Gin),
+            },
+        ];
+        apply(c, "public.t", false, &changes).await?;
+        let s = c.structure("public.t").await?;
+        assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["id_positive"]);
+        assert_eq!(
+            s.indexes.iter().find(|i| i.primary).map(|i| i.columns.clone()),
+            Some(vec!["id".into(), "tags".into()])
+        );
+        assert_eq!(s.indexes.iter().find(|i| i.name == "t_tags").and_then(|i| i.method.as_deref()), Some("gin"));
+        // A failing statement rolls the whole set back: the key and checks stay as they were.
+        let bad =
+            [Change::DropCheck { name: "id_positive".into() }, Change::SetPrimaryKey { columns: vec!["nope".into()] }];
+        assert!(apply(c, "public.t", false, &bad).await.is_err());
+        assert_eq!(c.structure("public.t").await?.checks.len(), 1);
+        Ok(())
+    }
+
     async fn mysql_scenario(c: &mut Conn) -> crate::error::Result<()> {
         let id = ColumnDef { nullable: false, auto_increment: true, primary: true, ..col("id", "int") };
         let owners = [Change::AddColumn { column: id.clone() }, Change::Comment { comment: Some("people".into()) }];
@@ -1462,7 +1852,7 @@ mod tests {
         let changes = [
             Change::ModifyColumn { from: "name".into(), column: same_name },
             Change::ModifyColumn { from: "at".into(), column: at },
-            Change::AddIndex { name: "pets_name".into(), columns: vec!["name".into()], unique: false },
+            Change::AddIndex { name: "pets_name".into(), columns: vec!["name".into()], unique: false, method: None },
             Change::DropForeignKey { name: "pets_owner".into() },
         ];
         let sql = c.alter_sql("pets", false, &changes).await?;

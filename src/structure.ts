@@ -18,17 +18,21 @@ type ForeignKeyInfo = {
   name: string; columns: string[]; ref_table: string; ref_columns: string[]; on_update: string; on_delete: string;
 };
 type NamedDef = { name: string; definition: string };
+/** MySQL's engine and collation, with the server's choices. */
+type TableOptions = { engine: string | null; collation: string | null; engines: string[]; collations: string[] };
 type Structure = {
   columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[]; checks: NamedDef[]; triggers: NamedDef[];
-  comment: string | null;
+  comment: string | null; options: TableOptions | null;
 };
 
 type Staged = { added?: boolean; dropped?: boolean };
 type ColumnDraft = ColumnInfo & Staged & { orig?: ColumnInfo };
 type Draft = {
   table: string; create: boolean; base?: Structure; error?: string;
-  name: string; comment: string;
+  name: string; comment: string; engine: string; collation: string;
   columns: ColumnDraft[]; indexes: (IndexInfo & Staged)[]; fks: (ForeignKeyInfo & Staged)[];
+  /** `definition` is the expression of an added check, the whole CHECK (…) of an existing one. */
+  checks: (NamedDef & Staged)[];
 };
 
 /** What the workspace (main.ts) lends this module. */
@@ -67,28 +71,51 @@ const TYPES: Record<string, string[]> = {
   sqlite: ["INTEGER", "TEXT", "REAL", "NUMERIC", "BLOB"],
 };
 const kind = () => (host.conn()?.kind === "mariadb" ? "mysql" : host.conn()?.kind ?? "postgres");
+/** Index methods to choose from when adding one (`ddl::IndexMethod`); SQLite has none. */
+const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [] };
 const blank = (s: string | null | undefined) => (s ?? "").trim() || null;
 const shortName = (table: string) => (kind() === "postgres" ? table.split(".").slice(1).join(".") || table : table);
 
 // ---------- Staged changes ----------
 
-const columnDef = (c: ColumnInfo) => ({
+/** The column as `ddl::ColumnDef`. `primary` counts only when creating the table; an existing table's key changes
+ *  as a whole, through set_primary_key. */
+const columnDef = (c: ColumnInfo, primary = c.primary) => ({
   name: c.name.trim(), data_type: c.data_type.trim(), nullable: c.nullable, default: blank(c.default), comment: blank(c.comment),
-  auto_increment: c.auto_increment, primary: c.primary,
+  auto_increment: c.auto_increment, primary,
 });
 const sameColumn = (a: ColumnInfo, b: ColumnInfo) => JSON.stringify(columnDef(a)) === JSON.stringify(columnDef(b));
+
+/** The primary key's columns as drafted, by their names in the end, or null when it's unchanged. Columns are
+ *  compared by what they were, so renaming a key column alone isn't a new key. */
+function newPrimaryKey(d: Draft): string[] | null {
+  if (d.create) return null;
+  const kept = d.columns.filter((c) => !c.dropped);
+  const was = kept.filter((c) => c.orig?.primary).map((c) => c.orig!.name);
+  const now = kept.filter((c) => c.primary);
+  const same = now.length === was.length && now.every((c, i) => c.orig?.name === was[i]);
+  return same ? null : now.map((c) => c.name.trim());
+}
 
 /** The typed change list the backend turns into DDL (see `ddl::Change`). */
 function changes(d: Draft): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   for (const c of d.columns) {
     if (c.orig && c.dropped) out.push({ op: "drop_column", name: c.orig.name });
-    else if (!c.orig && !c.dropped) out.push({ op: "add_column", column: columnDef(c) });
-    else if (c.orig && !sameColumn(c, c.orig)) out.push({ op: "modify_column", from: c.orig.name, column: columnDef(c) });
+    else if (!c.orig && !c.dropped) out.push({ op: "add_column", column: columnDef(c, d.create && c.primary) });
+    else if (c.orig && !sameColumn({ ...c, primary: c.orig.primary }, c.orig)) {
+      out.push({ op: "modify_column", from: c.orig.name, column: columnDef(c, c.orig.primary) });
+    }
   }
+  const key = newPrimaryKey(d);
+  if (key) out.push({ op: "set_primary_key", columns: key });
   for (const i of d.indexes) {
-    if (i.added && !i.dropped) out.push({ op: "add_index", name: i.name.trim(), columns: i.columns, unique: i.unique });
+    if (i.added && !i.dropped) out.push({ op: "add_index", name: i.name.trim(), columns: i.columns, unique: i.unique, method: i.method || null });
     else if (i.dropped && !i.added) out.push({ op: "drop_index", name: i.name });
+  }
+  for (const k of d.checks) {
+    if (k.added && !k.dropped) out.push({ op: "add_check", name: k.name.trim(), expression: k.definition });
+    else if (k.dropped && !k.added) out.push({ op: "drop_check", name: k.name });
   }
   for (const f of d.fks) {
     const { name, columns, ref_table, ref_columns, on_update, on_delete } = f;
@@ -97,6 +124,9 @@ function changes(d: Draft): Record<string, unknown>[] {
   }
   if (!d.create && d.name.trim() !== shortName(d.table)) out.push({ op: "rename", to: d.name.trim() });
   if (blank(d.comment) !== blank(d.base?.comment)) out.push({ op: "comment", comment: blank(d.comment) });
+  const options = d.base?.options;
+  if (options && d.engine && d.engine !== options.engine) out.push({ op: "engine", engine: d.engine });
+  if (options && blank(d.collation) && d.collation.trim() !== options.collation) out.push({ op: "collation", collation: d.collation.trim() });
   return out;
 }
 
@@ -111,9 +141,11 @@ export const dropDraft = (tabId: number) => void (drafts.delete(tabId), viewDraf
 function fromBase(table: string, s: Structure): Draft {
   return {
     table, create: false, base: s, name: shortName(table), comment: s.comment ?? "",
+    engine: s.options?.engine ?? "", collation: s.options?.collation ?? "",
     columns: s.columns.map((c) => ({ ...c, orig: c })),
     indexes: s.indexes.map((i) => ({ ...i })),
     fks: s.foreign_keys.map((f) => ({ ...f })),
+    checks: s.checks.map((k) => ({ ...k })),
   };
 }
 
@@ -188,7 +220,10 @@ export async function showStructure(out: HTMLElement, tabId: number, table: stri
   let d = drafts.get(tabId);
   if (!d) {
     if (create) {
-      d = { table, create, name: shortName(table), comment: "", columns: [{ ...newColumn(), name: "id", primary: true, nullable: false }], indexes: [], fks: [] };
+      d = {
+        table, create, name: shortName(table), comment: "", engine: "", collation: "",
+        columns: [{ ...newColumn(), name: "id", primary: true, nullable: false }], indexes: [], fks: [], checks: [],
+      };
       if (kind() !== "sqlite") d.columns[0].auto_increment = true;
       d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER" }[kind()]!;
       drafts.set(tabId, d);
@@ -222,6 +257,15 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
   const opts = el("div", { className: "table-options" }, el("label", {}, "Name ", name));
   name.disabled = d.create; // the new name was chosen when the tab opened
   if (!lite) opts.append(el("label", {}, "Comment ", input(d.comment, (v) => ((d.comment = v), touched()), "Table comment")));
+  const options = d.base?.options;
+  if (options) {
+    const engine = el("select", {}, ...options.engines.map((e) => el("option", { value: e, textContent: e, selected: e === d.engine })));
+    engine.onchange = () => ((d.engine = engine.value), touched());
+    const collations = el("datalist", { id: `collations-${tabId}` }, ...options.collations.map((c) => el("option", { value: c })));
+    const collation = input(d.collation, (v) => ((d.collation = v), touched()), "Collation");
+    collation.setAttribute("list", collations.id);
+    opts.append(el("label", {}, "Engine ", engine), el("label", {}, "Collation ", collation, collations));
+  }
   view.append(opts);
 
   // Columns
@@ -235,7 +279,8 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
     const comment = input(c.comment ?? "", set("comment"), "Comment");
     comment.disabled = lite;
     const primary = check(c.primary, set("primary"), "Primary key");
-    primary.disabled = !d.create;
+    primary.disabled = lite && !d.create; // SQLite would have to rebuild the table
+    primary.title = d.create ? "Primary key" : "Primary key: the key's columns change together when saved";
     tr.append(
       td(input(c.name, set("name"), "Column name")), td(type), td(check(c.nullable, set("nullable"), "Nullable")),
       td(input(c.default ?? "", set("default"), "Default (SQL)")), td(check(c.auto_increment, set("auto_increment"), "Auto-increment")),
@@ -253,10 +298,14 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
   // Indexes
   const idxRows = d.indexes.map((i) => {
     const flags = [i.primary ? "PRIMARY" : i.unique ? "UNIQUE" : "", i.method ?? ""].filter(Boolean).join(" · ");
+    const method = el("select", { title: "Index method" }, el("option", { value: "", textContent: "default" }),
+      ...METHODS[kind()].map((m) => el("option", { value: m, textContent: m, selected: m === i.method })));
+    method.onchange = () => ((i.method = method.value || null), touched());
     const tr = i.added
       ? el("tr", {}, td(input(i.name, (v) => ((i.name = v), touched()), "Index name")),
           td(input(i.columns.join(", "), (v) => ((i.columns = list(v)), touched()), "Columns, comma separated")),
-          td(el("label", { className: "inline" }, check(i.unique, (v) => ((i.unique = v), touched()), "Unique"), " unique")),
+          td(el("label", { className: "inline" }, check(i.unique, (v) => ((i.unique = v), touched()), "Unique"), " unique"),
+            ...(METHODS[kind()].length ? [" ", method] : [])),
           td(dropButton(i, redraw)))
       : el("tr", {}, td(i.name), td(i.columns.join(", ")), td(flags), td(dropButton(i, redraw)));
     tr.classList.toggle("added", !!i.added);
@@ -289,9 +338,23 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
     : addButton("Foreign key", () => (d.fks.push({ name: `${d.name.trim()}_fk${d.fks.length + 1}`, columns: [], ref_table: host.tables()[0] ?? "", ref_columns: ["id"], on_update: "NO ACTION", on_delete: "NO ACTION", added: true }), redraw()));
   view.append(section("Foreign keys", ["Name", "Columns", "References", "Columns", "On update", "On delete", ""], fkRows, addFk));
 
+  // Checks
+  const checkRows = d.checks.map((k) => {
+    const tr = k.added
+      ? el("tr", {}, td(input(k.name, (v) => ((k.name = v), touched()), "Constraint name")),
+          td(input(k.definition, (v) => ((k.definition = v), touched()), "Expression, e.g. price > 0")), td(dropButton(k, redraw)))
+      : el("tr", {}, td(k.name), td(el("code", { textContent: k.definition })), td(lite ? "" : dropButton(k, redraw)));
+    tr.classList.toggle("added", !!k.added);
+    tr.classList.toggle("dropped", !!k.dropped);
+    return tr;
+  });
+  const addCheck = lite && !d.create
+    ? el("span", { className: "hint", textContent: "SQLite can only add checks when the table is created." })
+    : addButton("Check", () => (d.checks.push({ name: `${d.name.trim()}_check${d.checks.length + 1}`, definition: "", added: true }), redraw()));
+  view.append(section("Checks", ["Name", "Definition", ""], checkRows, addCheck));
+
   // Read-only for now
   const defs = (rows: NamedDef[]) => rows.map((r) => el("tr", {}, td(r.name), td(el("code", { textContent: r.definition }))));
-  if (d.base?.checks.length) view.append(section("Checks", ["Name", "Definition"], defs(d.base.checks)));
   if (d.base?.triggers.length) view.append(section("Triggers", ["Name", "Definition"], defs(d.base.triggers)));
 
   out.replaceChildren(view);
