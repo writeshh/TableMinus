@@ -75,6 +75,9 @@ pub struct Chat {
     /// The tables and columns, as text.
     pub schema: String,
     pub turns: Vec<Turn>,
+    /// An HTTP proxy to tunnel through (`http://host:port`); empty for none.
+    #[serde(default)]
+    pub proxy: String,
 }
 
 /// The model's answer: text, and perhaps a query it wants run.
@@ -198,13 +201,16 @@ fn anthropic_reply(v: &Value) -> Option<Reply> {
     Some(Reply { text, call })
 }
 
+fn is_local(url: &Url) -> bool {
+    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+}
+
 /// The endpoint for `provider` under `base`. A key may only travel encrypted, so plain HTTP is for this computer.
 fn endpoint(provider: Provider, base: &str) -> Result<Url> {
     let mut url = Url::parse(base.trim())?;
-    let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
     match url.scheme() {
         "https" => {}
-        "http" if local => {}
+        "http" if is_local(&url) => {}
         _ => return Err(Error::Invalid("the AI base URL must start with https:// (http:// only for this computer)")),
     }
     if !url.username().is_empty() || url.password().is_some() {
@@ -217,6 +223,46 @@ fn endpoint(provider: Provider, base: &str) -> Result<Url> {
     let path = format!("{}/{suffix}", url.path().trim_end_matches('/'));
     url.set_path(&path);
     Ok(url)
+}
+
+/// The proxy to use, if any. Only plain `http://` proxies, which tunnel HTTPS with CONNECT, and none with a password.
+fn proxy_url(proxy: &str) -> Result<Option<Url>> {
+    let proxy = proxy.trim();
+    if proxy.is_empty() {
+        return Ok(None);
+    }
+    let u = Url::parse(proxy)?;
+    if u.scheme() != "http" || u.host_str().is_none() {
+        return Err(Error::Invalid("the proxy must be an http:// address, such as http://proxy.example.com:8080"));
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err(Error::Invalid("proxies that want a user name or password aren't supported yet"));
+    }
+    Ok(Some(u))
+}
+
+/// Opens a tunnel to `host:port` through the HTTP proxy at `proxy` (CONNECT), ready for TLS.
+async fn tunnel(proxy: &Url, host: &str, port: u16) -> Result<tokio::net::TcpStream> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let at =
+        proxy.host_str().ok_or(Error::Invalid("the proxy has no host"))?.trim_start_matches('[').trim_end_matches(']');
+    let mut stream = tokio::net::TcpStream::connect((at, proxy.port_or_known_default().unwrap_or(80))).await?;
+    let target = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
+    stream.write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").as_bytes()).await?;
+    // The proxy's answer is a status line and headers; anything longer isn't one.
+    let mut answer = Vec::new();
+    let mut byte = [0u8; 1];
+    while !answer.ends_with(b"\r\n\r\n") {
+        if answer.len() > 8192 || stream.read(&mut byte).await? == 0 {
+            return Err(Error::Ai("the proxy closed the connection".into()));
+        }
+        answer.push(byte[0]);
+    }
+    let status = String::from_utf8_lossy(&answer).lines().next().unwrap_or_default().to_string();
+    if status.split_whitespace().nth(1) != Some("200") {
+        return Err(Error::Ai(format!("the proxy refused the tunnel: {status}")));
+    }
+    Ok(stream)
 }
 
 /// Sends one request on an open connection and reads the whole answer, up to [`MAX_REPLY`].
@@ -240,6 +286,7 @@ where
 /// POSTs `body` to `url` with `headers`, over TLS for https.
 async fn post(
     url: &Url,
+    proxy: Option<&Url>,
     headers: Vec<(header::HeaderName, header::HeaderValue)>,
     body: Vec<u8>,
 ) -> Result<(u16, Bytes)> {
@@ -254,9 +301,13 @@ async fn post(
         request = request.header(name, value);
     }
     let request = request.body(Full::new(Bytes::from(body))).map_err(|e| Error::Ai(e.to_string()))?;
+    // This computer is reached directly; plain http goes nowhere else (endpoint).
+    let proxy = proxy.filter(|_| url.scheme() == "https" && !is_local(url));
     let connect = async {
-        let tcp = tokio::net::TcpStream::connect((bare, port)).await?;
-        Ok::<_, Error>(tcp)
+        match proxy {
+            Some(p) => tunnel(p, bare, port).await,
+            None => Ok(tokio::net::TcpStream::connect((bare, port)).await?),
+        }
     };
     let tcp = tokio::time::timeout(crate::db::CONNECT_TIMEOUT, connect)
         .await
@@ -310,6 +361,7 @@ pub async fn chat(chat: &Chat, key: Option<&SecretString>) -> Result<Reply> {
         return Err(Error::Invalid("choose a model in Settings › AI"));
     }
     let url = endpoint(chat.provider, &chat.base_url)?;
+    let proxy = proxy_url(&chat.proxy)?;
     let mut headers = Vec::new();
     let secret = |value: String| {
         let mut v = header::HeaderValue::from_str(&value)
@@ -335,7 +387,7 @@ pub async fn chat(chat: &Chat, key: Option<&SecretString>) -> Result<Reply> {
             anthropic_body(chat)
         }
     };
-    let (status, bytes) = post(&url, headers, body.to_string().into_bytes()).await?;
+    let (status, bytes) = post(&url, proxy.as_ref(), headers, body.to_string().into_bytes()).await?;
     if !(200..300).contains(&status) {
         return Err(error_message(status, &bytes));
     }
@@ -380,6 +432,7 @@ pub async fn ai_set_key(provider: Provider, key: SecretString) -> Result<()> {
 mod tests {
     use super::{
         Call, Chat, Provider, Reply, Turn, anthropic_body, anthropic_reply, endpoint, openai_body, openai_reply,
+        proxy_url, tunnel,
     };
     use secrecy::SecretString;
     use serde_json::{Value, json};
@@ -400,6 +453,7 @@ mod tests {
                 },
                 Turn::Result { id: "c1".into(), text: "count(*)\n3".into() },
             ],
+            proxy: String::new(),
         }
     }
 
@@ -544,6 +598,53 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let chat = conversation(Provider::Anthropic, "https://api.anthropic.com");
             assert!(super::chat(&chat, None).await.is_err());
+        });
+    }
+
+    #[test]
+    fn proxy_url_should_take_only_plain_http_without_credentials() {
+        assert!(proxy_url("").unwrap().is_none());
+        assert!(proxy_url("http://proxy:8080").unwrap().is_some());
+        assert!(proxy_url("https://proxy:8080").is_err());
+        assert!(proxy_url("socks5://proxy:1080").is_err());
+        assert!(proxy_url("http://u:p@proxy:8080").is_err());
+    }
+
+    /// A one-shot proxy: reads the CONNECT request up to its blank line, answers `status`, hands back what it read.
+    async fn fake_proxy(status: &'static str) -> (u16, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !seen.ends_with(b"\r\n\r\n") {
+                let n = socket.read(&mut buf).await.unwrap();
+                seen.extend_from_slice(&buf[..n]);
+            }
+            socket.write_all(format!("{status}\r\n\r\n").as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&seen).to_string()
+        });
+        (port, task)
+    }
+
+    #[test]
+    fn tunnel_should_connect_through_the_proxy() {
+        tauri::async_runtime::block_on(async {
+            let (port, seen) = fake_proxy("HTTP/1.1 200 Connection established").await;
+            let proxy = proxy_url(&format!("http://127.0.0.1:{port}")).unwrap().unwrap();
+            tunnel(&proxy, "api.example.com", 443).await.unwrap();
+            assert!(seen.await.unwrap().starts_with("CONNECT api.example.com:443 HTTP/1.1\r\n"));
+        });
+    }
+
+    #[test]
+    fn tunnel_should_report_a_refusal() {
+        tauri::async_runtime::block_on(async {
+            let (port, _seen) = fake_proxy("HTTP/1.1 407 Proxy Authentication Required").await;
+            let proxy = proxy_url(&format!("http://127.0.0.1:{port}")).unwrap().unwrap();
+            let e = tunnel(&proxy, "api.example.com", 443).await.unwrap_err().to_string();
+            assert!(e.contains("407"), "{e}");
         });
     }
 }

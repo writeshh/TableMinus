@@ -15,12 +15,13 @@ export type Provider = "open_ai" | "anthropic";
 type Chat = { id: string; title: string; at: number; turns: Turn[] };
 type Reply = { text: string; call: Call | null };
 
-export type AiPrefs = { enabled: boolean; provider: Provider; urls: Record<Provider, string>; models: Record<Provider, string> };
+export type AiPrefs = { enabled: boolean; provider: Provider; urls: Record<Provider, string>; models: Record<Provider, string>; proxy: string };
 const DEFAULTS: AiPrefs = {
   enabled: false,
   provider: "anthropic",
   urls: { open_ai: "https://api.openai.com/v1", anthropic: "https://api.anthropic.com" },
   models: { open_ai: "", anthropic: "claude-sonnet-5-5" },
+  proxy: "",
 };
 const PREF = "ai";
 const prefs = (): AiPrefs => {
@@ -46,6 +47,7 @@ const SETTINGS = `
 </div>
 <p class="hint note" id="ai-key-state"></p>
 <p class="hint note">The key is kept in the system keychain and never shown again. Plain http:// works only for a server on this computer.</p>
+<div class="row"><span class="k">Proxy</span><input id="ai-proxy" spellcheck="false" placeholder="Optional: http://proxy.example.com:8080" /></div>
 `;
 
 const STYLE = `
@@ -117,6 +119,7 @@ function fillSettings() {
   field<HTMLSelectElement>("ai-provider").value = p.provider;
   field("ai-url").value = p.urls[p.provider];
   field("ai-model").value = p.models[p.provider];
+  field("ai-proxy").value = p.proxy;
   field("ai-model").placeholder = p.provider === "anthropic" ? "claude-sonnet-5-5" : "e.g. gpt-4.1, or llama3.2 on Ollama";
   field("ai-key").value = "";
   field("ai-key").placeholder = p.provider === "anthropic" ? "sk-ant-…" : "Not needed for most local servers";
@@ -146,10 +149,11 @@ function saveSettings() {
   p.enabled = field("ai-enabled").checked;
   p.urls[provider] = field("ai-url").value.trim() || DEFAULTS.urls[provider];
   p.models[provider] = field("ai-model").value.trim();
+  p.proxy = field("ai-proxy").value.trim();
   writePref(PREF, p);
   renderPane();
 }
-for (const id of ["ai-enabled", "ai-provider", "ai-url", "ai-model"]) $(id).addEventListener("change", saveSettings);
+for (const id of ["ai-enabled", "ai-provider", "ai-url", "ai-model", "ai-proxy"]) $(id).addEventListener("change", saveSettings);
 settingsTab.addEventListener("click", () => void showSettings());
 
 async function setKey(key: string) {
@@ -377,6 +381,7 @@ async function step() {
       server: ctx.server() || c.kind,
       schema: await schemaFor(c.name),
       turns: now.turns,
+      proxy: p.proxy,
     };
     const reply = await invoke<Reply>("ai_chat", { request });
     now.turns.push({ kind: "assistant", text: reply.text, call: reply.call });
