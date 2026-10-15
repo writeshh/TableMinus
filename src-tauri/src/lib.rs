@@ -25,6 +25,7 @@ mod secrets;
 mod ssh;
 mod store;
 mod structure;
+mod themes;
 mod tls;
 mod users;
 
@@ -871,6 +872,7 @@ pub fn run() -> tauri::Result<()> {
             secrets::vault_status,
             secrets::vault_unlock,
             secrets::vault_reset,
+            themes::theme_git_fetch,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,

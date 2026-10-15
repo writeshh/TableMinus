@@ -6,14 +6,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { $, el } from "./dom";
 import { modal } from "./backup";
-import { BUNDLED, MAX_THEME_FILE, VARS, parseTheme, validValue, type Scheme, type Theme } from "./theme-file";
+import { BUNDLED, MAX_THEME_FILE, VARS, gitSource, gitThemes, parseTheme, validValue, type GitSource, type Scheme, type Theme } from "./theme-file";
 import { readPref, writePref } from "./prefs";
 
 type Mode = "auto" | Scheme;
-type Store = { light: string; dark: string; custom: Theme[] };
+type Store = { light: string; dark: string; custom: Theme[]; git: GitSource[] };
 
 const store: Store = (() => {
-  const defaults: Store = { light: "TableMinus Light", dark: "TableMinus Dark", custom: [] };
+  const defaults: Store = { light: "TableMinus Light", dark: "TableMinus Dark", custom: [], git: [] };
   try {
     const s = { ...defaults, ...readPref<Partial<Store>>("themes") };
     // Each kept theme is checked again, so a hand-edited entry can't slip anything into the page.
@@ -24,6 +24,7 @@ const store: Store = (() => {
         return [];
       }
     });
+    s.git = (Array.isArray(s.git) ? s.git : []).flatMap((g: unknown) => gitSource(g) ?? []);
     return s;
   } catch {
     return defaults;
@@ -93,7 +94,8 @@ const button = (text: string, onclick: () => void) => el("button", { type: "butt
 $("theme").closest(".row")!.after(
   row("Light theme", lightPick),
   row("Dark theme", darkPick),
-  row("", el("span", { className: "row-items" }, button("Edit themes…", () => openEditor(shown())), button("Import…", () => fileInput.click())), fileInput),
+  row("", el("span", { className: "row-items" }, button("Edit themes…", () => openEditor(shown())), button("Import…", () => fileInput.click()),
+    button("Install from Git…", () => openGit())), fileInput),
   el("div", { className: "note" }, note),
 );
 fillPicks();
@@ -116,6 +118,74 @@ fileInput.onchange = async () => {
     say(String(e), "error");
   }
 };
+
+// ---------- Themes from a Git repository (themes.rs) ----------
+
+type Fetched = { commit: string; files: { path: string; text: string }[] };
+
+/** Installs (or, for a repository already installed, replaces) the themes `fetched` from `url`. A theme picked
+ *  before that the repository no longer has falls back to the default. */
+function installGit(url: string, fetched: Fetched) {
+  const { themes, skipped } = gitThemes(fetched.files);
+  if (!themes.length) throw skipped.length ? `No themes in the repository. ${skipped.slice(0, 3).join("; ")}` : "No themes in the repository.";
+  const before = store.git.find((g) => g.url === url);
+  const old = new Set(before?.names ?? []);
+  store.custom = store.custom.filter((t) => !old.has(t.name));
+  const names: string[] = [];
+  for (const t of themes) {
+    t.name = uniqueName(t.name);
+    store.custom.push(t);
+    names.push(t.name);
+  }
+  const source: GitSource = { url, commit: fetched.commit, names };
+  store.git = before ? store.git.map((g) => (g === before ? source : g)) : [...store.git, source];
+  for (const sc of ["light", "dark"] as const) if (!byName(store[sc])) store[sc] = BUNDLED[sc === "dark" ? 1 : 0].name;
+  persist();
+  fillPicks();
+  apply();
+  return { names, skipped };
+}
+
+function removeGit(source: GitSource) {
+  const names = new Set(source.names);
+  store.custom = store.custom.filter((t) => !names.has(t.name));
+  store.git = store.git.filter((g) => g !== source);
+  for (const sc of ["light", "dark"] as const) if (!byName(store[sc])) store[sc] = BUNDLED[sc === "dark" ? 1 : 0].name;
+  persist();
+  fillPicks();
+  apply();
+}
+
+function openGit() {
+  const url = el("input", { type: "url", placeholder: "https://github.com/someone/tableminus-themes", spellcheck: false });
+  const list = el("ul", { className: "git-themes" });
+  const { d, footer, setStatus } = modal("Install themes from Git", "git-dialog", el("p", { className: "hint",
+    textContent: "TableMinus clones the repository with git and installs every theme file (.json) at its top or in themes/. Updating replaces that repository's themes, including changes you made to them." }), url, list);
+  const fetchFrom = async (address: string) => {
+    setStatus("Fetching…", "busy");
+    try {
+      const got = await invoke<Fetched>("theme_git_fetch", { url: address });
+      const { names, skipped } = installGit(address, got);
+      setStatus(`Installed ${names.join(", ")}${skipped.length ? `. Skipped ${skipped.length}: ${skipped.slice(0, 3).join("; ")}` : ""}`, "done");
+      render();
+    } catch (e) {
+      setStatus(String(e), "error");
+    }
+  };
+  function render() {
+    list.replaceChildren(...store.git.map((g) => el("li", {},
+      el("span", { className: "grow" }, el("code", { textContent: g.url }), el("span", { className: "sub", textContent: `${g.names.join(", ")} · ${g.commit.slice(0, 7)}` })),
+      button("Update", () => void fetchFrom(g.url)),
+      button("Remove", () => (removeGit(g), render(), setStatus(`Removed the themes from ${g.url}`))))));
+  }
+  const install = el("button", { className: "primary", textContent: "Install" });
+  install.onclick = () => url.value.trim() && void fetchFrom(url.value.trim());
+  url.onkeydown = (e) => e.key === "Enter" && install.click();
+  footer.append(el("span", { className: "spacer" }), button("Close", () => d.close()), install);
+  render();
+  d.showModal();
+  url.focus();
+}
 
 async function exportTheme(t: Theme) {
   const path = await saveDialog({ defaultPath: `${t.name}.json`, filters: [{ name: "Theme", extensions: ["json"] }] });
