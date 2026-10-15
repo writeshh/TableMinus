@@ -7,6 +7,9 @@
 //! (comments, names inside catalog functions) through [`Dialect::literal`]. Types and defaults are SQL the user
 //! typed into the structure editor, inserted as written, like SQL in the editor.
 
+mod rebuild;
+pub(crate) use rebuild::checks as lite_checks;
+
 use crate::db::{Conn, Dialect};
 use crate::error::{Error, Result};
 use crate::structure::{ColumnInfo, Structure};
@@ -846,7 +849,46 @@ impl Conn {
     /// The statements for structure `changes` to `table`; `create` builds a new table instead.
     pub async fn alter_sql(&mut self, table: &str, create: bool, changes: &[Change]) -> Result<Vec<String>> {
         let current = if create { None } else { Some(self.structure(table).await?) };
+        if let (Conn::Lite(_), Some(cur)) = (&*self, &current)
+            && rebuild::needed(cur, changes)
+        {
+            let sources = self.rebuild_sources(table).await?;
+            return rebuild::rebuild_sql(table, cur, changes, &sources);
+        }
         alter_sql(self.dialect(), table, current.as_ref(), changes)
+    }
+
+    /// What SQLite's table rebuild reads: the table's CREATE statement, its indexes and triggers, and whether foreign
+    /// keys are on.
+    async fn rebuild_sources(&mut self, table: &str) -> Result<rebuild::Sources> {
+        let t = [Some(table)];
+        let pairs = |rows: Vec<Vec<Option<String>>>| -> Vec<(String, String)> {
+            rows.into_iter().filter_map(|mut r| Some((r.get_mut(0)?.take()?, r.get_mut(1)?.take()?))).collect()
+        };
+        let create = self
+            .fetch_with("select sql from sqlite_master where type = 'table' and name = $1", &t)
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|mut r| r.pop().flatten())
+            .ok_or(Error::Invalid("no such table"))?;
+        let indexes = pairs(
+            self.fetch_with(
+                "select name, sql from sqlite_master where type = 'index' and tbl_name = $1 and sql is not null",
+                &t,
+            )
+            .await?,
+        );
+        let triggers = pairs(
+            self.fetch_with("select name, sql from sqlite_master where type = 'trigger' and tbl_name = $1", &t).await?,
+        );
+        let foreign_keys_on = self
+            .fetch_with("pragma foreign_keys", &[])
+            .await?
+            .first()
+            .and_then(|r| r.first())
+            .is_some_and(|v| v.as_deref() == Some("1"));
+        Ok(rebuild::Sources { create, indexes, triggers, foreign_keys_on })
     }
 
     pub(crate) async fn is_view(&mut self, table: &str) -> Result<bool> {
@@ -1153,6 +1195,30 @@ impl Conn {
     /// statement as it goes, so it runs them one by one and, on an error, says which had already run. A single
     /// statement runs on its own: it needs no transaction, and Postgres's CREATE and DROP DATABASE refuse one.
     pub async fn run_ddl(&mut self, statements: &[String]) -> Result<()> {
+        // SQLite ignores PRAGMA foreign_keys inside a transaction: a rebuild's first and last ones run around it, and
+        // the last (turning them back on) runs whatever happened in between.
+        let lite = matches!(self, Conn::Lite(_));
+        let fk = |s: &&String| lite && s.starts_with("PRAGMA foreign_keys");
+        let (pre, post) =
+            (statements.iter().take_while(|s| fk(s)).count(), statements.iter().rev().take_while(|s| fk(s)).count());
+        if pre + post > 0 && pre + post < statements.len() {
+            for s in &statements[..pre] {
+                self.query(s).await?;
+            }
+            let r = self.run_in_transaction(&statements[pre..statements.len() - post]).await;
+            for s in &statements[statements.len() - post..] {
+                let restored = self.query(s).await;
+                if r.is_ok() {
+                    restored?;
+                }
+            }
+            return r;
+        }
+        self.run_in_transaction(statements).await
+    }
+
+    /// [`Conn::run_ddl`] without the foreign key pragmas around it.
+    async fn run_in_transaction(&mut self, statements: &[String]) -> Result<()> {
         if !matches!(self, Conn::My(_)) && statements.len() > 1 {
             self.query("begin").await?;
             for s in statements {
@@ -1821,6 +1887,167 @@ mod tests {
 
             apply(&mut c, "animals", false, &[Change::DropColumn { name: "label".into() }]).await.unwrap();
             assert_eq!(c.structure("animals").await.unwrap().columns.len(), 2);
+        });
+    }
+
+    /// pets(id, name, kind) with rows, a COLLATE and a CHECK the editor doesn't show, an index, a trigger and a view.
+    async fn sqlite_pets() -> Conn {
+        let mut c = sqlite().await;
+        c.query(
+            "create table pets(id integer primary key, name text collate nocase, kind text default 'dog', \
+             constraint name_short check (length(name) < 20), check (kind <> ''));
+             create index pets_name on pets(name);
+             create table log(n int);
+             create trigger pets_log after insert on pets begin insert into log values (new.id); end;
+             create view dogs as select * from pets where kind = 'dog';
+             insert into pets values (1, 'Rex', 'dog'), (2, 'Tom', null);",
+        )
+        .await
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_change_type_nullability_and_default_keeping_rows_and_the_rest() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            let kind = ColumnDef { default: Some("'cat'".into()), ..col("kind", "varchar(10)") };
+            apply(&mut c, "pets", false, &[Change::ModifyColumn { from: "kind".into(), column: kind }]).await.unwrap();
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(
+                (s.columns[2].data_type.as_str(), s.columns[2].default.as_deref()),
+                ("VARCHAR(10)", Some("'cat'"))
+            );
+            assert_eq!(c.query("select count(*) from pets").await.unwrap().rows[0][0].as_deref(), Some("2"));
+            assert!(s.indexes.iter().any(|i| i.name == "pets_name") && s.triggers.iter().any(|t| t.name == "pets_log"));
+            assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["name_short", "check 2"]);
+            let create =
+                c.query("select sql from sqlite_master where name = 'pets'").await.unwrap().rows[0][0].clone().unwrap();
+            assert!(create.contains("COLLATE nocase"), "{create}");
+            assert_eq!(
+                c.query("select count(*) from dogs").await.unwrap().rows[0][0].as_deref(),
+                Some("1"),
+                "the view still works"
+            );
+            c.query("insert into pets(name) values ('Kit')").await.unwrap();
+            assert_eq!(
+                c.query("select kind from pets where name = 'Kit'").await.unwrap().rows[0][0].as_deref(),
+                Some("cat")
+            );
+            assert_eq!(
+                c.query("select count(*) from log").await.unwrap().rows[0][0].as_deref(),
+                Some("3"),
+                "the trigger fired for Kit (the two rows before, not for the copy)"
+            );
+        });
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_leave_everything_as_it_was_when_the_rows_dont_fit() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            let not_null = ColumnDef { nullable: false, default: Some("'dog'".into()), ..col("kind", "text") };
+            let r =
+                apply(&mut c, "pets", false, &[Change::ModifyColumn { from: "kind".into(), column: not_null }]).await;
+            assert!(r.is_err(), "Tom's kind is NULL");
+            assert!(c.structure("pets").await.unwrap().columns[2].nullable);
+            assert_eq!(c.query("select count(*) from pets").await.unwrap().rows[0][0].as_deref(), Some("2"));
+            let tables = c.query("select count(*) from sqlite_master where name like 'pets__rebuild'").await.unwrap();
+            assert_eq!(tables.rows[0][0].as_deref(), Some("0"));
+        });
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_move_columns_and_rename_after() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            let changes = [
+                Change::ModifyColumn {
+                    from: "name".into(),
+                    column: ColumnDef { nullable: true, ..col("label", "varchar(20)") },
+                },
+                move_to("kind", Some("id")),
+            ];
+            apply(&mut c, "pets", false, &changes).await.unwrap();
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "kind", "label"]);
+            assert_eq!(
+                c.query("select label from pets where id = 1").await.unwrap().rows[0][0].as_deref(),
+                Some("Rex")
+            );
+            let index =
+                c.query("select sql from sqlite_master where name = 'pets_name'").await.unwrap().rows[0][0].clone();
+            assert!(index.unwrap().contains("label"), "the rename reached the index");
+        });
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_add_and_drop_checks_and_foreign_keys_without_cascading() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            c.query(
+                "pragma foreign_keys = on; create table toys(pet int references pets(id) on delete cascade); \
+                     insert into toys values (1)",
+            )
+            .await
+            .unwrap();
+            let changes = [
+                Change::DropCheck { name: "check 2".into() },
+                Change::AddCheck { name: "id_positive".into(), expression: "id > 0".into() },
+                Change::AddForeignKey {
+                    name: String::new(),
+                    columns: vec!["id".into()],
+                    ref_table: "log".into(),
+                    ref_columns: vec!["n".into()],
+                    on_update: Rule::NoAction,
+                    on_delete: Rule::NoAction,
+                },
+            ];
+            let sql = c.alter_sql("pets", false, &changes).await.unwrap();
+            assert_eq!(
+                (sql.first().map(String::as_str), sql.last().map(String::as_str)),
+                (Some("PRAGMA foreign_keys = OFF"), Some("PRAGMA foreign_keys = ON"))
+            );
+            c.run_ddl(&sql).await.unwrap();
+            assert_eq!(
+                c.query("select count(*) from toys").await.unwrap().rows[0][0].as_deref(),
+                Some("1"),
+                "nothing cascaded"
+            );
+            assert_eq!(c.query("pragma foreign_keys").await.unwrap().rows[0][0].as_deref(), Some("1"), "back on");
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["name_short", "id_positive"]);
+            let fk = s.foreign_keys[0].name.clone();
+            apply(&mut c, "pets", false, &[Change::DropForeignKey { name: fk }]).await.unwrap();
+            assert_eq!(c.structure("pets").await.unwrap().foreign_keys, []);
+        });
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_change_the_primary_key() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            apply(&mut c, "pets", false, &[Change::SetPrimaryKey { columns: vec!["id".into(), "name".into()] }])
+                .await
+                .unwrap();
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(
+                s.columns.iter().filter(|c| c.primary).map(|c| c.name.as_str()).collect::<Vec<_>>(),
+                ["id", "name"]
+            );
+            assert_eq!(c.query("select count(*) from pets").await.unwrap().rows[0][0].as_deref(), Some("2"));
+        });
+    }
+
+    #[test]
+    fn sqlite_changes_alter_table_can_make_need_no_rebuild() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            let sql = c
+                .alter_sql("pets", false, &[Change::ModifyColumn { from: "name".into(), column: col("label", "text") }])
+                .await
+                .unwrap();
+            assert_eq!(sql, [r#"ALTER TABLE "pets" RENAME COLUMN "name" TO "label""#]);
         });
     }
 

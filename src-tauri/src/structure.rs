@@ -541,7 +541,15 @@ impl Conn {
             .into_iter()
             .map(|mut r| lite_trigger(take(&mut r, 0).unwrap_or_default(), take(&mut r, 1).unwrap_or_default()))
             .collect();
-        Ok(Structure { columns, indexes, foreign_keys, checks: vec![], triggers, comment: None, options: None })
+        // SQLite keeps checks only in the CREATE statement; the rebuild reads them back the same way to drop one.
+        let create = self.fetch_with("select sql from sqlite_master where type = 'table' and name = $1", &t).await?;
+        let checks = create
+            .into_iter()
+            .next()
+            .and_then(|mut r| take(&mut r, 0))
+            .map(|sql| crate::ddl::lite_checks(&sql))
+            .unwrap_or_default();
+        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment: None, options: None })
     }
 
     async fn named(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<NamedDef>> {

@@ -53,6 +53,9 @@ pub enum Error {
     /// A request the UI should not have sent, such as an edit with no key.
     #[error("{0}")]
     Invalid(&'static str),
+    /// SQLite's table rebuild couldn't read the table's CREATE statement, or SQL typed for it.
+    #[error("can't rebuild the table: {0}")]
+    Rebuild(String),
     #[error("{}", postgres_message(.0))]
     Postgres(#[from] tokio_postgres::Error),
     #[error(transparent)]
@@ -92,7 +95,7 @@ pub enum Error {
     StartupScript(String),
     #[error("startup SQL: {0}")]
     StartupSql(Box<Error>),
-    #[error("SQLite can't {0} without rebuilding the table, which this app doesn't do yet")]
+    #[error("SQLite's ALTER TABLE can't {0}; the table has to be rebuilt")]
     SqliteRebuild(&'static str),
     /// MySQL commits DDL statement by statement, so an error can come after some statements took effect.
     #[error("{source}\n\nMySQL commits each DDL statement, so these had already run:\n{ran}")]

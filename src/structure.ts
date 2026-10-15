@@ -89,11 +89,11 @@ const columnDef = (c: ColumnInfo, primary = c.primary) => ({
 });
 const sameColumn = (a: ColumnInfo, b: ColumnInfo) => JSON.stringify(columnDef(a)) === JSON.stringify(columnDef(b));
 
-/** MySQL reorders an existing table's columns: each column whose neighbour before it isn't the one it would have
+/** MySQL and SQLite reorder an existing table's columns: each column whose neighbour before it isn't the one it would have
  *  anyway (its old order, added columns after) moves after its new neighbour, or first. A new table is created in
  *  the drafted order, so it needs none. */
 function columnMoves(d: Draft): Record<string, unknown>[] {
-  if (d.create || kind() !== "mysql" || !d.base) return [];
+  if (d.create || kind() === "postgres" || !d.base) return [];
   const now = d.columns.filter((c) => !c.dropped);
   const was = (c: ColumnDraft) => d.base!.columns.findIndex((x) => x.name === c.orig!.name);
   const baseline = [...now.filter((c) => c.orig).sort((a, b) => was(a) - was(b)), ...now.filter((c) => !c.orig)];
@@ -299,8 +299,8 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
 
   // Columns
   const types = el("datalist", { id: `types-${tabId}` }, ...TYPES[kind()].map((t) => el("option", { value: t })));
-  // A new table takes the drafted order; MySQL can also move an existing table's columns.
-  const movable = d.create || kind() === "mysql";
+  // A new table takes the drafted order; MySQL and SQLite can also move an existing table's columns.
+  const movable = d.create || kind() !== "postgres"; // MySQL moves them; SQLite rebuilds the table
   const moveButtons = (c: ColumnDraft) => {
     const shown = d.columns.filter((x) => !x.dropped);
     const i = shown.indexOf(c);
@@ -328,7 +328,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
     const comment = input(c.comment ?? "", set("comment"), "Comment");
     comment.disabled = lite;
     const primary = check(c.primary, set("primary"), "Primary key");
-    primary.disabled = lite && !d.create; // SQLite would have to rebuild the table
+
     primary.title = d.create ? "Primary key" : "Primary key: the key's columns change together when saved";
     tr.append(
       td(input(c.name, set("name"), "Column name")), td(type), td(length), td(check(c.nullable, set("nullable"), "Nullable")),
@@ -382,9 +382,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
     tr.classList.toggle("dropped", !!f.dropped);
     return tr;
   });
-  const addFk = lite && !d.create
-    ? el("span", { className: "hint", textContent: "SQLite can only add foreign keys when the table is created." })
-    : addButton("Foreign key", () => (d.fks.push({ name: `${d.name.trim()}_fk${d.fks.length + 1}`, columns: [], ref_table: host.tables()[0] ?? "", ref_columns: ["id"], on_update: "NO ACTION", on_delete: "NO ACTION", added: true }), redraw()));
+  const addFk = addButton("Foreign key", () => (d.fks.push({ name: `${d.name.trim()}_fk${d.fks.length + 1}`, columns: [], ref_table: host.tables()[0] ?? "", ref_columns: ["id"], on_update: "NO ACTION", on_delete: "NO ACTION", added: true }), redraw()));
   view.append(section("Foreign keys", ["Name", "Columns", "References", "Columns", "On update", "On delete", ""], fkRows, addFk));
 
   // Checks
@@ -392,14 +390,12 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
     const tr = k.added
       ? el("tr", {}, td(input(k.name, (v) => ((k.name = v), touched()), "Constraint name")),
           td(input(k.definition, (v) => ((k.definition = v), touched()), "Expression, e.g. price > 0")), td(dropButton(k, redraw)))
-      : el("tr", {}, td(k.name), td(el("code", { textContent: k.definition })), td(lite ? "" : dropButton(k, redraw)));
+      : el("tr", {}, td(k.name), td(el("code", { textContent: k.definition })), td(dropButton(k, redraw)));
     tr.classList.toggle("added", !!k.added);
     tr.classList.toggle("dropped", !!k.dropped);
     return tr;
   });
-  const addCheck = lite && !d.create
-    ? el("span", { className: "hint", textContent: "SQLite can only add checks when the table is created." })
-    : addButton("Check", () => (d.checks.push({ name: `${d.name.trim()}_check${d.checks.length + 1}`, definition: "", added: true }), redraw()));
+  const addCheck = addButton("Check", () => (d.checks.push({ name: `${d.name.trim()}_check${d.checks.length + 1}`, definition: "", added: true }), redraw()));
   view.append(section("Checks", ["Name", "Definition", ""], checkRows, addCheck));
 
   view.append(triggerSection(d, redraw, touched));
@@ -552,9 +548,12 @@ const sqlText = (statements: string[]) => statements.map((s) => `${s};`).join("\
 /** Shows the statements about to run; true when the user runs them. */
 export async function preview(title: string, statements: string[], okLabel: string, danger: boolean) {
   const conn = host.conn();
+  const rebuild = kind() === "sqlite" && statements.some((s) => s.includes("__rebuild"));
   const note = kind() === "mysql" && statements.length > 1
     ? "MySQL commits each statement as it runs; if one fails, the ones before it stay applied."
-    : `Runs${statements.length > 1 ? " in one transaction" : ""} on ${connName(conn?.name ?? "")}.`;
+    : rebuild
+      ? `SQLite can't make these changes in place, so the table is rebuilt: created anew, its rows copied, the old one dropped and its indexes and triggers put back, all in one transaction on ${connName(conn?.name ?? "")}.`
+      : `Runs${statements.length > 1 ? " in one transaction" : ""} on ${connName(conn?.name ?? "")}.`;
   const pre = el("pre", { className: "sql-preview", textContent: sqlText(statements) });
   const picked = await modal(title, [pre, el("p", { className: "hint", textContent: note })],
     [["Cancel", ""], ["Copy", ""], [okLabel, danger ? "danger" : "primary"]], true);
