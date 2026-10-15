@@ -12,7 +12,10 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, State};
+// Only the macOS run events (`on_event`) use these.
+#[cfg(target_os = "macos")]
+use tauri::{Emitter, Manager};
 
 /// Keychain access and argon2 block, so commands run them off the async runtime.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {

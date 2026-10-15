@@ -128,6 +128,7 @@ pub async fn touch_id(reason: &str) -> Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[expect(clippy::unused_async, reason = "the same signature as the macOS version, which awaits the prompt")]
 pub async fn touch_id(_reason: &str) -> Result<()> {
     Err(Error::TouchId("only on macOS".into()))
 }
