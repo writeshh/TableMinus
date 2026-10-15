@@ -750,6 +750,7 @@ async fn run_ddl(
 async fn set_safety(
     app: AppHandle,
     open: State<'_, Open>,
+    redis: State<'_, redis::Sessions>,
     name: String,
     safety: safety::Safety,
     unlock: Option<safety::Unlock>,
@@ -770,6 +771,7 @@ async fn set_safety(
     for live in sessions {
         live.lock().await.saved.safety = safety;
     }
+    redis.set_safety(&name, safety).await;
     Ok(())
 }
 

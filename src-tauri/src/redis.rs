@@ -469,6 +469,21 @@ impl Sessions {
     pub async fn remove(&self, name: &str) {
         self.0.lock().await.remove(name);
     }
+
+    /// A new safe mode level for every session of the saved connection `connection`.
+    pub async fn set_safety(&self, connection: &str, level: safety::Safety) {
+        let sessions: Vec<_> = self
+            .0
+            .lock()
+            .await
+            .iter()
+            .filter(|(k, _)| k.split_once('\u{1f}').map_or(k.as_str(), |(n, _)| n) == connection)
+            .map(|(_, s)| s.clone())
+            .collect();
+        for s in sessions {
+            s.lock().await.saved.safety = level;
+        }
+    }
 }
 
 /// `redis://[user@]host[:port][/db]`: where to dial, who to sign in as, and which database.
