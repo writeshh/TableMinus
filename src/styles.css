@@ -284,13 +284,15 @@ td.null { color: var(--grid-null); font-style: italic; }
 /* Filter bar above a table's rows */
 .filters { display: grid; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--raised); }
 /* Fixed columns, with the buttons placed explicitly, so a hidden value field never shifts them. */
-.filter-row { display: grid; grid-template-columns: auto minmax(110px, 180px) minmax(110px, 150px) minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+.filter-row { display: grid; grid-template-columns: auto minmax(110px, 180px) minmax(110px, 150px) minmax(0, 1fr) minmax(0, 1fr) auto auto auto auto; gap: 6px; align-items: center; }
 .filter-row input[hidden] { display: none; }
 .filter-row .v1 { grid-column: 4 / span 2; }
 .filter-row.two .v1 { grid-column: 4; }
 .filter-row .v2 { grid-column: 5; }
-.filter-row .rm { grid-column: 6; }
-.filter-row .add { grid-column: 7; }
+.filter-row .only { grid-column: 6; }
+.filter-row .clone { grid-column: 7; }
+.filter-row .rm { grid-column: 8; }
+.filter-row .add { grid-column: 9; }
 .filter-foot { display: flex; gap: 6px; align-items: center; }
 #toggle-filters[aria-pressed="true"] { color: var(--accent); }
 th.sortable { cursor: default; user-select: none; }

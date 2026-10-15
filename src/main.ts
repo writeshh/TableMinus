@@ -3,15 +3,15 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
-import { createEditor, type FormatStyle, type Schema } from "./editor";
+import { createEditor, type CompleteKey, type FormatStyle, type Schema } from "./editor";
 import { fillParams, findParams, sourceTable, type ParamFormat } from "./statements";
 import { $, el } from "./dom";
-import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
+import { OPS, activeFilters, blankFilter, renderFilters, setFilterDefaults, type DefaultColumn, type FilterRow, type Op } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
 import { MIN_WIDTH, arrange, layoutCss, loadLayout, moveColumn, saveLayout, type Layout } from "./columns";
 import {
-  dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showStructure, sidebarMenu, structurePending,
-  tableMenu,
+  dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showSql, showStructure, sidebarMenu,
+  structurePending, tableMenu,
 } from "./structure";
 import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
@@ -30,7 +30,10 @@ import { addCommands, bindings, commands, isMac, onBindingsChanged, setOverrides
 import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
 import { initMenu, setRecent } from "./menu";
-import { forgetItems, initSearch, initSidebar, loadedItems, renderTree, shownSchema, treeMenu } from "./sidebar";
+import {
+  columnOrderMenu, forgetItems, initSearch, initSidebar, loadedItems, newItemsMenu, renderTree, shownSchema, sortColumns, treeMenu,
+} from "./sidebar";
+import type { Transform } from "./transforms";
 import { initDiagram, openDiagram } from "./diagram";
 import { label } from "./keys";
 import * as launcher from "./connections";
@@ -1251,8 +1254,9 @@ function renderTables() {
     : "This database has no tables.";
 }
 
-/** A table's row in the sidebar: click opens it, the chevron shows its columns. `extra` joins its menu. */
-function tableRow(t: string, label: string, extra: MenuItem[]) {
+/** A table's row in the sidebar: click opens it, the chevron shows its columns. `first` and `last` go around its
+ *  menu. */
+function tableRow(t: string, label: string, first: MenuItem[], last: MenuItem[]) {
   const open = current()?.kind === "table" ? (current() as TableTab).table : null;
   const isOpen = expanded.has(t);
   const chevron = el("button", { className: "chevron", textContent: "›", title: isOpen ? "Hide columns" : "Show columns" });
@@ -1274,11 +1278,13 @@ function tableRow(t: string, label: string, extra: MenuItem[]) {
   const row = el("div", { className: "tree-row", title: t }, chevron, el("span", { className: "tbl-icon" }), el("span", { className: "label", textContent: label }));
   row.classList.toggle("active", t === open);
   row.onclick = () => openTable(t);
-  row.oncontextmenu = (e) => (e.stopPropagation(), contextMenu(e, [...tableMenu(t), "-", ...transferMenu(t), "-", ["Show diagram", () => showDiagram(t)], ...extra]));
+  row.oncontextmenu = (e) => (e.stopPropagation(),
+    contextMenu(e, [...first, "-", ...tableMenu(t), "-", ...transferMenu(t), "-", ["Show diagram", () => showDiagram(t)], ...last]));
   const li = el("li", {}, row);
   if (isOpen)
     li.append(
-      el("ul", { className: "cols" }, ...(columnsCache.get(t) ?? []).map((c) =>
+      el("ul", { className: "cols", oncontextmenu: (e: MouseEvent) => (e.stopPropagation(), contextMenu(e, columnOrderMenu())) },
+        ...sortColumns(columnsCache.get(t) ?? []).map((c) =>
         el("li", { title: `${c.name} ${c.data_type}${c.nullable ? "" : " not null"}` },
           el("span", { className: c.primary ? "key" : "nokey", textContent: c.primary ? "⚿" : "", title: c.primary ? "Primary key" : "" }),
           el("span", { className: "label", textContent: c.name }),
@@ -1435,16 +1441,18 @@ function openSqlIn(title: string | null, sql: string) {
   editor.focus();
 }
 
-/** Opens `table`'s tab (or brings it forward); a new tab starts with `filters` when given. */
-function openTable(table: string, view: TableTab["view"] = "data", create = false, filters?: FilterRow[]) {
-  const existing = tabs.find((t) => t.kind === "table" && t.table === table) as TableTab | undefined;
+/** Shows `table`'s tab, opening one if needed: `fresh` opens another even when one is open, and a new tab starts
+ *  with `filters` when given. */
+function openTable(table: string, view: TableTab["view"] = "data", create = false, opts: { filters?: FilterRow[]; fresh?: boolean } = {}) {
+  const { filters, fresh = false } = opts;
+  const existing = fresh ? undefined : (tabs.find((t) => t.kind === "table" && t.table === table) as TableTab | undefined);
   if (existing) {
     if (existing.view !== view && !pendingCount(existing)) existing.view = view;
     return select(existing.id);
   }
   const tab: TableTab = {
     id: nextId++, kind: "table", title: table, table, view, offset: 0, staged: new Staged(), create,
-    sort: [], filters: filters ?? [blankFilter()], combine: "and", filtersShown: !!filters, layout: loadLayout(active!.name, table),
+    sort: [], filters: filters ?? [], combine: "and", filtersShown: !!filters || settings.filterBar, layout: loadLayout(active!.name, table),
   };
   tabs.push(tab);
   select(tab.id);
@@ -1765,7 +1773,21 @@ function showFilters(tab: Tab) {
   const columns = columnsCache.get(tab.table)?.map((c) => c.name);
   if (filtersDrawnFor === tab.id || !columns) return;
   filtersDrawnFor = tab.id;
-  renderFilters(bar, tab, columns, () => applyFilters(tab));
+  renderFilters(bar, tab, columns, () => applyFilters(tab), {
+    primary: (columnsCache.get(tab.table) ?? []).filter((c) => c.primary).map((c) => c.name),
+    showSql: () => showFilterSql(tab),
+    exportRows: () => $("export-table").click(),
+  });
+}
+
+/** The filter bar's SQL button: the query behind the page, with the filter values shown as literals. */
+async function showFilterSql(tab: TableTab) {
+  try {
+    const request = { ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset };
+    await showSql(`SQL for ${tab.table}`, await call<string>("filter_sql", { name: sessionKey(), request }));
+  } catch (e) {
+    status(String(e), "error");
+  }
 }
 
 const MAX_PAGE = 100_000; // browse.rs MAX_PAGE
@@ -1835,7 +1857,7 @@ async function followKey(tab: TableTab, ri: number, fk: ForeignKey) {
   }
   const filters = refColumns.map((column, i): FilterRow => ({ ...blankFilter(), column, op: "eq", value: values[i] as string }));
   const open = tabs.find((t): t is TableTab => t.kind === "table" && t.table === fk.ref_table);
-  if (!open) return openTable(fk.ref_table, "data", false, filters);
+  if (!open) return openTable(fk.ref_table, "data", false, { filters });
   if (!(await okToDiscard(open))) return;
   Object.assign(open, { view: "data", filters, combine: "and", filtersShown: true });
   filtersDrawnFor = 0;
@@ -1846,7 +1868,7 @@ async function followKey(tab: TableTab, ri: number, fk: ForeignKey) {
 /** Right-click on a cell: filter the table to rows with this value. */
 function filterByCell(tab: TableTab, column: string, value: string | null) {
   const row: FilterRow = value === null ? { ...blankFilter(), column, op: "is_null" } : { ...blankFilter(), column, op: "eq", value };
-  const blank = tab.filters.length === 1 && !activeFilters(tab).length;
+  const blank = tab.filters.length <= 1 && !activeFilters(tab).length;
   tab.filters = blank ? [row] : [...tab.filters, row];
   tab.filtersShown = true;
   filtersDrawnFor = 0;
@@ -2803,7 +2825,8 @@ grid.initGridEdit({
   fill: fillCell,
   logOriginals: () => settings.logOriginals,
 });
-$("side-items").oncontextmenu = (e) => active && contextMenu(e, [...sidebarMenu(), ["Show diagram", () => showDiagram()], "-", ...treeMenu()]);
+$("side-items").oncontextmenu = (e) =>
+  active && contextMenu(e, [...sidebarMenu(), "-", ...newItemsMenu(), "-", ["Show diagram", () => showDiagram()], "-", ...treeMenu()]);
 /** The ER diagram of the sidebar's schema, or of `table`'s schema centred on it. */
 function showDiagram(table?: string) {
   const pg = active?.kind === "postgres";
@@ -2815,7 +2838,16 @@ initSidebar({
   tables: () => tables,
   call,
   tableRow,
-  openTable: (t) => openTable(t),
+  openTable: (t, fresh) => openTable(t, "data", false, { fresh }),
+  openSql(sql, run) {
+    openSqlIn(null, sql);
+    if (run) execute([sql]);
+  },
+  insertSql(text) {
+    if (current()?.kind === "sql") editor.insert(text);
+    else openSqlIn(null, text);
+  },
+  note,
   openFound(table, mode, text) {
     openTable(table);
     const tab = current();
@@ -2857,7 +2889,11 @@ initStructure({
   },
   note,
   pendingChanged: () => current() && showPending(current()!),
+  itemKind: (name) => loadedItems(sessionKey()).find((i) => i.name === name)?.kind ?? null,
 });
+// The database's own functions complete in the editor once the sidebar has loaded them.
+editor.setFunctionSource(() =>
+  loadedItems(sessionKey()).filter((i) => i.kind === "function" || i.kind === "procedure").map((i) => i.name.replace(/^public\./, "")));
 
 // ---------- Import and export (importexport.ts) ----------
 
@@ -2956,6 +2992,14 @@ type Settings = {
   sqlLimit: number;
   formatStyle: FormatStyle;
   paramFormat: ParamFormat | "off";
+  /** The SQL editor's keys: CodeMirror's Sublime-like defaults, or Vim. */
+  keyBinding: "sublime" | "vim";
+  /** Completions write keywords in upper case. */
+  upperKeywords: boolean;
+  /** The key that accepts a completion. */
+  completeKey: CompleteKey;
+  /** A new filter row's column and operator, and whether a table opens with the filter bar showing. */
+  filterColumn: DefaultColumn; filterOp: Op; filterBar: boolean;
   wrapLines: boolean;
   showInvisibles: boolean;
   /** Save each connection's SQL tabs and reopen them on connect. */
@@ -2987,6 +3031,7 @@ type Settings = {
 const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
+  keyBinding: "sublime", upperKeywords: false, completeKey: "enter", filterColumn: "any", filterOp: "contains", filterBar: false,
   shortcuts: {}, launcherSort: "name", reopenWorkspaces: false,
   resultsMode: "tabs", stopOnError: true, historyYears: 0,
   pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, hideScrollbars: false, logOriginals: false,
@@ -3050,6 +3095,15 @@ function applySettings() {
   const tab = current();
   if (tab?.kind === "sql" && !$("workspace").hidden) showResults(tab);
   editor.setDisplay(settings.wrapLines, settings.showInvisibles);
+  $<HTMLSelectElement>("key-binding").value = settings.keyBinding;
+  $<HTMLInputElement>("upper-keywords").checked = settings.upperKeywords;
+  $<HTMLSelectElement>("complete-key").value = settings.completeKey;
+  $<HTMLSelectElement>("filter-column").value = settings.filterColumn;
+  $<HTMLSelectElement>("filter-op").value = settings.filterOp;
+  $<HTMLInputElement>("filter-bar").checked = settings.filterBar;
+  editor.setCompletion(settings.upperKeywords, settings.completeKey);
+  editor.setKeyBinding(settings.keyBinding).catch((e) => status(`Vim keys: ${e}`, "error"));
+  setFilterDefaults({ column: settings.filterColumn, op: settings.filterOp });
   setOverrides(settings.shortcuts);
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.
   invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout, maxRows: settings.sqlLimit }).catch(() => {});
@@ -3079,6 +3133,13 @@ $<HTMLInputElement>("keep-alive").onchange = (e) => setSetting("keepAlive", (e.t
 fillLevels($("safe-default"));
 fillLevels(field("safety"));
 $<HTMLSelectElement>("safe-default").onchange = (e) => setSetting("safeLevel", (e.target as HTMLSelectElement).value as Safety);
+$<HTMLSelectElement>("key-binding").onchange = (e) => setSetting("keyBinding", (e.target as HTMLSelectElement).value as Settings["keyBinding"]);
+$<HTMLInputElement>("upper-keywords").onchange = (e) => setSetting("upperKeywords", (e.target as HTMLInputElement).checked);
+$<HTMLSelectElement>("complete-key").onchange = (e) => setSetting("completeKey", (e.target as HTMLSelectElement).value as CompleteKey);
+$("filter-op").replaceChildren(...OPS.filter(([op]) => op !== "raw").map(([op, label]) => el("option", { value: op, textContent: label })));
+$<HTMLSelectElement>("filter-column").onchange = (e) => setSetting("filterColumn", (e.target as HTMLSelectElement).value as DefaultColumn);
+$<HTMLSelectElement>("filter-op").onchange = (e) => setSetting("filterOp", (e.target as HTMLSelectElement).value as Op);
+$<HTMLInputElement>("filter-bar").onchange = (e) => setSetting("filterBar", (e.target as HTMLInputElement).checked);
 $("settings-reset").onclick = () => {
   settings = { ...DEFAULT_SETTINGS };
   setSetting("theme", settings.theme); // persists and re-applies everything
@@ -3172,6 +3233,15 @@ addCommands([
   { id: "run-current", label: "Run Current Query", menu: "Edit", keys: ["Mod+Enter"], when: onSqlTab, sep: true, run: runCurrent },
   { id: "run-all", label: "Run All Queries", menu: "Edit", keys: ["Mod+Shift+Enter"], when: onSqlTab, run: runAll },
   { id: "format", label: "Format SQL", menu: "Edit", keys: ["Mod+KeyI"], when: onSqlTab, run: formatSql },
+  ...([
+    ["upper", "Transform to Upper Case", ["Mod+Alt+KeyU"]], ["lower", "Transform to Lower Case", ["Mod+Alt+KeyL"]],
+    ["capitalize", "Transform to Capitalized Case", ["Mod+Alt+KeyC"]], ["trim", "Trim Trailing Whitespace", []],
+    ["spaces", "Convert Indentation to Spaces", []], ["tabs", "Convert Indentation to Tabs", []],
+  ] as [Transform, string, string[]][]).map(([t, label, keys], i) => ({
+    id: `transform-${t}`, label, menu: "Edit" as const, keys, when: onSqlTab, sep: i === 0, run: () => editor.transform(t),
+  })),
+  { id: "shift-right", label: "Shift Right", menu: "Edit", keys: ["Mod+BracketRight"], when: onSqlTab, run: () => editor.shift(true) },
+  { id: "shift-left", label: "Shift Left", menu: "Edit", keys: ["Mod+BracketLeft"], when: onSqlTab, run: () => editor.shift(false) },
   { id: "save-favorite", label: "Save Query as Favorite…", menu: "Edit", when: onSqlTab,
     run: () => addFavorite(editor.current().trim() || (current() as SqlTab).sql) },
   { id: "saved-queries", label: "Saved Queries", menu: "Navigate", when: inWorkspace, run: () => showSide("queries") },

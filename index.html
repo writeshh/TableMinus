@@ -208,6 +208,17 @@
           <span class="k">Query history</span>
           <select id="history-years"><option value="1">Keep 1 year</option><option value="2">Keep 2 years</option><option value="3">Keep 3 years</option><option value="0">Keep forever</option></select>
         </div>
+        <div class="row">
+          <span class="k">New filters</span>
+          <span>
+            <select id="filter-column" aria-label="Default filter column"><option value="any">Any column</option><option value="first">First column</option><option value="primary">Primary key</option></select>
+            <select id="filter-op" aria-label="Default filter operator"></select>
+          </span>
+        </div>
+        <div class="row">
+          <span class="k">Filter bar</span>
+          <label class="check"><input type="checkbox" id="filter-bar" /> Show it when a table opens</label>
+        </div>
         <p class="hint note">A query that runs past the timeout is stopped on the server. Keep-alive pings every open connection every 30 seconds, so idle ones aren't closed and a lost one shows up straight away.</p>
       </section>
       <section data-pane="appearance" hidden>
@@ -287,6 +298,17 @@
         <div class="row">
           <span class="k">Run all</span>
           <label class="check"><input type="checkbox" id="stop-on-error" /> Stop at the first statement that fails</label>
+        </div>
+        <div class="row">
+          <span class="k">Key binding</span>
+          <select id="key-binding"><option value="sublime">Sublime (default)</option><option value="vim">Vim</option></select>
+        </div>
+        <div class="row">
+          <span class="k">Completion</span>
+          <span class="checks">
+            <label class="check"><input type="checkbox" id="upper-keywords" /> Complete keywords and functions in UPPER CASE</label>
+            <label>Accept with <select id="complete-key"><option value="enter">Enter</option><option value="tab">Tab</option><option value="both">Enter or Tab</option></select></label>
+          </span>
         </div>
         <div class="row">
           <span class="k">Indent with</span>
