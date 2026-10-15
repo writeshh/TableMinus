@@ -13,7 +13,7 @@ type Mode = "auto" | Scheme;
 type Store = { light: string; dark: string; custom: Theme[] };
 
 const store: Store = (() => {
-  const defaults: Store = { light: "System Light", dark: "System Dark", custom: [] };
+  const defaults: Store = { light: "TableMinus Light", dark: "TableMinus Dark", custom: [] };
   try {
     const s = { ...defaults, ...readPref<Partial<Store>>("themes") };
     // Each kept theme is checked again, so a hand-edited entry can't slip anything into the page.

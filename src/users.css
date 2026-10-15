@@ -5,7 +5,7 @@ dialog.users { width: min(1000px, calc(100vw - 32px)); }
 .user-list { overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; display: grid; align-content: start; gap: 1px; }
 .user-list button { text-align: left; border: 0; background: none; padding: 5px 8px; border-radius: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-list button:hover { background: var(--raised); }
-.user-list button.selected { background: var(--accent); color: white; }
+.user-list button.selected { background: var(--accent); color: var(--on-accent); }
 .user-editor { overflow: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 10px; }
 .user-editor > * { flex: none; }
 .user-editor h4 { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }

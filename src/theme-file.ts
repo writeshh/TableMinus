@@ -85,10 +85,10 @@ export function parseTheme(text: string): Theme {
   return { name: t.name.trim(), scheme: t.scheme, vars };
 }
 
-/** Our own palettes, plus the system look for each scheme. */
+/** The brand look for each scheme (styles.css's defaults), then our other palettes. */
 export const BUNDLED: Theme[] = [
-  { name: "System Light", scheme: "light", vars: {} },
-  { name: "System Dark", scheme: "dark", vars: {} },
+  { name: "TableMinus Light", scheme: "light", vars: {} },
+  { name: "TableMinus Dark", scheme: "dark", vars: {} },
   {
     name: "Paper", scheme: "light", vars: {
       "--bg": "#fbf8f1", "--fg": "#2b2620", "--muted": "#7d7366", "--accent": "#b4561f", "--line": "#e6dfd2",

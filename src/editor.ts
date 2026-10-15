@@ -41,7 +41,7 @@ const theme = EditorView.theme({
   ".cm-matchingBracket": { backgroundColor: "color-mix(in srgb, var(--accent) 22%, transparent)", outline: "none" },
   ".cm-tooltip": { backgroundColor: "var(--bg)", color: "var(--fg)", border: "1px solid var(--line)", borderRadius: "8px", overflow: "hidden" },
   ".cm-tooltip-autocomplete > ul > li": { padding: "2px 8px" },
-  ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent)", color: "white" },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent)", color: "var(--on-accent)" },
   ".cm-panels": { backgroundColor: "var(--side)", color: "var(--fg)" },
   ".cm-placeholder": { color: "var(--muted)" },
   ".cm-current-statement": { backgroundColor: "color-mix(in srgb, var(--accent) 7%, transparent)" },

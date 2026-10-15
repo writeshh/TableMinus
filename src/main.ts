@@ -79,13 +79,13 @@ const TLS_MODES: [string, string][] = [
 ];
 const TLS_DEFAULT: Tls = { mode: "prefer", ca: "", cert: "", key: "" };
 const ENGINES: Engine[] = [
-  { kind: "postgres", label: "PostgreSQL", mono: "Pg", color: "#2f6fd0",
+  { kind: "postgres", label: "PostgreSQL", mono: "Pg", color: "var(--blue)",
     defaults: { host: "127.0.0.1", port: "5432", user: "postgres", database: "" } },
-  { kind: "mysql", label: "MySQL", mono: "Ms", color: "#e8891c",
+  { kind: "mysql", label: "MySQL", mono: "Ms", color: "var(--orange)",
     defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
-  { kind: "mariadb", label: "MariaDB", mono: "Ma", color: "#1f9d8f",
+  { kind: "mariadb", label: "MariaDB", mono: "Ma", color: "var(--pink)",
     defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
-  { kind: "sqlite", label: "SQLite", mono: "Sl", color: "#7b4fd6" },
+  { kind: "sqlite", label: "SQLite", mono: "Sl", color: "var(--yellow)" },
 ];
 const engine = (kind: string) => ENGINES.find((e) => e.kind === kind) ?? ENGINES[0];
 

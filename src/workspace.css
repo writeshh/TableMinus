@@ -5,27 +5,27 @@
 /* Workspaces: the connection name in the header opens the switcher. */
 .where-conn { cursor: default; border-radius: 6px; padding: 2px 4px; }
 .where-conn:hover { background: var(--hover); }
-.ws-count { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--hover); color: var(--muted); }
-.ws-count.lost { background: var(--danger); color: white; }
+.ws-count { font-size: 11px; padding: 0 7px; border-radius: 999px; background: var(--hover); color: var(--muted); }
+.ws-count.lost { background: var(--orange); color: var(--ink); }
 
 /* Database tabs: one per open workspace above the header, marked with its connection's tag colour. */
-.db-tabs { display: flex; gap: 2px; padding: 5px 8px 0; background: var(--side); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; }
-.db-tab { --tag: color-mix(in srgb, var(--muted) 60%, transparent); display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 260px; padding: 4px 6px 5px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0; background: none; color: var(--muted); white-space: nowrap; }
+.db-tabs { display: flex; gap: 4px; padding: 6px 8px; background: var(--side); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; }
+.db-tab { --tag: color-mix(in srgb, var(--muted) 60%, transparent); display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 260px; padding: 4px 6px 4px 10px; border: 1px solid transparent; border-radius: 999px; background: none; color: var(--muted); white-space: nowrap; }
 .db-tab:hover { color: var(--fg); }
-.db-tab[aria-selected="true"] { background: var(--bg); color: var(--fg); border-color: var(--line); margin-bottom: -1px; box-shadow: inset 0 2px 0 var(--tag); }
-.db-tab.local { --tag: var(--ok); }
-.db-tab.development { --tag: var(--accent); }
-.db-tab.staging { --tag: var(--warn); }
-.db-tab.production { --tag: var(--danger); }
+.db-tab[aria-selected="true"] { background: var(--bg); color: var(--fg); border-color: var(--line); }
+.db-tab.local { --tag: var(--pink); }
+.db-tab.development { --tag: var(--blue); }
+.db-tab.staging { --tag: var(--yellow); }
+.db-tab.production { --tag: var(--orange); }
 .db-tab .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--tag); }
 .db-tab .label { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .db-tab .conn { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--muted); }
-.db-tab .lost-mark { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--danger); color: white; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
-.db-tab .close { flex: none; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 4px; opacity: 0; font-size: 13px; }
+.db-tab .lost-mark { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--orange); color: var(--ink); font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
+.db-tab .close { flex: none; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; opacity: 0; font-size: 13px; }
 .db-tab:hover .close, .db-tab[aria-selected="true"] .close { opacity: 0.7; }
 .db-tab .close:hover { opacity: 1; background: var(--press); }
 .db-tab.new-ws { --tag: var(--muted); font-style: italic; }
-.db-tabs .add { flex: none; align-self: center; width: 24px; height: 24px; margin-left: 2px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 16px; line-height: 1; }
+.db-tabs .add { flex: none; align-self: center; width: 24px; height: 24px; margin-left: 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 16px; line-height: 1; }
 .db-tabs .add:hover { color: var(--fg); background: var(--press); }
 
 /* Split panes: side by side, the focused one live, the others still copies. */
@@ -37,10 +37,10 @@
 .shot [data-id="out"] { flex: 1; min-height: 0; overflow: hidden; }
 
 /* Open Anything */
-dialog.anything { width: min(620px, calc(100vw - 32px)); padding: 10px; margin-top: 12vh; }
+dialog.anything { width: min(620px, calc(100vw - 32px)); padding: 12px; margin-top: 12vh; }
 dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
 .anything-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: min(56vh, 460px); overflow: auto; }
-.anything-list li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 7px; cursor: default; }
+.anything-list li { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: 999px; cursor: default; }
 .anything-list li[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .anything-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .anything-list .name b { color: var(--accent); }
@@ -65,7 +65,7 @@ dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
 #db-search-text { width: calc(100% - 16px); margin: 0 8px 6px; }
 #db-search-status { margin: 0 8px 6px; }
 #db-search-results { overflow: auto; flex: 1; }
-#db-search-results .found { display: flex; width: 100%; gap: 8px; border: 0; background: none; padding: 4px 8px; border-radius: 6px; text-align: left; }
+#db-search-results .found { display: flex; width: 100%; gap: 8px; border: 0; background: none; padding: 4px 10px; border-radius: 999px; text-align: left; }
 #db-search-results .found:hover { background: var(--hover); }
 #db-search-results .count { margin-left: auto; color: var(--muted); font-size: 12px; }
 .overview { width: 260px; }
