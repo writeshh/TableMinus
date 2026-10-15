@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatReply, formatTtl } from "./redis-text.ts";
+import { formatReply, formatTtl, namespaces } from "./redis-text.ts";
 
 test("formatReply prints scalars as redis-cli does", () => {
   assert.equal(formatReply({ kind: "status", text: "OK" }), "OK");
@@ -25,4 +25,16 @@ test("formatTtl shows the two largest units", () => {
   assert.equal(formatTtl(1500), "2s");
   assert.equal(formatTtl(3_723_000), "1h 2m");
   assert.equal(formatTtl(90_061_000), "1d 1h");
+});
+
+test("namespaces groups keys into folders by colon, counting every key under each", () => {
+  const e = (text: string) => ({ key: { text }, type: "string" });
+  const root = namespaces([e("user:1"), e("user:2"), e("user:1:posts"), e("plain")]);
+  assert.equal(root.count, 4);
+  assert.deepEqual(root.keys.map((k) => k.key.text), ["plain"]);
+  const user = root.folders.get("user")!;
+  assert.equal(user.path, "user");
+  assert.equal(user.count, 3);
+  assert.deepEqual(user.keys.map((k) => k.key.text), ["user:1", "user:2"]);
+  assert.deepEqual(user.folders.get("1")!.keys.map((k) => k.key.text), ["user:1:posts"]);
 });

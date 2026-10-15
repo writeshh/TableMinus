@@ -5,10 +5,8 @@
 import { $, el } from "./dom";
 import { modal } from "./backup";
 import { CANCELLED, guarded } from "./safety";
-import { formatReply, formatTtl, type Shown } from "./redis-text";
+import { formatReply, formatTtl, namespaces, type Entry, type Folder, type Key, type Shown } from "./redis-text";
 
-type Key = { text: string; hex?: string | null };
-type Entry = { key: Key; type: string };
 type Scanned = { cursor: string; keys: Entry[] };
 type Value = { type: string; ttl_ms: number; size: number; items: string[][] };
 type MenuItem = [string, () => void] | "-";
@@ -56,6 +54,8 @@ body.redis-ws #dbpicker :is(#db-new, #db-rename, #db-drop) { display: none; }
 #redis-keys li:hover { background: var(--hover); }
 #redis-keys li.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 #redis-keys .name { overflow: hidden; text-overflow: ellipsis; font: 12px/1.4 var(--mono); }
+#redis-keys .folder .chevron { width: 18px; text-align: center; color: var(--muted); flex: none; }
+#redis-keys .folder .count { margin-left: auto; color: var(--muted); font-size: 11px; }
 .redis-type { flex: none; width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 5px; font: 700 10px/1 var(--mono); color: var(--ink); background: var(--yellow); }
 .redis-type.hash { background: var(--blue); } .redis-type.list { background: var(--orange); } .redis-type.set { background: var(--pink); }
 .redis-type.zset { background: color-mix(in srgb, var(--blue) 50%, var(--pink)); } .redis-type.stream { background: var(--muted); }
@@ -148,20 +148,46 @@ function typeBadge(type: string) {
   return el("span", { className: `redis-type ${type}`, textContent: letter, title: label });
 }
 
+/** Open folders, by session and path; folders start closed. */
+const openFolders = new Map<string, Set<string>>();
+
+function keyRow(k: Entry, s: State, depth: number) {
+  const label = depth ? k.key.text.split(":").pop()! : k.key.text;
+  const li = el("li", { title: k.key.text }, typeBadge(k.type), el("span", { className: "name", textContent: label || "(empty)" }));
+  li.style.paddingLeft = `${8 + depth * 14}px`;
+  li.classList.toggle("active", sameKey(k.key, s.key));
+  li.onclick = () => void openKey(k.key);
+  li.oncontextmenu = (e) => ctx.menu(e, [
+    ["Copy name", () => void navigator.clipboard.writeText(k.key.text).catch(() => {})],
+    ["Rename…", () => void renameKey(k.key)],
+    "-",
+    ["Delete…", () => void deleteKey(k.key)],
+  ]);
+  return li;
+}
+
+function folderRows(f: Folder, s: State, open: Set<string>, depth: number): HTMLElement[] {
+  const rows: HTMLElement[] = [];
+  for (const [name, sub] of [...f.folders].sort(([a], [b]) => a.localeCompare(b))) {
+    const isOpen = open.has(sub.path);
+    const li = el("li", { className: "folder", title: `${sub.path}:*` },
+      el("span", { className: "chevron", textContent: isOpen ? "▾" : "▸" }), el("span", { className: "name", textContent: name || "(empty)" }),
+      el("span", { className: "count", textContent: String(sub.count) }));
+    li.style.paddingLeft = `${8 + depth * 14}px`;
+    li.onclick = () => (isOpen ? open.delete(sub.path) : open.add(sub.path), renderKeys());
+    li.oncontextmenu = (e) => ctx.menu(e, [["Show only these keys", () => ((pattern.value = `${sub.path}:*`), pattern.dispatchEvent(new Event("input")))]]);
+    rows.push(li);
+    if (isOpen) rows.push(...folderRows(sub, s, open, depth + 1));
+  }
+  rows.push(...f.keys.map((k) => keyRow(k, s, depth)));
+  return rows;
+}
+
 function renderKeys() {
-  const s = stateOf(session());
-  keyList.replaceChildren(...s.keys.map((k) => {
-    const li = el("li", { title: k.key.text }, typeBadge(k.type), el("span", { className: "name", textContent: k.key.text }));
-    li.classList.toggle("active", sameKey(k.key, s.key));
-    li.onclick = () => void openKey(k.key);
-    li.oncontextmenu = (e) => ctx.menu(e, [
-      ["Copy name", () => void navigator.clipboard.writeText(k.key.text).catch(() => {})],
-      ["Rename…", () => void renameKey(k.key)],
-      "-",
-      ["Delete…", () => void deleteKey(k.key)],
-    ]);
-    return li;
-  }));
+  const name = session();
+  const s = stateOf(name);
+  const open = openFolders.get(name) ?? openFolders.set(name, new Set()).get(name)!;
+  keyList.replaceChildren(...folderRows(namespaces(s.keys), s, open, 0));
   const more = el("button", { className: "ghost", textContent: "Load more" });
   more.onclick = () => void loadMore();
   foot.replaceChildren(

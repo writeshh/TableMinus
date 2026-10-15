@@ -1,6 +1,10 @@
 // Redis text the view shows (redis.ts), kept apart from the DOM so it can be tested: replies as redis-cli prints
 // them, and expiry times.
 
+/** A key as redis.rs sends it: its text, and its bytes in hex when they aren't UTF-8. */
+export type Key = { text: string; hex?: string | null };
+export type Entry = { key: Key; type: string };
+
 /** A reply as redis.rs sends it. */
 export type Shown =
   | { kind: "status"; text: string }
@@ -44,4 +48,24 @@ export function formatTtl(ms: number): string {
   if (m) parts.push(`${m}m`);
   if (sec || !parts.length) parts.push(`${sec}s`);
   return parts.slice(0, 2).join(" ");
+}
+
+/** Keys grouped by their `:` namespaces, as folders. */
+export type Folder = { path: string; folders: Map<string, Folder>; keys: Entry[]; count: number };
+export function namespaces(keys: Entry[]): Folder {
+  const root: Folder = { path: "", folders: new Map(), keys: [], count: 0 };
+  for (const k of keys) {
+    const parts = k.key.text.split(":");
+    let at = root;
+    at.count++;
+    for (const part of parts.slice(0, -1)) {
+      const path = at.path ? `${at.path}:${part}` : part;
+      let next = at.folders.get(part);
+      if (!next) at.folders.set(part, (next = { path, folders: new Map(), keys: [], count: 0 }));
+      next.count++;
+      at = next;
+    }
+    at.keys.push(k);
+  }
+  return root;
 }
