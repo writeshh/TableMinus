@@ -10,7 +10,7 @@ import { OPS, activeFilters, blankFilter, renderFilters, setFilterDefaults, type
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
 import { MIN_WIDTH, arrange, layoutCss, loadLayout, moveColumn, saveLayout, type Layout } from "./columns";
 import {
-  dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showSql, showStructure, sidebarMenu,
+  ask as askFields, dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showSql, showStructure, sidebarMenu,
   structurePending, tableMenu,
 } from "./structure";
 import { openBackup, openRestore } from "./backup";
@@ -34,7 +34,7 @@ import { initMenu, setRecent } from "./menu";
 import {
   columnOrderMenu, forgetItems, initSearch, initSidebar, loadedItems, newItemsMenu, renderTree, shownSchema, sortColumns, treeMenu,
 } from "./sidebar";
-import type { Transform } from "./transforms";
+import { replaceCells, type Transform } from "./transforms";
 import { initDiagram, openDiagram } from "./diagram";
 import { label } from "./keys";
 import * as launcher from "./connections";
@@ -2158,6 +2158,7 @@ function showResults(tab: SqlTab) {
   search.hidden = append || !shown.length;
   search.value = res.search ?? "";
   const target = shown.length === 1 && !append ? editable(shown[0]) : null;
+  $("result-replace").hidden = search.hidden || !(shown.length === 1 && editable(shown[0], true));
   const chart = $("result-chart");
   chart.hidden = append || shown.length !== 1 || !shown[0].result.columns.length;
   chart.setAttribute("aria-pressed", String(!chart.hidden && !!shown[0].charted));
@@ -2200,11 +2201,12 @@ function showResults(tab: SqlTab) {
 
 /** The result's staged edits, when its rows can be edited in place: it reads one table, every column is one of the
  *  table's, the table's key is among them, and no search hides rows. */
-function editable(r: ResultTab) {
+/** The result as an editable table, when it is one; while a search filters it, only with `searching` (Replace). */
+function editable(r: ResultTab, searching = false) {
   const e = r.edit;
   if (r.charted) return null;
   const columns = e && columnsCache.get(e.table);
-  if (!e || !columns || (current() as SqlTab).out?.search?.trim()) return null;
+  if (!e || !columns || (!searching && (current() as SqlTab).out?.search?.trim())) return null;
   const names = new Set(columns.map((c) => c.name));
   const plain = r.result.columns.every((c) => names.has(c)) && new Set(r.result.columns).size === r.result.columns.length;
   return plain && grid.findBy(e) ? e : null;
@@ -2880,6 +2882,27 @@ function boardCtx(): BoardCtx {
     confirm: confirmDialog, transfer: transferCtx,
   };
 }
+
+/** Find and replace in the shown result's cells, staged as edits to review and save (only an editable result). */
+async function replaceInResult() {
+  const tab = current();
+  const res = tab?.kind === "sql" ? tab.out : undefined;
+  const r = res?.tabs.find((t) => t.id === res.shown);
+  const target = r && editable(r, true);
+  if (!res || !target?.result) return;
+  const got = await askFields("Replace in this result", [
+    { key: "find", label: "Find", value: res.search ?? "" },
+    { key: "replace", label: "Replace with", value: "" },
+    { key: "matchCase", label: "Match case", value: false },
+    { key: "wholeCell", label: "Whole cell only", value: false },
+  ], "Replace All");
+  if (!got) return;
+  const cells = replaceCells(target.result.rows, String(got.find), String(got.replace), { matchCase: !!got.matchCase, wholeCell: !!got.wholeCell });
+  res.search = ""; // show every row again, with the replaced values staged in them
+  if (!cells.length || !grid.stageCells(target, cells)) return void (showResults(tab as SqlTab), status("Nothing to replace", ""));
+  showResults(tab as SqlTab);
+}
+$("result-replace").onclick = () => void replaceInResult();
 
 $("result-search").addEventListener("input", (e) => {
   const tab = current();
