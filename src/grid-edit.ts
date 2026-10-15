@@ -38,6 +38,8 @@ export type GridHost = {
   confirm(text: string, okLabel: string): Promise<boolean>;
   /** Writes a value into a grid cell the way the grid shows it. */
   fill(td: HTMLTableCellElement, v: string | null): void;
+  /** Whether saving logs the original values of updated and deleted rows (a setting). */
+  logOriginals(): boolean;
 };
 
 let host: GridHost;
@@ -55,6 +57,31 @@ export function keyOf(tab: EditTab) {
   const names = (host.columns(tab.table) ?? []).filter((c) => c.primary).map((c) => c.name);
   const idx = names.map((n) => tab.result?.columns.indexOf(n) ?? -1);
   return names.length && idx.every((i) => i >= 0) ? { names, idx } : null;
+}
+
+/** MySQL column types a row can't be matched on (rows.rs `inexact`). */
+const INEXACT = /^(float|json|bit|(var)?binary|(tiny|medium|long)?blob|geometry|geometrycollection|point|linestring|polygon|multipoint|multilinestring|multipolygon)\b/i;
+
+/** How saving finds the existing rows: by primary key; for a table without one, by row identity ("id": ctid on
+ *  Postgres, rowid on SQLite) or, on MySQL, by every value with LIMIT 1 ("values", only when every column is
+ *  shown and can be compared exactly); null when the rows can't be found, and stay read-only. */
+export function findBy(tab: EditTab): "key" | "id" | "values" | null {
+  if (keyOf(tab)) return "key";
+  const r = tab.result;
+  const columns = host.columns(tab.table);
+  if (!r || !columns?.length) return null;
+  if (tab.ids && tab.ids.length === r.rows.length) return "id";
+  const mysql = engine() === "mysql" || engine() === "mariadb";
+  const all = columns.every((c) => r.columns.includes(c.name) && !INEXACT.test(c.data_type));
+  return mysql && all ? "values" : null;
+}
+
+/** The footer's warning for a table edited without a primary key. */
+export function keylessNote(tab: EditTab) {
+  const by = findBy(tab);
+  if (by === "id") return `No primary key: changes find rows by ${engine() === "postgres" ? "ctid" : "rowid"}`;
+  if (by === "values") return "No primary key: changes find each row by all its values (one row at most)";
+  return by ? null : "Read-only: no primary key";
 }
 
 const columnOf = (tab: EditTab, ci: number) => host.columns(tab.table)?.find((c) => c.name === tab.result?.columns[ci]);
@@ -100,7 +127,7 @@ export function valueAt(tab: EditTab, ri: number, ci: number): Value | undefined
 
 /** Why a cell can't be typed into, or null when it can. Binary cells change only by loading a file or NULL. */
 export function readOnly(tab: EditTab, ri: number, ci: number): string | null {
-  if (!keyOf(tab)) return "no primary key";
+  if (!findBy(tab)) return "no primary key";
   if (tab.staged.deleted.has(ri)) return "the row is deleted";
   if (kindOf(tab, ci) === "binary" || (ri < pageRows(tab) && isBlobPlaceholder(engine(), tab.result!.rows[ri][ci]))) return "binary";
   return null;
@@ -159,7 +186,7 @@ export function decorate(tab: EditTab) {
   const body = document.querySelector<HTMLTableSectionElement>("#out tbody");
   if (!body || !tab.result) return;
   loadEnums(tab);
-  if (!keyOf(tab)) return;
+  if (!findBy(tab)) return;
   body.ondblclick = (e) => {
     const td = (e.target as HTMLElement).closest("td");
     const ri = indexOf(td?.parentElement as HTMLTableRowElement | null);
@@ -225,7 +252,7 @@ export async function editCell(tab: EditTab, ri: number, ci: number) {
   if (control instanceof HTMLSelectElement) control.onchange = () => ((touched = true), finish(read()));
   control.onblur = () => finish(read());
   control.onkeydown = (e) => {
-    if (e.key === "Enter") (e.preventDefault(), finish(read()));
+    if (e.key === "Enter") (e.preventDefault(), e.stopPropagation(), finish(read()));
     else if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), finish(undefined));
     else if (e.key === "Backspace" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), finish(null));
     else if (e.key === "Tab") {
@@ -292,7 +319,7 @@ export async function loadFromFile(tab: EditTab, ri: number, ci: number) {
 }
 
 export function addRow(tab: EditTab) {
-  if (!keyOf(tab)) return;
+  if (!findBy(tab)) return;
   tab.staged.change(() => tab.staged.added.push(new Map()));
   host.render();
   const out = document.getElementById("out");
@@ -323,7 +350,7 @@ export function duplicateRows(tab: EditTab, rows: number[]) {
 
 /** Deletes rows (or restores them when they are all deleted already); added rows just go away. */
 export function deleteRows(tab: EditTab, rows: number[]) {
-  if (!keyOf(tab) || !rows.length) return;
+  if (!findBy(tab) || !rows.length) return;
   tab.staged.change(() => tab.staged.remove(rows, pageRows(tab)));
   host.render();
 }
@@ -331,7 +358,7 @@ export function deleteRows(tab: EditTab, rows: number[]) {
 /** Pastes tab-separated text into the selection: one value fills it, a block starts at its top-left cell. Cells
  *  that can't be typed into are skipped. */
 export function paste(tab: EditTab, block: { r0: number; c0: number; r1: number; c1: number }, text: string) {
-  if (!keyOf(tab) || !tab.result) return;
+  if (!findBy(tab) || !tab.result) return;
   const n = pageRows(tab);
   const cells = pasteCells(parseTsv(text), block, n + tab.staged.added.length, tab.result.columns.length)
     .filter(([ri, ci]) => !readOnly(tab, ri, ci));
@@ -352,8 +379,12 @@ export function redo(tab: EditTab) {
 }
 
 function changes(tab: EditTab, byIdentity: boolean) {
-  return changesFor(tab.staged, tab.result!.columns, tab.result!.rows, keyOf(tab)!, byIdentity ? tab.ids : undefined);
+  const by = findBy(tab);
+  const ids = by === "id" || byIdentity ? tab.ids : undefined;
+  return changesFor(tab.staged, tab.result!.columns, tab.result!.rows, by === "key" ? keyOf(tab) : null, ids, host.logOriginals());
 }
+
+const warned = new WeakSet<EditTab>(); // asked once per tab about saving without a primary key
 
 /** Saves every staged change in one transaction. Safe mode asks first; a key that matches several rows can be
  *  saved again with row identities instead. */
@@ -361,6 +392,12 @@ export async function save(tab: EditTab, confirmed = false, byIdentity = false):
   const conn = host.conn();
   const n = tab.staged.count;
   if (!conn || !n || !tab.result) return;
+  const by = findBy(tab);
+  if (by !== "key" && !confirmed && !warned.has(tab) && (tab.staged.edits.size || tab.staged.deleted.size)) {
+    const how = by === "id" ? "by its row identity, which is only valid until the row changes" : "by all its values; of identical rows, one is changed";
+    if (!(await host.confirm(`${tab.table} has no primary key. Each changed or deleted row is found ${how}. Save?`, "Save"))) return;
+    warned.add(tab);
+  }
   try {
     // Safe mode's question, password or Touch ID, as the connection's level asks; `confirmed` skips the question
     // when the statements were just shown in the preview.
@@ -409,7 +446,7 @@ export function cellMenu(tab: EditTab, ri: number, ci: number, rows: number[]): 
   const items: MenuItem[] = ["-"];
   if (why === "binary") items.push(["View as hex…", () => showBytes(tab, ri, ci)]);
   else items.push([kind === "json" ? "Edit JSON…" : "Open in Quick Look…", () => quickLook(tab, ri, ci)]);
-  if (!keyOf(tab)) return items;
+  if (!findBy(tab)) return items;
   if (!tab.staged.deleted.has(ri)) {
     if (valueAt(tab, ri, ci) !== null && (columnOf(tab, ci)?.nullable ?? true)) items.push(["Set NULL", () => stage(tab, ri, ci, null)]);
     items.push(["Load value from file…", () => loadFromFile(tab, ri, ci)]);

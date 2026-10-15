@@ -1228,6 +1228,7 @@ mod tests {
             let edit = crate::rows::Update {
                 key: vec![("id".into(), "1".into())],
                 id: None,
+                original: vec![],
                 set: vec![("note".into(), crate::rows::Value::Text(Some("a\\b'c".into())))],
             };
             let changes = crate::rows::Changes { updates: vec![edit], ..Default::default() };
@@ -1250,6 +1251,7 @@ mod tests {
             let edit = crate::rows::Update {
                 key: vec![("id".into(), "1".into())],
                 id: None,
+                original: vec![],
                 set: vec![
                     set("ok", Some("t")),
                     set("at", Some("2026-10-13 09:30:00")),

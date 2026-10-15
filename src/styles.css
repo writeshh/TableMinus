@@ -191,6 +191,7 @@ td.editing { padding: 0; outline: 2px solid var(--accent); outline-offset: -2px;
 .cell-input { width: 100%; min-width: 120px; border: 0; border-radius: 0; padding: 4px 10px; font: inherit; background: var(--bg); outline: none; }
 .foot-msg { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .foot-msg.error { color: var(--danger); }
+.foot-msg.warn { color: color-mix(in srgb, var(--warn) 85%, var(--fg)); }
 .foot-msg.done { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
 .edit-info { color: var(--warn); font-weight: 500; font-variant-numeric: tabular-nums; }
 

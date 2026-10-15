@@ -1629,9 +1629,11 @@ function renderMain() {
   showPending(tab);
   const [msg, kind] = tab.message ?? ["", ""];
   const m = $("foot-msg");
-  m.textContent = tab.view === "data" && tab.result && !grid.keyOf(tab) ? "Read-only: no primary key" : msg;
-  $("add-row").hidden = tab.view !== "data" || !tab.result || !grid.keyOf(tab);
-  m.className = `foot-msg ${kind}`;
+  const keyless = tab.view === "data" && tab.result ? grid.keylessNote(tab) : null; // read-only, or a warning
+  const readOnly = !!keyless && !grid.findBy(tab);
+  m.textContent = readOnly ? keyless : msg || keyless || "";
+  $("add-row").hidden = tab.view !== "data" || !tab.result || !grid.findBy(tab);
+  m.className = `foot-msg ${readOnly ? "" : msg ? kind : keyless ? "warn" : ""}`;
   if (tab.view === "structure") showStructure($("out"), tab.id, tab.table, !!tab.create);
   else if (tab.error) $("out").replaceChildren(el("p", { className: "hint empty error-text", textContent: tab.error }));
   else if (tab.result) {
@@ -2107,7 +2109,7 @@ function editable(r: ResultTab) {
   if (!e || !columns || (current() as SqlTab).out?.search?.trim()) return null;
   const names = new Set(columns.map((c) => c.name));
   const plain = r.result.columns.every((c) => names.has(c)) && new Set(r.result.columns).size === r.result.columns.length;
-  return plain && grid.keyOf(e) ? e : null;
+  return plain && grid.findBy(e) ? e : null;
 }
 
 /** The strip's edit controls for a result edited in place. */
@@ -2795,6 +2797,7 @@ grid.initGridEdit({
   reload: (tab) => ("kind" in tab ? loadTable(tab as TableTab) : reloadResult(tab)),
   confirm: confirmDialog,
   fill: fillCell,
+  logOriginals: () => settings.logOriginals,
 });
 $("side-items").oncontextmenu = (e) => active && contextMenu(e, [...sidebarMenu(), ["Show diagram", () => showDiagram()], "-", ...treeMenu()]);
 /** The ER diagram of the sidebar's schema, or of `table`'s schema centred on it. */
