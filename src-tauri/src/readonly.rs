@@ -58,6 +58,8 @@ pub fn is_read_only(engine: Engine, sql: &str) -> bool {
         Engine::Postgres => &PostgreSqlDialect {},
         Engine::Mysql | Engine::Mariadb => &MySqlDialect {},
         Engine::Sqlite => &SQLiteDialect {},
+        // Redis commands aren't SQL; redis.rs has its own list.
+        Engine::Redis => return false,
     };
     let Ok(stmts) = Parser::parse_sql(dialect, sql) else { return false };
     !stmts.is_empty() && stmts.visit(&mut Writes).is_continue()

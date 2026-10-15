@@ -381,6 +381,7 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
             Ok(Accounts { users, objects, plugins, mariadb, ..Accounts::default() })
         }
         Engine::Sqlite => Err(Error::Invalid("SQLite has no users")),
+        Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
     }
 }
 
@@ -671,6 +672,7 @@ pub async fn user_privileges(
             live.conn.fetch_with(&my_privileges_sql(), &[params, params, params].concat()).await
         }
         Engine::Sqlite => Err(Error::Invalid("SQLite has no users")),
+        Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
     };
     Ok(grants(live.check(r)?))
 }

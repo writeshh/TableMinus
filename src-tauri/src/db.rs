@@ -16,6 +16,7 @@ pub enum Engine {
     Mysql,
     Mariadb,
     Sqlite,
+    Redis,
 }
 
 /// Per-connection options beyond host, user and TLS. Engine-specific ones are ignored by other engines.
@@ -465,6 +466,7 @@ impl Conn {
                 }
                 // Opening can take a while: SQLCipher derives the key from the passphrase.
                 Engine::Sqlite => Conn::Lite(blocking(|| open_sqlite(url, password))?),
+                Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
             })
         };
         let mut conn: Conn = tokio::time::timeout(CONNECT_TIMEOUT, open)

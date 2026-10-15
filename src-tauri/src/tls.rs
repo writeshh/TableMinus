@@ -66,8 +66,8 @@ impl Tls {
         }
     }
 
-    pub fn postgres(&self) -> Result<(tokio_postgres::config::SslMode, postgres_native_tls::MakeTlsConnector)> {
-        use tokio_postgres::config::SslMode;
+    /// A native-tls connector that checks what the mode asks, with the CA and client certificate given.
+    fn connector(&self) -> Result<native_tls::TlsConnector> {
         let (chain, hostname) = self.checks();
         let mut b = native_tls::TlsConnector::builder();
         b.danger_accept_invalid_certs(!chain).danger_accept_invalid_hostnames(!hostname);
@@ -78,12 +78,27 @@ impl Tls {
             // native-tls takes PKCS#8 keys ("BEGIN PRIVATE KEY"); convert others with `openssl pkcs8 -topk8`.
             b.identity(native_tls::Identity::from_pkcs8(&read(&cert)?, &read(&key)?)?);
         }
+        Ok(b.build()?)
+    }
+
+    /// Redis has no way to ask for TLS on a plain connection, so Prefer means plain, and Require and up mean TLS from
+    /// the first byte.
+    pub fn redis(&self) -> Result<Option<native_tls::TlsConnector>> {
+        match self.mode {
+            TlsMode::Disable | TlsMode::Prefer => Ok(None),
+            TlsMode::Require | TlsMode::VerifyCa | TlsMode::VerifyFull => Ok(Some(self.connector()?)),
+        }
+    }
+
+    pub fn postgres(&self) -> Result<(tokio_postgres::config::SslMode, postgres_native_tls::MakeTlsConnector)> {
+        use tokio_postgres::config::SslMode;
+        let connector = self.connector()?;
         let mode = match self.mode {
             TlsMode::Disable => SslMode::Disable,
             TlsMode::Prefer => SslMode::Prefer,
             TlsMode::Require | TlsMode::VerifyCa | TlsMode::VerifyFull => SslMode::Require,
         };
-        Ok((mode, postgres_native_tls::MakeTlsConnector::new(b.build()?)))
+        Ok((mode, postgres_native_tls::MakeTlsConnector::new(connector)))
     }
 
     /// The MySQL TLS options; None means plain. `verify_as` is the host name to check the certificate against

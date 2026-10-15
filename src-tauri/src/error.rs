@@ -58,6 +58,9 @@ pub enum Error {
     Rebuild(String),
     #[error("git: {0}")]
     Git(String),
+    /// The Redis server's error, or a reply TableMinus won't read.
+    #[error("{0}")]
+    Redis(String),
     /// A plugin that can't be installed or read, or whose action failed.
     #[error("plugin: {0}")]
     Plugin(String),

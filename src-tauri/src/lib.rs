@@ -21,6 +21,7 @@ mod passcode;
 mod plugins;
 mod processes;
 mod readonly;
+mod redis;
 mod rows;
 mod safety;
 mod secrets;
@@ -364,7 +365,8 @@ async fn guard(
 
 /// Drops the live connection; the next connect opens a fresh one.
 #[tauri::command]
-async fn disconnect(open: State<'_, Open>, name: String) -> Result<()> {
+async fn disconnect(open: State<'_, Open>, redis: State<'_, redis::Sessions>, name: String) -> Result<()> {
+    redis.remove(&name).await;
     open.remove(&name).await;
     Ok(())
 }
@@ -493,6 +495,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::Postgres => "tokio-postgres",
                 Engine::Mysql | Engine::Mariadb => "mysql_async",
                 Engine::Sqlite => "rusqlite (bundled SQLite)",
+                Engine::Redis => "TableMinus RESP2 client",
             },
             cipher: live.conn.tls_cipher().await?,
             ssh: live.saved.ssh.as_ref().map(|s| s.host.clone()),
@@ -837,6 +840,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(processes::Sessions::default())
         .manage(jobs::Jobs::default())
         .manage(acp::Agents::default())
+        .manage(redis::Sessions::default())
         .manage(launcher::Opened::default())
         .setup(|app| {
             secrets::init(&app.path().app_config_dir()?);
@@ -906,6 +910,13 @@ pub fn run() -> tauri::Result<()> {
             plugins::plugin_remove,
             plugins::plugin_enable,
             plugins::plugin_run,
+            redis::redis_connect,
+            redis::redis_databases,
+            redis::redis_scan,
+            redis::redis_value,
+            redis::redis_edit,
+            redis::redis_command,
+            redis::redis_connection_info,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,
