@@ -12,7 +12,6 @@ dialog.processes { width: min(1100px, calc(100vw - 32px)); }
 .process-actions span { display: flex; gap: 4px; }
 .process-list th.process-actions { z-index: 2; }
 
-#jobs { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); }
 .job { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); display: grid; gap: 4px; font-size: 12px; }
 .job-head { display: flex; align-items: center; gap: 8px; }
 .job-file, .job-meta { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -20,3 +19,24 @@ dialog.processes { width: min(1100px, calc(100vw - 32px)); }
 .job progress { width: 100%; }
 .job.finished .job-line { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
 .job.failed .job-line { color: var(--danger); white-space: pre-wrap; max-height: 8em; overflow: auto; }
+
+/* Custom scripts (scripts.ts): the editor over the output */
+.script-dialog { width: min(980px, calc(100vw - 32px)); height: min(760px, calc(100vh - 48px)); flex-direction: column; gap: 8px; }
+.script-dialog[open] { display: flex; } /* only when open: a closed dialog stays display: none */
+.script-editor { flex: 3; min-height: 120px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; --editor-pad: 6px; }
+.script-output { flex: 2; min-height: 80px; overflow: auto; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--side); user-select: text; -webkit-user-select: text; }
+.script-output pre { margin: 0 0 4px; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.script-output pre.error { color: var(--danger); }
+.script-table { margin: 4px 0 8px; overflow-x: auto; }
+.script-table table { border-collapse: collapse; font: 11.5px/1.4 var(--mono); }
+.script-table :is(th, td) { padding: 2px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.script-table .hint { margin: 4px 0 0; }
+
+/* Themes from Git (themes.ts) */
+.git-dialog input[type="url"] { width: 100%; box-sizing: border-box; }
+.git-themes { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; }
+.git-themes li { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 7px; }
+.git-themes li:nth-child(odd) { background: var(--hover); }
+.git-themes .grow { flex: 1; min-width: 0; }
+.git-themes code { display: block; font: 11.5px/1.45 var(--mono); overflow-wrap: anywhere; }
+.git-themes .sub { display: block; color: var(--muted); font-size: 12px; }

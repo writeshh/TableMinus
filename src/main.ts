@@ -10,42 +10,48 @@ import { OPS, activeFilters, blankFilter, renderFilters, setFilterDefaults, type
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
 import { MIN_WIDTH, arrange, layoutCss, loadLayout, moveColumn, saveLayout, type Layout } from "./columns";
 import {
-  dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showSql, showStructure, sidebarMenu,
+  ask as askFields, dropDatabase, dropDraft, initStructure, newDatabase, renameDatabase, saveStructure, showSql, showStructure, sidebarMenu,
   structurePending, tableMenu,
 } from "./structure";
 import { openBackup, openRestore } from "./backup";
 import { openProcesses } from "./processes";
 import { openUsers } from "./users";
 import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
+import { forgetSchema, initAssistant, renderPane as renderAssistant, toggleAssistant } from "./ai"; // and Settings › AI
 import { Staged } from "./staging";
 import * as grid from "./grid-edit";
 import * as vgrid from "./vgrid";
 import { syncRowDetail, toggleRowDetail } from "./rowdetail";
+import { divider, initHiding, togglePane } from "./splitters";
 import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
 import "./passcode"; // the lock screen, and its rows in Settings › Security
-import { docEntry, docsReady, setDocEntry } from "./locations"; // also adds Settings › Locations
+import { withVault } from "./vault";
+import { openScript } from "./scripts";
+import { initPlugins, pluginMenu } from "./plugins"; // also adds Settings › Plugins
+import { forgetRedis, initRedis, syncRedis } from "./redis";
+import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
-import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
-import { addCommands, bindings, commands, isMac, onBindingsChanged, setOverrides } from "./commands";
+import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
+import { addCommands, bindings, commands, isMac, onBindingsChanged, runCommand, setOverrides } from "./commands";
 import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
 import { initMenu, setRecent } from "./menu";
 import {
-  columnOrderMenu, forgetItems, initSearch, initSidebar, loadedItems, newItemsMenu, renderTree, shownSchema, sortColumns, treeMenu,
+  columnOrderMenu, forgetItems, initSearch, initSidebar, loadedItems, newItemsMenu, noteOpened, renderTree, shownSchema, sortColumns, treeMenu,
 } from "./sidebar";
-import type { Transform } from "./transforms";
+import { replaceCells, type Transform } from "./transforms";
 import { initDiagram, openDiagram } from "./diagram";
 import { label } from "./keys";
 import * as launcher from "./connections";
 import { COLORS, GROUP_ICONS, tagColor, tagLabel } from "./connections";
 import "./console"; // the console log panel and its command
-import { addFavorite, initFavorites, render as renderFavorites } from "./favorites"; // also adds the sidebar's Queries tab
+import { addFavorite, initFavorites, render as renderFavorites, showSaved } from "./favorites"; // also adds the History pane's Saved queries
 import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, searchRows, type QueryResult, type ResultTab, type Results } from "./results";
 import "./workspace.css";
 import { chartPanel } from "./charts";
 import { guessSpec } from "./chartdata";
 import { openBoard, type BoardCtx } from "./metrics";
-import { readPref, writePref } from "./prefs";
+import { flushPrefs, readPref, writePref } from "./prefs";
 
 type Ssh = { host: string; port: number | null; user: string; key: string };
 type Tls = { mode: string; ca: string; cert: string; key: string };
@@ -86,6 +92,8 @@ const ENGINES: Engine[] = [
   { kind: "mariadb", label: "MariaDB", mono: "Ma", color: "var(--pink)",
     defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
   { kind: "sqlite", label: "SQLite", mono: "Sl", color: "var(--yellow)" },
+  { kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
+    defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
 const engine = (kind: string) => ENGINES.find((e) => e.kind === kind) ?? ENGINES[0];
 
@@ -201,7 +209,7 @@ function section(g: launcher.Group, title: string, conns: Saved[], dropTarget: b
       el("span", { className: "count", textContent: String(conns.length) }));
     const fold = () => (collapsed.has(title) ? collapsed.delete(title) : collapsed.add(title), renderConns());
     head.onclick = fold;
-    head.onkeydown = (e) => e.key === "Enter" && fold();
+    head.onkeydown = (e) => void (e.key === "Enter" && fold()); // returning false would cancel Tab
     if (g.name) head.oncontextmenu = (e) => contextMenu(e, groupMenu(g));
     if (dropTarget) head.dataset.group = g.name;
     out.append(head);
@@ -238,7 +246,7 @@ function connRow(c: Saved) {
   if (c.color) li.style.setProperty("--conn-color", COLORS[c.color] ?? "transparent"), li.classList.add("colored");
   li.onclick = () => !dragged && connect(c);
   li.oncontextmenu = (e) => contextMenu(e, connMenu(c));
-  li.onkeydown = (e) => e.key === "Enter" && connect(c);
+  li.onkeydown = (e) => void (e.key === "Enter" && connect(c));
   li.onpointerdown = (e) => e.button === 0 && dragToGroup(e, c);
   return li;
 }
@@ -258,7 +266,7 @@ function connMenu(c: Saved): MenuItem[] {
   return [
     ["Connect", () => connect(c)],
     ["Edit…", () => openEditor(c.kind, c)],
-    ["Duplicate", () => invoke<string>("duplicate_connection", { name: c.name }).then((n) => homeNote(`Duplicated as “${n}”.`), (e) => homeNote(String(e), true))],
+    ["Duplicate", () => withVault(() => invoke<string>("duplicate_connection", { name: c.name })).then((n) => homeNote(`Duplicated as “${n}”.`), (e) => homeNote(String(e), true))],
     ["Copy as URL", () => navigator.clipboard.writeText(launcher.connectionUrl(c)).then(() => homeNote("Copied the URL (without the password).")).catch((e) => homeNote(String(e), true))],
     ["Export…", () => launcher.exportConnections({ kind: "connection", name: c.name }, `“${c.name}”`, homeNote)],
     ...(groupItems.length ? ["-" as const, ...groupItems] : []),
@@ -419,7 +427,8 @@ function openEditor(kind: string, existing?: Saved, fresh = false, password = ""
   const d = e.defaults;
   if (d) {
     for (const k of ["host", "port", "user"] as const) field(k).placeholder = d[k];
-    field("database").placeholder = "Optional, choose one after connecting";
+    field("database").placeholder = kind === "redis" ? "0 (a number; choose another after connecting)" : "Optional, choose one after connecting";
+    if (kind === "redis") field("user").placeholder = "Optional, an ACL user";
   }
   field("name").placeholder = d ? `${e.label} · ${d.host}` : e.label;
   field("password").placeholder = editing ? "Unchanged (in keychain)" : "None";
@@ -543,8 +552,9 @@ function formToSaved(): Saved {
     const port = field("port").value.trim() || d.port;
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
-    const scheme = editingKind === "postgres" ? "postgres" : "mysql";
-    url = `${scheme}://${encodeURIComponent(user)}@${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
+    const scheme = editingKind === "postgres" ? "postgres" : editingKind === "redis" ? "redis" : "mysql";
+    if (editingKind === "redis" && !/^\d+$/.test(db || "0")) throw "A Redis database is a number, such as 0.";
+    url = `${scheme}://${user ? encodeURIComponent(user) + "@" : ""}${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
   }
   const name = val("name");
   if (name !== editing?.name && saved.some((c) => c.name === name)) throw `A connection named "${name}" already exists.`;
@@ -565,12 +575,13 @@ function formToSaved(): Saved {
 
 async function saveForm() {
   const conn = formToSaved();
-  await invoke("save_connection", {
+  const args = {
     conn,
     password: conn.password_mode ? null : secretField().value || null,
     sshPassword: field("ssh_password").value || null,
     previous: editing?.name ?? null,
-  });
+  };
+  await withVault(() => invoke("save_connection", args));
   return conn;
 }
 
@@ -623,6 +634,15 @@ type Info = { server: string; database: string | null; can_switch: boolean; tabl
 let info: Info | null = null;
 /** The first shortcut of a command, as it reads on screen; "" when it has none. */
 const keyLabel = (id: string) => label(bindings(id)[0] ?? "", isMac);
+// The macOS window has no visible title bar (tauri.conf.json); the CSS makes room for the traffic lights, except in
+// full screen, where they are hidden.
+if (isMac && "__TAURI_INTERNALS__" in window) {
+  document.body.classList.add("overlay-title");
+  const win = getCurrentWindow();
+  const syncFullScreen = () => void win.isFullscreen().then((f) => document.body.classList.toggle("full-screen", f), () => {});
+  win.onResized(syncFullScreen).catch(() => {}); // a preview without Tauri has no window events
+  syncFullScreen();
+}
 
 /** invoke for workspace commands: a dropped connection shows the reconnect banner before the error moves on. */
 async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
@@ -641,13 +661,15 @@ async function reconnect() {
   btn.disabled = true;
   status("Reconnecting…", "busy");
   try {
-    info = await invoke<Info>("reconnect", { name: sessionKey() });
+    if (isRedis()) await invoke("disconnect", { name: sessionKey() }); // redis_connect then opens a fresh session
+    info = await invoke<Info>(isRedis() ? "redis_connect" : "reconnect", { name: sessionKey(), ...(isRedis() ? { database: info?.database } : {}) });
     $("lost").hidden = true;
     renderDbTabs();
     tables = info.tables;
     columnsCache.clear();
     renderTables();
     loadSchema();
+    syncRedis(true);
     status(`Reconnected · ${info.server}`, "done");
   } catch (e) {
     status(String(e), "error");
@@ -679,7 +701,7 @@ async function showConnectionInfo() {
   Object.assign(pop.style, { top: `${r.bottom + 6}px`, left: `${Math.max(8, r.right - 340)}px` });
   pop.hidden = false;
   try {
-    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>("connection_info", { name: sessionKey() });
+    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>(isRedis() ? "redis_connection_info" : "connection_info", { name: sessionKey() });
     list.replaceChildren(
       ...row("Connection", active.name),
       ...row("Server", i.server),
@@ -692,7 +714,7 @@ async function showConnectionInfo() {
   }
 }
 $("pill").onclick = showConnectionInfo;
-$("pill").onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), showConnectionInfo());
+$("pill").onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), showConnectionInfo()));
 $("info-reconnect").onclick = () => (($("conn-info").hidden = true), reconnect());
 $("info-disconnect").onclick = () => (($("conn-info").hidden = true), closeWorkspace());
 document.addEventListener("pointerdown", (e) => {
@@ -726,7 +748,7 @@ function freeKey(name: string) {
 async function openWorkspace(c: Saved, database?: string) {
   await docsReady; // kept tabs and history, read at startup
   const key = freeKey(c.name);
-  const i = await launcher.withAskedPassword(c.name, () => invoke<Info>("connect", { name: key, database }));
+  const i = await launcher.withAskedPassword(c.name, () => invoke<Info>(connectCommand(c.kind), { name: key, database }));
   if (!i) return; // the password prompt was cancelled
   launcher.addRecent(c.name);
   const at = ws && workspaces.includes(ws) ? workspaces.indexOf(ws) + 1 : workspaces.length;
@@ -752,6 +774,12 @@ async function openWorkspace(c: Saved, database?: string) {
   else editor.focus();
 }
 
+/** The command that opens a session: Redis isn't SQL, and has its own (redis.rs). */
+const connectCommand = (kind: string) => (kind === "redis" ? "redis_connect" : "connect");
+const isRedis = () => active?.kind === "redis";
+/** A database as the header shows it: Redis numbers its databases. */
+const dbLabel = (database: string) => (isRedis() ? `db${database}` : database);
+
 /** A new connection or database: fresh tree, and a single empty SQL tab. */
 function applyInfo(i: Info) {
   info = i;
@@ -775,6 +803,7 @@ function applyInfo(i: Info) {
   for (const k of kept) tabs.push({ id: nextId++, kind: "sql", title: k.title, sql: k.sql, path: k.path });
   if (kept.length) select(tabs[0].id);
   renderTables();
+  syncRedis(true);
 }
 
 /** The workspace header, the database button and the sidebar filter for the active connection. */
@@ -784,9 +813,10 @@ function showHeader() {
   document.body.dataset.env = c.tag; // production gets a red edge
   const btn = $("db-button");
   btn.hidden = !info?.can_switch;
-  btn.textContent = info?.database ? `${info.database} ▾` : "Choose database ▾";
+  btn.textContent = info?.database ? `${dbLabel(info.database)} ▾` : "Choose database ▾";
   btn.title = `Open a database (${keyLabel("open-database")})`;
   $<HTMLInputElement>("filter").hidden = !tables.length;
+  $("users-button").hidden = c.kind === "sqlite"; // one file, no users
   renderWorkspaceButton();
 }
 
@@ -812,6 +842,7 @@ const allTabs = () => (ws?.panes ?? [pane]).flatMap((p) => (p === pane ? tabs : 
 function stashWorkspace() {
   if (!ws || $("workspace").hidden) return;
   stashEditor();
+  flushSqlTabs(); // with this workspace's tabs and database, before another's take the screen
   Object.assign(pane, { tabs, currentId });
   Object.assign(ws, {
     info, tables, pane, columns: columnsCache, expanded, lost: !$("lost").hidden, filter: $<HTMLInputElement>("filter").value,
@@ -836,6 +867,7 @@ function showWorkspace(w: Workspace) {
   renderHistory();
   renderFavorites();
   renderMain();
+  syncRedis();
 }
 
 function cycleWorkspace(step: number) {
@@ -906,7 +938,7 @@ function renderDbTabs() {
   add.onclick = newWorkspace;
   strip.replaceChildren(
     ...workspaces.map((w) => {
-      const database = (w === ws ? info : w.info)?.database;
+      const database = ((d) => d && (w.conn.kind === "redis" ? `db${d}` : d))((w === ws ? info : w.info)?.database);
       const lost = w === ws ? !$("lost").hidden : w.lost;
       const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
       close.onclick = (e) => (e.stopPropagation(), closeDbTab(w));
@@ -968,7 +1000,7 @@ function showWorkspaces() {
   ]);
 }
 $("where-conn").onclick = showWorkspaces;
-$("where-conn").onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), showWorkspaces());
+$("where-conn").onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), showWorkspaces()));
 $("return-workspace").onclick = () => ws && showWorkspace(ws);
 
 // ---------- Split panes: the focused pane is live, the others show a still picture of their tab ----------
@@ -1062,22 +1094,41 @@ function closePane() {
   renderTables();
 }
 
-// ---------- SQL tabs kept per connection ----------
+// ---------- SQL tabs kept per connection and database ----------
 
 type KeptTab = { title: string; sql: string; path?: string };
+let saveTimer = 0; // a save waiting for typing to pause (saveSqlTabsSoon)
 
-// ponytail: only a connection's first workspace keeps its SQL tabs; key them by database if the others should.
-const keepsTabs = () => !!active && sessionKey() === active.name;
+/** The workspace on screen's entry in sql_tabs: connection and database, or the connection alone without one. */
+const tabsKey = () => (!active ? "" : info?.database ? `${active.name}\u001f${info.database}` : active.name);
+
+const keptTabs = (key: string) => {
+  const kept = docEntry<KeptTab[]>("sql_tabs", key);
+  return Array.isArray(kept) ? kept.filter((k) => typeof k?.title === "string" && typeof k?.sql === "string") : [];
+};
 
 function loadSqlTabs(): KeptTab[] {
-  const kept = keepsTabs() && docEntry<KeptTab[]>("sql_tabs", active!.name);
-  return Array.isArray(kept) ? kept.filter((k) => typeof k?.title === "string" && typeof k?.sql === "string") : [];
+  if (!active) return [];
+  const key = tabsKey();
+  const kept = keptTabs(key);
+  if (kept.length || key === active.name) return kept;
+  // Kept before databases had their own (under the connection's name): the first database opened takes them over.
+  const before = keptTabs(active.name);
+  if (before.length) setDocEntry("sql_tabs", key, before), setDocEntry("sql_tabs", active.name, undefined);
+  return before;
 }
 
 function saveSqlTabs() {
-  if (!active || !keepsTabs() || !settings.keepTabs) return;
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  if (!active || !settings.keepTabs) return;
   const kept: KeptTab[] = allTabs().flatMap((t) => (t.kind === "sql" && t.sql.trim() ? [{ title: t.title, sql: t.sql, path: t.path }] : []));
-  setDocEntry("sql_tabs", active.name, kept.length ? kept : undefined);
+  setDocEntry("sql_tabs", tabsKey(), kept.length ? kept : undefined);
+}
+
+/** Saves now if typing left a save waiting: before the screen's workspace or database changes, and at quit. */
+function flushSqlTabs() {
+  if (saveTimer) saveSqlTabs();
 }
 
 // ---------- .sql files (⌘O, ⌘S, ⌘⇧S on SQL tabs) ----------
@@ -1123,7 +1174,6 @@ async function saveSqlFile(pick: boolean) {
   }
 }
 
-let saveTimer = 0;
 function saveSqlTabsSoon() {
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(saveSqlTabs, 400);
@@ -1149,7 +1199,9 @@ async function openDbPicker() {
 async function loadDbs(pick: string) {
   setStatus("db-status", "Loading…", "busy");
   try {
-    databases = await call<string[]>("list_databases", { name: sessionKey() });
+    databases = isRedis()
+      ? (await call<{ index: number; keys: number }[]>("redis_databases", { name: sessionKey() })).map((d) => String(d.index))
+      : await call<string[]>("list_databases", { name: sessionKey() });
     $<HTMLInputElement>("db-search").value = "";
     dbPick = Math.max(0, databases.indexOf(pick));
     setStatus("db-status", "");
@@ -1187,7 +1239,10 @@ async function openDb(name?: string) {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
-    applyInfo(await call<Info>("use_database", { name: sessionKey(), database: name }));
+    const next = await call<Info>(isRedis() ? "redis_connect" : "use_database", { name: sessionKey(), database: name });
+    stashEditor();
+    saveSqlTabs(); // under the database being left
+    applyInfo(next);
     $<HTMLDialogElement>("dbpicker").close();
     status(`${name} · ${tables.length} tables`, "done");
     editor.focus();
@@ -1237,7 +1292,11 @@ $("db-rename").onclick = () => {
 $("db-drop").onclick = () => {
   const db = shownDbs()[dbPick];
   if (db) databaseOp(() => dropDatabase(db), async () => {
-    if (db === info?.database) applyInfo(await call<Info>("connect", { name: sessionKey() })); // MySQL: now on none
+    if (db === info?.database) {
+      stashEditor();
+      saveSqlTabs(); // kept under the dropped database, should it come back
+      applyInfo(await call<Info>("connect", { name: sessionKey() })); // MySQL: now on none
+    }
     await loadDbs(info?.database ?? "");
   });
 };
@@ -1270,6 +1329,7 @@ async function loadColumns(table: string) {
 
 /** The sidebar tree (sidebar.ts), drawing table rows with `tableRow`. */
 function renderTables() {
+  if (isRedis()) return; // the Redis view lists keys instead (redis.ts)
   const shown = active ? renderTree($("tables"), $<HTMLInputElement>("filter").value) : 0;
   const hint = $("no-tables");
   hint.hidden = shown > 0;
@@ -1304,7 +1364,8 @@ function tableRow(t: string, label: string, first: MenuItem[], last: MenuItem[])
   row.classList.toggle("active", t === open);
   row.onclick = () => openTable(t);
   row.oncontextmenu = (e) => (e.stopPropagation(),
-    contextMenu(e, [...first, "-", ...tableMenu(t), "-", ...transferMenu(t), "-", ["Show diagram", () => showDiagram(t)], ...last]));
+    contextMenu(e, [...first, "-", ...tableMenu(t), "-", ...transferMenu(t), "-", ["Show diagram", () => showDiagram(t)],
+      ...pluginMenu("table", () => ({ table: t, engine: active?.kind ?? null })), ...last]));
   const li = el("li", {}, row);
   if (isOpen)
     li.append(
@@ -1320,7 +1381,7 @@ function tableRow(t: string, label: string, first: MenuItem[], last: MenuItem[])
   return li;
 }
 
-type Side = "items" | "history" | "queries" | "search";
+type Side = "items" | "history" | "search";
 function showSide(which: Side) {
   for (const b of document.querySelectorAll<HTMLElement>(".side-tabs button")) b.setAttribute("aria-pressed", String(b.dataset.side === which));
   for (const p of document.querySelectorAll<HTMLElement>("aside > .side-pane")) p.hidden = p.id !== `side-${which}`;
@@ -1470,6 +1531,7 @@ function openSqlIn(title: string | null, sql: string) {
  *  with `filters` when given. */
 function openTable(table: string, view: TableTab["view"] = "data", create = false, opts: { filters?: FilterRow[]; fresh?: boolean } = {}) {
   const { filters, fresh = false } = opts;
+  if (!create) noteOpened(table); // the sidebar's Recent section
   const existing = fresh ? undefined : (tabs.find((t) => t.kind === "table" && t.table === table) as TableTab | undefined);
   if (existing) {
     if (existing.view !== view && !pendingCount(existing)) existing.view = view;
@@ -1510,9 +1572,17 @@ async function closeTab(id: number, remember = true) {
   tabs.splice(i, 1);
   saveSqlTabs();
   if (!tabs.length && (ws?.panes.length ?? 1) > 1) return closePane();
-  if (!tabs.length) return void closeWorkspace(); // last tab gone: leave the connection, like TablePlus
+  // Last tab gone: unlike TablePlus, stay connected with no tab open. ⌘W again leaves (closeCurrent).
+  if (!tabs.length) return void ((currentId = 0), renderMain(), renderTables());
   if (id === currentId) select(tabs[Math.max(0, i - 1)].id);
   else renderMain();
+}
+
+/** ⌘W: the current tab; with none open, the empty pane, then the workspace and its connection. */
+function closeCurrent() {
+  if (tabs.length) return closeTab(currentId);
+  if ((ws?.panes.length ?? 1) > 1) return closePane();
+  return closeWorkspace();
 }
 
 /** Every other tab closed, each asking first if it has unsaved changes. */
@@ -1608,7 +1678,6 @@ async function reloadTab() {
 
 function renderMain() {
   const tab = current();
-  if (!tab) return;
   $("tabs").replaceChildren(
     ...tabs.map((t) => {
       const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
@@ -1631,8 +1700,9 @@ function renderMain() {
   $("tabs").querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 
   const env = active?.tag ? `${tagLabel(active.tag)} | ` : "";
-  $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${info.database}` : ""} : ${tab.title}`;
+  $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${dbLabel(info.database)}` : ""}${tab && !isRedis() ? ` : ${tab.title}` : ""}`;
   $("pill").className = `pill ${active?.tag ?? ""}`;
+  if (!tab) return showNoTab();
 
   $("sql-pane").hidden = tab.kind !== "sql";
   $("table-foot").hidden = tab.kind !== "table";
@@ -1702,6 +1772,18 @@ function syncDetail() {
   const table = tab?.kind === "table" && tab.view === "data" && !tab.error ? tab : null;
   const sel = selection;
   syncRowDetail(table, sel && sel.r === table?.result ? sel.focus[0] : null);
+}
+
+/** The workspace with every tab closed: still connected, saying how to go on or leave. */
+function showNoTab() {
+  for (const id of ["sql-pane", "table-foot", "result-strip", "filters"]) $(id).hidden = true;
+  filtersDrawnFor = 0;
+  selection = null;
+  syncDetail();
+  $("out").replaceChildren(el("p", {
+    className: "hint empty",
+    textContent: `No tabs open. Open a table from the sidebar, or press ${keyLabel("new-tab")} for a SQL query. ${keyLabel("close-tab")} closes the connection.`,
+  }));
 }
 
 /** The rows the selection covers, top to bottom. */
@@ -1914,9 +1996,15 @@ $("tools-button").onclick = () => {
   if (!active) return;
   const items: MenuItem[] = toolsMenu(active, info?.database);
   if (active.kind !== "sqlite") items.push(["Users…", showUsers]); // needs the workspace's connection, so not on launcher rows
-  items.push("-", ["Metrics Board", () => openBoard(boardCtx())]);
+  items.push("-", ["Metrics Board", () => openBoard(boardCtx())], ["Run Custom Script…", showScript]);
   contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), items);
 };
+
+/** The custom script window on the workspace's session (scripts.ts). */
+const showScript = () => void openScript({
+  conn: hostConn, database: () => info?.database ?? null, call,
+  confirm: (sql) => confirmDialog(`Run this from the script? ${sql.length > 200 ? sql.slice(0, 200) + "…" : sql}`, "Run"),
+});
 
 /** The user manager on the workspace's session (users.ts). */
 const showUsers = () => active && openUsers({ conn: { name: sessionKey(), kind: active.kind }, call, confirm: confirmDialog });
@@ -1979,6 +2067,7 @@ function ask(text: string, detail: string, okLabel: string): Promise<boolean> {
 
 /** The sidebar's items again (new or dropped tables), with columns and autocomplete reloaded. */
 async function reloadItems() {
+  if (isRedis()) return syncRedis(true);
   const i = await call<Info>("connect", { name: sessionKey() }); // reuses the open connection
   forgetItems(sessionKey());
   info = i;
@@ -1990,7 +2079,9 @@ async function reloadItems() {
 
 /** Columns for every table, for autocomplete. Runs in the background; the editor works without it meanwhile. */
 async function loadSchema() {
-  if (!active) return;
+  forgetSchema(); // the assistant's copy, with types, is fetched again when next needed
+  renderAssistant();
+  if (!active || isRedis()) return;
   const [conn, key] = [active, sessionKey()];
   try {
     const pairs = await invoke<[string, string][]>("schema", { name: key });
@@ -2061,6 +2152,15 @@ async function execute(statements: string[]) {
           break;
         }
         approved = next;
+        // Touch ID for several statements: one prompt for the batch, kept as a grant the rest of it sends.
+        if (next.unlock === "touch_id" && statements.length - i > 1) {
+          try {
+            approved = { confirmed: true, unlock: { grant: await invoke<string>("batch_grant") } };
+          } catch (err) {
+            stopped = i ? `Stopped before statement ${i + 1}: ${err}` : String(err);
+            break;
+          }
+        }
         i--; // run this statement again, approved
         continue;
       }
@@ -2111,6 +2211,7 @@ function showResults(tab: SqlTab) {
   search.hidden = append || !shown.length;
   search.value = res.search ?? "";
   const target = shown.length === 1 && !append ? editable(shown[0]) : null;
+  $("result-replace").hidden = search.hidden || !(shown.length === 1 && editable(shown[0], true));
   const chart = $("result-chart");
   chart.hidden = append || shown.length !== 1 || !shown[0].result.columns.length;
   chart.setAttribute("aria-pressed", String(!chart.hidden && !!shown[0].charted));
@@ -2153,11 +2254,12 @@ function showResults(tab: SqlTab) {
 
 /** The result's staged edits, when its rows can be edited in place: it reads one table, every column is one of the
  *  table's, the table's key is among them, and no search hides rows. */
-function editable(r: ResultTab) {
+/** The result as an editable table, when it is one; while a search filters it, only with `searching` (Replace). */
+function editable(r: ResultTab, searching = false) {
   const e = r.edit;
   if (r.charted) return null;
   const columns = e && columnsCache.get(e.table);
-  if (!e || !columns || (current() as SqlTab).out?.search?.trim()) return null;
+  if (!e || !columns || (!searching && (current() as SqlTab).out?.search?.trim())) return null;
   const names = new Set(columns.map((c) => c.name));
   const plain = r.result.columns.every((c) => names.has(c)) && new Set(r.result.columns).size === r.result.columns.length;
   return plain && grid.findBy(e) ? e : null;
@@ -2697,6 +2799,11 @@ function wireSelection(table: HTMLTableElement, r: QueryResult, options?: Render
       "-",
       [`Copy column name "${column}"`, () => copyText(column, "column name")],
       [`Copy all values of ${column} on this page`, values],
+      ...pluginMenu("rows", () => {
+        const cells = selectedCells(true);
+        const rows = (cells?.rows ?? []).map((row) => Object.fromEntries(cells!.columns.map((c, i) => [c, row[i]])));
+        return { table: options?.table ?? null, columns: cells?.columns ?? [], rows };
+      }),
       ...(options?.menu?.(ri, ci) ?? []),
     ]);
   };
@@ -2834,6 +2941,27 @@ function boardCtx(): BoardCtx {
   };
 }
 
+/** Find and replace in the shown result's cells, staged as edits to review and save (only an editable result). */
+async function replaceInResult() {
+  const tab = current();
+  const res = tab?.kind === "sql" ? tab.out : undefined;
+  const r = res?.tabs.find((t) => t.id === res.shown);
+  const target = r && editable(r, true);
+  if (!res || !target?.result) return;
+  const got = await askFields("Replace in this result", [
+    { key: "find", label: "Find", value: res.search ?? "" },
+    { key: "replace", label: "Replace with", value: "" },
+    { key: "matchCase", label: "Match case", value: false },
+    { key: "wholeCell", label: "Whole cell only", value: false },
+  ], "Replace All");
+  if (!got) return;
+  const cells = replaceCells(target.result.rows, String(got.find), String(got.replace), { matchCase: !!got.matchCase, wholeCell: !!got.wholeCell });
+  res.search = ""; // show every row again, with the replaced values staged in them
+  if (!cells.length || !grid.stageCells(target, cells)) return void (showResults(tab as SqlTab), status("Nothing to replace", ""));
+  showResults(tab as SqlTab);
+}
+$("result-replace").onclick = () => void replaceInResult();
+
 $("result-search").addEventListener("input", (e) => {
   const tab = current();
   if (tab?.kind !== "sql" || !tab.out) return;
@@ -2858,6 +2986,27 @@ function showDiagram(table?: string) {
   openDiagram(pg ? (table?.includes(".") ? table.split(".")[0] : shownSchema()) : null, table);
 }
 initDiagram({ call, conn: hostConn, openTable: (t) => openTable(t), menu: contextMenu });
+initRedis({ conn: hostConn, call, confirm: confirmDialog, menu: contextMenu });
+initPlugins({
+  conn: hostConn,
+  insert(sql) {
+    if (current()?.kind === "sql") editor.insert(sql);
+    else openSqlIn(null, sql);
+  },
+  copy: (text, what) => void copyText(text, what),
+  say: (text, kind = "done") => note(text, kind),
+});
+initAssistant({
+  conn: hostConn,
+  server: () => info?.server ?? "",
+  schema: () => (active?.kind === "postgres" ? shownSchema() : null),
+  call,
+  insert(sql) {
+    if (current()?.kind === "sql") editor.insert(sql);
+    else openSqlIn(null, sql);
+  },
+  openSettings: () => openSettings(),
+});
 initSidebar({
   conn: hostConn,
   tables: () => tables,
@@ -2896,7 +3045,6 @@ initStructure({
     for (const t of tabs.filter((t): t is TableTab => t.kind === "table" && t.table === table)) {
       t.staged.clear();
       dropDraft(t.id);
-      if (tabs.length === 1) openSqlTab(); // closing the last tab would leave the workspace
       closeTab(t.id, false);
     }
   },
@@ -2977,8 +3125,11 @@ $("page-next").onclick = () => turnPage(1);
  *  up. */
 async function closeWorkspace(next?: Workspace | null) {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
+  stashEditor();
+  flushSqlTabs();
   if (ws) {
     invoke("disconnect", { name: ws.key }).catch(() => {});
+    forgetRedis(ws.key);
     // An asked-for password serves every tab of its connection, so it goes with the last one.
     const name = ws.conn.name;
     if (!workspaces.some((w) => w !== ws && w.conn.name === name)) launcher.forgetAskedPassword(name);
@@ -3145,6 +3296,7 @@ function showTab(tab: string) {
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const openSettings = () => {
   const d = $<HTMLDialogElement>("settings");
+  csvDefaults($("csv-defaults")); // the export dialog may have changed them since
   if (!d.open) d.showModal();
 };
 
@@ -3192,7 +3344,7 @@ $("engine-search").addEventListener("keydown", (e) => e.key === "Enter" && (e.pr
 $("picker-next").onclick = nextFromPicker;
 $("picker-cancel").onclick = () => $<HTMLDialogElement>("picker").close();
 $("editor-cancel").onclick = () => $<HTMLDialogElement>("editor").close();
-$("back").onclick = () => closeWorkspace();
+$("back").onclick = newWorkspace; // the launcher; this workspace stays connected in its tab
 $("filter").addEventListener("input", renderTables);
 
 $("run").onclick = runCurrent;
@@ -3250,7 +3402,7 @@ addCommands([
     run: () => (current()?.kind === "sql" ? saveSqlFile(true) : saveEdits()) },
   // On the launcher there's no tab: close the window, like other apps.
   { id: "close-tab", label: "Close Tab", menu: "File", keys: ["Mod+KeyW"], sep: true,
-    run: () => (inWorkspace() ? closeTab(currentId) : getCurrentWindow().close()) },
+    run: () => (inWorkspace() ? closeCurrent() : getCurrentWindow().close()) },
   { id: "close-other-tabs", label: "Close Other Tabs", menu: "File", when: () => inWorkspace() && tabs.length > 1,
     run: () => closeOtherTabs(currentId) },
   { id: "rename-tab", label: "Rename Tab…", menu: "File", when: inWorkspace, run: () => renameTab(currentId) },
@@ -3273,10 +3425,14 @@ addCommands([
   { id: "shift-left", label: "Shift Left", menu: "Edit", keys: ["Mod+BracketLeft"], when: onSqlTab, run: () => editor.shift(false) },
   { id: "save-favorite", label: "Save Query as Favorite…", menu: "Edit", when: onSqlTab,
     run: () => addFavorite(editor.current().trim() || (current() as SqlTab).sql) },
-  { id: "saved-queries", label: "Saved Queries", menu: "Navigate", when: inWorkspace, run: () => showSide("queries") },
+  { id: "saved-queries", label: "Saved Queries", menu: "Navigate", when: inWorkspace, run: () => (showSide("history"), showSaved()) },
   { id: "filter", label: "Filter Rows", menu: "Edit", keys: ["Mod+KeyF"], when: () => inWorkspace() && current()?.kind === "table",
     run: () => toggleFilters(true) },
-  { id: "font-bigger", label: "Increase Font Size", menu: "View", keys: ["Mod+Equal", "Mod+Shift+Equal"], when: inWorkspace,
+  { id: "toggle-sidebar", label: "Toggle Left Sidebar", menu: "View", keys: ["Alt+Mod+Digit1"], when: inWorkspace, run: () => togglePane("sidebar") },
+  { id: "toggle-row-detail", label: "Toggle Row Detail", menu: "View", keys: ["Alt+Mod+Digit2"], when: inWorkspace, run: toggleRowDetail },
+  { id: "toggle-results", label: "Toggle Results Pane", menu: "View", keys: ["Alt+Mod+Digit3"], when: inWorkspace, run: () => togglePane("results") },
+  { id: "toggle-assistant", label: "Toggle Assistant", menu: "View", keys: ["Alt+Mod+Digit4"], when: inWorkspace, run: toggleAssistant },
+  { id: "font-bigger", sep: true, label: "Increase Font Size", menu: "View", keys: ["Mod+Equal", "Mod+Shift+Equal"], when: inWorkspace,
     run: () => fontBy(settings.fontSize + 1) },
   { id: "font-smaller", label: "Decrease Font Size", menu: "View", keys: ["Mod+Minus"], when: inWorkspace, run: () => fontBy(settings.fontSize - 1) },
   { id: "font-reset", label: "Actual Font Size", menu: "View", keys: ["Mod+Digit0"], when: inWorkspace, run: () => fontBy(DEFAULT_SETTINGS.fontSize) },
@@ -3348,9 +3504,38 @@ addCommands([
     sep: true, run: () => openProcesses(active!, confirmDialog) },
   { id: "users", label: "Users…", menu: "Tools", when: () => hasTools() && active!.kind !== "sqlite", run: () => showUsers() },
   { id: "metrics-board", label: "Metrics Board", menu: "Tools", sep: true, when: hasTools, run: () => openBoard(boardCtx()) },
+  { id: "custom-script", label: "Run Custom Script…", menu: "Tools", when: hasTools, run: showScript },
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
 ]);
 initMenu();
+initHiding();
+// The header's icon toolbar runs commands, so a button does what its menu item and shortcut do. Users only exists
+// where there are users to manage.
+for (const b of document.querySelectorAll<HTMLButtonElement>(".tool-icons [data-command]")) b.onclick = () => void runCommand(b.dataset.command!);
+divider({
+  host: $("workspace"), className: "side-edge", variable: "--side-w", pref: "layout.sidebar", axis: "x", sign: 1, min: 180,
+  max: () => Math.min(560, window.innerWidth / 2), size: () => $("workspace").querySelector("aside")!.getBoundingClientRect().width,
+  label: "Sidebar width",
+});
+divider({
+  host: $("workspace"), className: "ai-edge", variable: "--ai-w", pref: "layout.assistant", axis: "x", sign: -1, min: 260,
+  max: () => Math.min(720, window.innerWidth * 0.45), size: () => $("assistant").getBoundingClientRect().width,
+  label: "Assistant width",
+});
+divider({
+  host: $("sql-pane"), className: "sql-edge", variable: "--sql-h", pref: "layout.editor", axis: "y", sign: 1, min: 120,
+  max: () => $("live").getBoundingClientRect().height - 140, size: () => $("sql-pane").getBoundingClientRect().height,
+  label: "Editor height",
+});
+// Closing the window (Quit closes it too, menu.ts) waits until the last typing is in the files. Tauri destroys the
+// window once this handler returns.
+if ("__TAURI_INTERNALS__" in window) {
+  getCurrentWindow().onCloseRequested(async () => {
+    stashEditor();
+    flushSqlTabs();
+    await Promise.all([flushDocs(), flushPrefs()]);
+  }).catch(() => {}); // a preview without Tauri has no window events
+}
 
 /** Shortcut hints next to buttons, kept in step with Settings › Shortcuts. */
 function showKeys() {

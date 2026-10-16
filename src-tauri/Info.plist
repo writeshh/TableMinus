@@ -16,6 +16,8 @@
         <string>postgres</string>
         <string>mysql</string>
         <string>mariadb</string>
+        <string>redis</string>
+        <string>rediss</string>
       </array>
     </dict>
   </array>

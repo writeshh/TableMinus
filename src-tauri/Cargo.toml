@@ -23,11 +23,14 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: an agent's config file keeps its keys in their order when the MCP setup adds to it.
+serde_json = { version = "1", features = ["preserve_order"] }
 tokio-postgres = "0.7.18"
 postgres-protocol = "0.6.12"
 postgres-native-tls = "0.5.3"
 native-tls = "0.2.18"
+# Already in the tree through postgres-native-tls; the AI assistant's HTTPS client uses it directly.
+tokio-native-tls = "0.3.1"
 mysql_async = { version = "0.37.1", default-features = false, features = ["default-rustls-ring"] }
 url = "2.5.8"
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher", "backup"] }
@@ -52,13 +55,21 @@ getrandom = "0.3"
 dirs = "7"
 argon2 = "0.6"
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+# Plugins run in QuickJS, with no file, network or app access but what plugins.rs gives them.
+rquickjs = "0.14"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 robius-authentication = "0.3.1"
 
 
+[dev-dependencies]
+# Property tests for the read-only check and SQL quoting (readonly.rs, db.rs).
+proptest = "1"
+
 [lints.rust]
 unsafe_code = "forbid"
+# cargo-fuzz builds with --cfg fuzzing (fuzz/README.md).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }

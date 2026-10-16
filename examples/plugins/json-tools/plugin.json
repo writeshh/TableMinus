@@ -1,0 +1,12 @@
+{
+  "id": "json-tools",
+  "name": "JSON tools",
+  "version": "1.0.0",
+  "description": "Copies selected rows as JSON, and writes a SELECT that returns a table's rows as JSON.",
+  "author": "TableMinus example",
+  "permissions": ["query"],
+  "actions": [
+    { "id": "copy-json", "title": "Copy rows as JSON", "on": "rows", "run": "copyJson" },
+    { "id": "count", "title": "Count rows (plugin)", "on": "table", "run": "countRows" }
+  ]
+}

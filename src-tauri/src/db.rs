@@ -16,6 +16,7 @@ pub enum Engine {
     Mysql,
     Mariadb,
     Sqlite,
+    Redis,
 }
 
 /// Per-connection options beyond host, user and TLS. Engine-specific ones are ignored by other engines.
@@ -188,6 +189,13 @@ impl Dialect {
             Dialect::Lite => format!("'{quoted}'"),
         }
     }
+}
+
+/// Runs blocking SQLite work without stalling the async worker it's on: the pool takes over the worker's other tasks
+/// meanwhile. `block_in_place` rather than `spawn_blocking`, which would need to own the borrowed connection. Every
+/// runtime here (the app's, the tests', the MCP bridge's) is multi-threaded, which it requires.
+fn blocking<T>(work: impl FnOnce() -> T) -> T {
+    tokio::task::block_in_place(work)
 }
 
 /// A quoted identifier for code that only knows whether it's MySQL; [`Dialect::ident`] does the quoting.
@@ -456,7 +464,9 @@ impl Conn {
                 Engine::Mysql | Engine::Mariadb => {
                     Conn::My(open_mysql(url, password, tls, options, tunnel_port).await?)
                 }
-                Engine::Sqlite => Conn::Lite(open_sqlite(url, password)?),
+                // Opening can take a while: SQLCipher derives the key from the passphrase.
+                Engine::Sqlite => Conn::Lite(blocking(|| open_sqlite(url, password))?),
+                Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
             })
         };
         let mut conn: Conn = tokio::time::timeout(CONNECT_TIMEOUT, open)
@@ -474,7 +484,7 @@ impl Conn {
         match self {
             Conn::Pg(c) => c.batch_execute(sql).await?,
             Conn::My(c) => mysql_async::prelude::Queryable::query_drop(c, sql).await?,
-            Conn::Lite(c) => c.execute_batch(sql)?,
+            Conn::Lite(c) => blocking(|| c.execute_batch(sql))?,
         }
         Ok(())
     }
@@ -539,6 +549,18 @@ impl Conn {
         }
     }
 
+    /// Whether `err` is the database refusing a write inside [`Conn::read_only_bounds`]: Postgres's
+    /// `read_only_sql_transaction` (25006), MySQL's `ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION` (1792), or
+    /// SQLite's `READONLY`.
+    pub fn refused_as_read_only(err: &Error) -> bool {
+        match err {
+            Error::Postgres(e) => e.code() == Some(&tokio_postgres::error::SqlState::READ_ONLY_SQL_TRANSACTION),
+            Error::MySql(mysql_async::Error::Server(e)) => e.code == 1792,
+            Error::Sqlite(rusqlite::Error::SqliteFailure(e, _)) => e.code == rusqlite::ErrorCode::ReadOnly,
+            _ => false,
+        }
+    }
+
     /// Runs SQL typed by the user and returns the last result set as text cells (None = NULL).
     pub async fn query(&mut self, sql: &str) -> Result<QueryResult> {
         self.query_limited(sql, None).await
@@ -600,7 +622,7 @@ impl Conn {
                     }
                 }
             }
-            Conn::Lite(c) => {
+            Conn::Lite(c) => blocking(|| -> Result<()> {
                 use rusqlite::fallible_iterator::FallibleIterator;
                 // SQLite prepares one statement at a time; Batch steps through the rest of the text.
                 let mut batch = rusqlite::Batch::new(c, sql);
@@ -622,7 +644,8 @@ impl Conn {
                     }
                     out.end(0);
                 }
-            }
+                Ok(())
+            })?,
         }
         Ok(out.finish())
     }
@@ -678,7 +701,7 @@ impl Conn {
                 c.exec_drop(sql, params.iter().copied().map(mysql_async::Value::from).collect::<Vec<_>>()).await?;
                 Ok(c.affected_rows())
             }
-            Conn::Lite(c) => Ok(c.execute(sql, rusqlite::params_from_iter(params))? as u64),
+            Conn::Lite(c) => Ok(blocking(|| c.execute(sql, rusqlite::params_from_iter(params)))? as u64),
         }
     }
 
@@ -703,7 +726,7 @@ impl Conn {
                 let rows: Vec<mysql_async::Row> = c.exec(sql, params).await?;
                 Ok(rows.into_iter().map(my_row).collect())
             }
-            Conn::Lite(c) => {
+            Conn::Lite(c) => blocking(|| {
                 let mut st = c.prepare(sql)?;
                 let n = st.column_count();
                 let rows = st
@@ -712,7 +735,7 @@ impl Conn {
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
-            }
+            }),
         }
     }
 
@@ -761,7 +784,7 @@ impl Conn {
                 let params: Vec<_> = params.iter().copied().map(mysql_async::Value::from).collect();
                 my_stream(mysql_async::prelude::Queryable::exec_iter(c, sql, params).await?, sink).await?;
             }
-            Conn::Lite(c) => {
+            Conn::Lite(c) => blocking(|| -> Result<()> {
                 let mut st = c.prepare(sql)?;
                 let n = st.column_count();
                 sink.columns(st.column_names().into_iter().map(String::from).collect())?;
@@ -769,7 +792,8 @@ impl Conn {
                 while let Some(row) = rows.next()? {
                     sink.row((0..n).map(|i| row.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<_>>()?)?;
                 }
-            }
+                Ok(())
+            })?,
         }
         Ok(())
     }
@@ -909,6 +933,119 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
+    /// Quoting can't be broken out of: whatever the name or value, the SQL parser reads back exactly it.
+    mod quoting {
+        use crate::db::Dialect;
+        use proptest::prelude::*;
+        use sqlparser::ast::{Expr, ObjectNamePart, SelectItem, SetExpr, Statement, TableFactor, Value};
+        use sqlparser::dialect::{Dialect as Parsing, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+        use sqlparser::parser::Parser;
+
+        fn dialects() -> [(Dialect, Box<dyn Parsing>); 3] {
+            [
+                (Dialect::Pg, Box::new(PostgreSqlDialect {})),
+                (Dialect::My, Box::new(MySqlDialect {})),
+                (Dialect::Lite, Box::new(SQLiteDialect {})),
+            ]
+        }
+
+        /// The one SELECT in `sql`, parsed.
+        fn select(p: &dyn Parsing, sql: &str) -> Box<sqlparser::ast::Select> {
+            let mut stmts = Parser::parse_sql(p, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+            assert_eq!(stmts.len(), 1, "{sql}");
+            let Some(Statement::Query(q)) = stmts.pop() else { panic!("{sql}: not a query") };
+            let SetExpr::Select(s) = *q.body else { panic!("{sql}: not a select") };
+            s
+        }
+
+        proptest! {
+            #[test]
+            fn ident_reads_back_as_the_same_name(name in "\\PC{1,30}") {
+                for (d, p) in dialects() {
+                    let sql = format!("SELECT 1 FROM {}", d.ident(&name));
+                    let s = select(p.as_ref(), &sql);
+                    let TableFactor::Table { name: read, .. } = &s.from[0].relation else { panic!("{sql}") };
+                    let parts: Vec<_> = read.0.iter().filter_map(ObjectNamePart::as_ident).map(|i| i.value.as_str()).collect();
+                    prop_assert_eq!(parts, [name.as_str()], "{}", sql);
+                }
+            }
+
+            #[test]
+            fn literal_reads_back_as_the_same_value(value in "\\PC{0,40}") {
+                for (d, p) in dialects() {
+                    let sql = format!("SELECT {}", d.literal(&value));
+                    let s = select(p.as_ref(), &sql);
+                    let SelectItem::UnnamedExpr(Expr::Value(v)) = &s.projection[0] else { panic!("{sql}") };
+                    let read = match &v.value {
+                        Value::SingleQuotedString(t) | Value::EscapedStringLiteral(t) => t,
+                        other => panic!("{sql}: {other:?}"),
+                    };
+                    prop_assert_eq!(read, &value, "{}", sql);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn refused_as_read_only_should_recognise_sqlite_refusing_a_write_in_bounds() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Sqlite, ":memory:").await;
+            c.query("create table t (a int)").await.unwrap();
+            let (start, end) = c.read_only_bounds();
+            c.query(start).await.unwrap();
+            let refused = c.query("insert into t values (1)").await.unwrap_err();
+            c.query(end).await.unwrap();
+            assert!(Conn::refused_as_read_only(&refused), "{refused}");
+            let other = c.query("select * from nope").await.unwrap_err();
+            assert!(!Conn::refused_as_read_only(&other), "{other}");
+        });
+    }
+
+    /// A function that writes passes the read-only parse; the bounds still stop it. `DBM_PG_URL` points elsewhere.
+    #[test]
+    #[ignore = "needs a local Postgres"]
+    fn refused_as_read_only_should_recognise_postgres_refusing_a_writing_function() {
+        tauri::async_runtime::block_on(async {
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+            let mut c = open(Engine::Postgres, &url).await;
+            // A real table: Postgres lets a read-only transaction write temporary ones.
+            let t = format!("dbm_bumped_{}", std::process::id());
+            c.query(&format!(
+                "create table {t} (n int); create function pg_temp.bump() returns int language sql as \
+                 'insert into {t} values (1) returning 1'"
+            ))
+            .await
+            .unwrap();
+            let sql = "select pg_temp.bump()";
+            let parsed = crate::readonly::is_read_only(Engine::Postgres, sql);
+            let (start, end) = c.read_only_bounds();
+            c.query(start).await.unwrap();
+            let refused = c.query(sql).await;
+            c.query(end).await.unwrap();
+            c.query(&format!("drop table {t}")).await.unwrap();
+            assert!(parsed, "the parse can't tell");
+            let refused = refused.unwrap_err();
+            assert!(Conn::refused_as_read_only(&refused), "{refused}");
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local MySQL"]
+    fn refused_as_read_only_should_recognise_mysql_refusing_a_write_in_bounds() {
+        tauri::async_runtime::block_on(async {
+            let mut c = open(Engine::Mysql, "mysql://root@127.0.0.1:3306").await;
+            let db = format!("dbm_ro_{}", std::process::id());
+            c.query(&format!("create database {db}; use {db}; create table t (a int)")).await.unwrap();
+            let (start, end) = c.read_only_bounds();
+            c.query(start).await.unwrap();
+            let refused = c.query("insert into t values (1)").await.unwrap_err();
+            c.query(end).await.unwrap();
+            c.query(&format!("drop database {db}")).await.unwrap();
+            assert!(Conn::refused_as_read_only(&refused), "{refused}");
+        });
+    }
+
     #[test]
     fn read_only_bounds_should_make_sqlite_refuse_writes_until_ended() {
         tauri::async_runtime::block_on(async {

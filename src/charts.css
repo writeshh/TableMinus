@@ -15,7 +15,7 @@
 .chart-panel { display: flex; flex-direction: column; height: 100%; min-height: 220px; }
 .chart-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); flex: none; flex-wrap: wrap; }
 .chart-pickers { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; font-size: 12px; }
-.chart-pickers select { padding: 2px 6px; font-size: 12px; max-width: 180px; }
+.chart-pickers select { padding: 2px 24px 2px 8px; font-size: 12px; max-width: 180px; }
 .chart-pickers .seg button { padding: 2px 10px; font-size: 12px; }
 .chart-pickers label.chart-x { display: flex; align-items: center; gap: 6px; }
 #result-chart[aria-pressed="true"] { color: var(--accent); }

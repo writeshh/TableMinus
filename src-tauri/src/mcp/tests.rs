@@ -133,9 +133,9 @@ fn list_connections_shows_only_reachable_ones_without_urls() {
     tauri::async_runtime::block_on(async {
         let s = server("list").await;
         let (_, all) = call(s.port, READ_WRITE, "list_connections", json!({})).await;
-        assert_eq!(all, r#"[{"engine":"sqlite","name":"lite","open":true,"tag":"local"}]"#);
+        assert_eq!(all, r#"[{"name":"lite","engine":"sqlite","tag":"local","open":true}]"#);
         let (_, listed) = call(s.port, ELSEWHERE, "list_connections", json!({})).await;
-        assert_eq!(listed, r#"[{"engine":"sqlite","name":"other","open":false,"tag":"local"}]"#);
+        assert_eq!(listed, r#"[{"name":"other","engine":"sqlite","tag":"local","open":false}]"#);
     });
 }
 
@@ -322,5 +322,33 @@ fn a_safe_level_allows_only_with_the_right_password() {
         let right = crate::safety::Unlock::Password("pw".into());
         s.shared.answer_checked(id, true, Some(&right)).await.unwrap();
         assert!(!pending.await.unwrap().0, "allowed, so it ran");
+    });
+}
+
+#[test]
+fn clients_are_listed_by_token_with_the_name_they_gave() {
+    tauri::async_runtime::block_on(async {
+        let s = server("clients").await;
+        let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "Claude Code", "version": "2.1" } } });
+        assert_eq!(post(s.port, Some(READ_ONLY), &init).await.0, 200);
+        call(s.port, READ_ONLY, "list_connections", json!({})).await;
+        let clients: Vec<_> = super::lock(&s.shared.clients).values().cloned().collect();
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients[0].agent.as_deref(), Some("Claude Code 2.1"));
+        assert_eq!(clients[0].requests, 2);
+    });
+}
+
+#[test]
+fn a_temporary_token_works_until_dropped_and_is_never_saved() {
+    tauri::async_runtime::block_on(async {
+        let s = server("temporary").await;
+        let (id, value) = s.shared.temporary_token("Assistant agent", vec!["lite".into()], true).unwrap();
+        let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+        assert_eq!(post(s.port, Some(&value), &list).await.0, 200);
+        assert!(!std::fs::read_to_string(s.dir.join("mcp.json")).unwrap().contains(&id), "not in mcp.json");
+        s.shared.drop_temporary(&id);
+        assert_eq!(post(s.port, Some(&value), &list).await.0, 401);
     });
 }

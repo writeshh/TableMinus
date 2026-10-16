@@ -344,6 +344,7 @@ fn dump_command(
             cmd.args(flags).arg("--").arg(&r.database);
         }
         Engine::Sqlite => return Err(Error::Invalid("SQLite is backed up without client tools")),
+        Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
     }
     password_env(&mut cmd, saved.kind, password);
     Ok(cmd)
@@ -377,6 +378,7 @@ fn restore_command(
             cmd.args(my_args(saved, tunnel_port, tools.mariadb)?).args(flags).arg(format!("--database={database}"));
         }
         Engine::Sqlite => return Err(Error::Invalid("SQLite is restored without client tools")),
+        Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
     }
     password_env(&mut cmd, saved.kind, password);
     Ok(cmd)

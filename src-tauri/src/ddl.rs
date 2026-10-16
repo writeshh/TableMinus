@@ -1,10 +1,14 @@
-//! DDL from typed requests: structure edits (columns, indexes, foreign keys, name, comment) and table operations
+//! DDL from typed requests: structure edits (columns, indexes, foreign keys, checks, triggers, the primary key, name,
+//! comment, MySQL's engine and collation) and table operations
 //! (clone, truncate, drop, reset auto-increment, schemas). Statements are generated first, so the UI can show
 //! them, then run as shown by [`Conn::run_ddl`].
 //!
 //! DDL takes no bound parameters: identifiers go through [`Dialect::ident`] and the few string values
 //! (comments, names inside catalog functions) through [`Dialect::literal`]. Types and defaults are SQL the user
 //! typed into the structure editor, inserted as written, like SQL in the editor.
+
+mod rebuild;
+pub(crate) use rebuild::checks as lite_checks;
 
 use crate::db::{Conn, Dialect};
 use crate::error::{Error, Result};
@@ -34,6 +38,65 @@ impl Rule {
             Rule::Cascade => "CASCADE",
             Rule::SetNull => "SET NULL",
             Rule::SetDefault => "SET DEFAULT",
+        }
+    }
+}
+
+/// An index's access method, where the engine has a choice: Postgres has them all, MySQL `BTREE` and `HASH`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IndexMethod {
+    Btree,
+    Hash,
+    Gist,
+    Gin,
+    Brin,
+    Spgist,
+}
+
+impl IndexMethod {
+    fn sql(self, d: Dialect) -> Result<&'static str> {
+        match (d, self) {
+            (Dialect::Pg, IndexMethod::Btree) => Ok("btree"),
+            (Dialect::Pg, IndexMethod::Hash) => Ok("hash"),
+            (Dialect::Pg, IndexMethod::Gist) => Ok("gist"),
+            (Dialect::Pg, IndexMethod::Gin) => Ok("gin"),
+            (Dialect::Pg, IndexMethod::Brin) => Ok("brin"),
+            (Dialect::Pg, IndexMethod::Spgist) => Ok("spgist"),
+            (Dialect::My, IndexMethod::Btree) => Ok("BTREE"),
+            (Dialect::My, IndexMethod::Hash) => Ok("HASH"),
+            (Dialect::My, _) => Err(Error::Invalid("MySQL indexes are BTREE or HASH")),
+            (Dialect::Lite, _) => Err(Error::Invalid("SQLite has only one kind of index")),
+        }
+    }
+}
+
+/// When a row trigger fires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum TriggerTiming {
+    #[serde(rename = "BEFORE")]
+    Before,
+    #[serde(rename = "AFTER")]
+    After,
+}
+
+/// What a row trigger fires on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum TriggerEvent {
+    #[serde(rename = "INSERT")]
+    Insert,
+    #[serde(rename = "UPDATE")]
+    Update,
+    #[serde(rename = "DELETE")]
+    Delete,
+}
+
+impl TriggerEvent {
+    fn sql(self) -> &'static str {
+        match self {
+            TriggerEvent::Insert => "INSERT",
+            TriggerEvent::Update => "UPDATE",
+            TriggerEvent::Delete => "DELETE",
         }
     }
 }
@@ -71,6 +134,9 @@ pub enum Change {
         name: String,
         columns: Vec<String>,
         unique: bool,
+        /// None: the engine's default (btree).
+        #[serde(default)]
+        method: Option<IndexMethod>,
     },
     DropIndex {
         name: String,
@@ -86,6 +152,43 @@ pub enum Change {
     },
     DropForeignKey {
         name: String,
+    },
+    /// MySQL: puts column `name` (as it's called once the other changes ran) right after `after`, or first. All moves
+    /// go into one ALTER TABLE, after the other changes, so the table is rebuilt once.
+    MoveColumn {
+        name: String,
+        after: Option<String>,
+    },
+    /// `expression` is SQL the user typed, inserted as written, like a default.
+    AddCheck {
+        name: String,
+        expression: String,
+    },
+    DropCheck {
+        name: String,
+    },
+    /// A row trigger. `body` is SQL the user typed: MySQL's and SQLite's statements (SQLite's go inside BEGIN … END),
+    /// or the function Postgres calls, like `audit()`.
+    AddTrigger {
+        name: String,
+        timing: TriggerTiming,
+        events: Vec<TriggerEvent>,
+        body: String,
+    },
+    DropTrigger {
+        name: String,
+    },
+    /// Replaces an existing table's primary key with one on `columns`, in order; none when empty.
+    SetPrimaryKey {
+        columns: Vec<String>,
+    },
+    /// MySQL's storage engine (`InnoDB`…).
+    Engine {
+        engine: String,
+    },
+    /// MySQL's default collation for the table's new columns.
+    Collation {
+        collation: String,
     },
     Rename {
         to: String,
@@ -190,13 +293,17 @@ fn idents(d: Dialect, names: &[String]) -> String {
     names.iter().map(|n| d.ident(n)).collect::<Vec<_>>().join(", ")
 }
 
-/// A column definition for CREATE TABLE, ADD COLUMN or MySQL's CHANGE COLUMN.
-fn column_sql(d: Dialect, c: &ColumnDef, on_update: Option<&str>) -> Result<String> {
-    let mut s = format!(
-        "{} {}",
-        d.ident(not_blank(&c.name, "every column needs a name")?),
-        not_blank(&c.data_type, "every column needs a type")?
-    );
+/// A column definition for CREATE TABLE, ADD COLUMN or MySQL's CHANGE and MODIFY COLUMN. `kept` is the column as it
+/// is when MySQL restates it: its ON UPDATE comes along, and its collation while the type stays the same.
+fn column_sql(d: Dialect, c: &ColumnDef, kept: Option<&ColumnInfo>) -> Result<String> {
+    let data_type = not_blank(&c.data_type, "every column needs a type")?;
+    let mut s = format!("{} {data_type}", d.ident(not_blank(&c.name, "every column needs a name")?));
+    let collation = kept.filter(|k| k.data_type.eq_ignore_ascii_case(data_type)).and_then(|k| k.collation.as_deref());
+    if let (Dialect::My, Some(collation)) = (d, collation) {
+        s.push_str(" COLLATE ");
+        s.push_str(mysql_option(d, collation)?);
+    }
+    let on_update = kept.and_then(|k| k.on_update.as_deref());
     if c.auto_increment && d == Dialect::Pg {
         s.push_str(" GENERATED BY DEFAULT AS IDENTITY");
     }
@@ -219,6 +326,107 @@ fn column_sql(d: Dialect, c: &ColumnDef, on_update: Option<&str>) -> Result<Stri
         }
     }
     Ok(s)
+}
+
+fn index_sql(
+    d: Dialect,
+    t: &str,
+    name: &str,
+    columns: &[String],
+    unique: bool,
+    method: Option<IndexMethod>,
+) -> Result<String> {
+    if columns.is_empty() {
+        return Err(Error::Invalid("an index needs at least one column"));
+    }
+    let unique = if unique { "UNIQUE " } else { "" };
+    let name = d.ident(not_blank(name, "every index needs a name")?);
+    let cols = idents(d, columns);
+    Ok(match (d, method.map(|m| m.sql(d)).transpose()?) {
+        (Dialect::Pg, Some(m)) => format!("CREATE {unique}INDEX {name} ON {t} USING {m} ({cols})"),
+        (Dialect::My, Some(m)) => format!("CREATE {unique}INDEX {name} ON {t} ({cols}) USING {m}"),
+        _ => format!("CREATE {unique}INDEX {name} ON {t} ({cols})"),
+    })
+}
+
+fn check_sql(d: Dialect, name: &str, expression: &str) -> Result<String> {
+    let expression = not_blank(expression, "a check needs an expression")?;
+    let named = if name.trim().is_empty() { String::new() } else { format!("CONSTRAINT {} ", d.ident(name.trim())) };
+    Ok(format!("{named}CHECK ({expression})"))
+}
+
+fn trigger_sql(
+    d: Dialect,
+    t: &str,
+    name: &str,
+    timing: TriggerTiming,
+    events: &[TriggerEvent],
+    body: &str,
+) -> Result<String> {
+    let name = d.ident(not_blank(name, "every trigger needs a name")?);
+    let body = not_blank(body, "a trigger needs something to run")?;
+    let timing = match timing {
+        TriggerTiming::Before => "BEFORE",
+        TriggerTiming::After => "AFTER",
+    };
+    let one = match events {
+        [] => return Err(Error::Invalid("a trigger needs an event to fire on")),
+        [e] => Some(e.sql()),
+        _ => None,
+    };
+    Ok(match d {
+        Dialect::Pg => {
+            let events = events.iter().map(|e| e.sql()).collect::<Vec<_>>().join(" OR ");
+            format!("CREATE TRIGGER {name} {timing} {events} ON {t} FOR EACH ROW EXECUTE FUNCTION {body}")
+        }
+        Dialect::My => {
+            let event = one.ok_or(Error::Invalid("MySQL and SQLite triggers fire on one event"))?;
+            format!("CREATE TRIGGER {name} {timing} {event} ON {t} FOR EACH ROW {body}")
+        }
+        Dialect::Lite => {
+            let event = one.ok_or(Error::Invalid("MySQL and SQLite triggers fire on one event"))?;
+            let end = if body.ends_with(';') { "" } else { ";" };
+            format!("CREATE TRIGGER {name} {timing} {event} ON {t} FOR EACH ROW BEGIN\n  {body}{end}\nEND")
+        }
+    })
+}
+
+fn drop_trigger_sql(d: Dialect, t: &str, name: &str) -> String {
+    match d {
+        Dialect::Pg => format!("DROP TRIGGER {} ON {t}", d.ident(name)),
+        _ => format!("DROP TRIGGER {}", d.ident(name)),
+    }
+}
+
+/// The statements that put the primary key on `columns` (none when empty) in place of the current one.
+fn primary_key_sql(d: Dialect, t: &str, current: &Structure, columns: &[String]) -> Result<Vec<String>> {
+    let old = current.indexes.iter().find(|i| i.primary);
+    let add = (!columns.is_empty()).then(|| format!("ADD PRIMARY KEY ({})", idents(d, columns)));
+    Ok(match d {
+        Dialect::Lite => return Err(Error::SqliteRebuild("change the primary key")),
+        // One statement, so MySQL (which commits DDL as it goes) never leaves the table without its key.
+        Dialect::My => {
+            let parts: Vec<String> = old.map(|_| "DROP PRIMARY KEY".to_string()).into_iter().chain(add).collect();
+            if parts.is_empty() { vec![] } else { vec![format!("ALTER TABLE {t} {}", parts.join(", "))] }
+        }
+        Dialect::Pg => old
+            .map(|i| format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(&i.name)))
+            .into_iter()
+            .chain(add.map(|a| format!("ALTER TABLE {t} {a}")))
+            .collect(),
+    })
+}
+
+/// A MySQL table option's value (an engine or a collation). It can't be a bound parameter, so it must be a plain name.
+fn mysql_option(d: Dialect, value: &str) -> Result<&str> {
+    if d != Dialect::My {
+        return Err(Error::Invalid("only MySQL tables have an engine and a collation"));
+    }
+    let value = value.trim();
+    if value.is_empty() || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(Error::Invalid("an engine or collation is a name of letters, digits and _"));
+    }
+    Ok(value)
 }
 
 fn foreign_key_sql(d: Dialect, name: &str, columns: &[String], ref_table: &str, ref_columns: &[String]) -> String {
@@ -245,6 +453,7 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
     };
     let mut out = Vec::new();
     let mut rename = None;
+    let mut moves = Vec::new();
     for change in changes {
         match change {
             Change::AddColumn { column } => {
@@ -268,29 +477,10 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                     .ok_or(Error::Invalid("a changed column no longer exists; reopen the structure"))?;
                 out.extend(modify_column_sql(d, &t, cur, column)?);
             }
-            Change::AddIndex { name, columns, unique } => {
-                if columns.is_empty() {
-                    return Err(Error::Invalid("an index needs at least one column"));
-                }
-                let unique = if *unique { "UNIQUE " } else { "" };
-                let name = d.ident(not_blank(name, "every index needs a name")?);
-                out.push(format!("CREATE {unique}INDEX {name} ON {t} ({})", idents(d, columns)));
+            Change::AddIndex { name, columns, unique, method } => {
+                out.push(index_sql(d, &t, name, columns, *unique, *method)?);
             }
-            Change::DropIndex { name } => {
-                let index = current.indexes.iter().find(|i| &i.name == name);
-                let constraint = index.is_some_and(|i| i.constraint);
-                out.push(match d {
-                    Dialect::Pg if constraint => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
-                    // An index lives in its table's schema.
-                    Dialect::Pg => match table.split_once('.') {
-                        Some((schema, _)) => format!("DROP INDEX {}.{}", d.ident(schema), d.ident(name)),
-                        None => format!("DROP INDEX {}", d.ident(name)),
-                    },
-                    Dialect::My if index.is_some_and(|i| i.primary) => format!("ALTER TABLE {t} DROP PRIMARY KEY"),
-                    Dialect::My => format!("DROP INDEX {} ON {t}", d.ident(name)),
-                    Dialect::Lite => format!("DROP INDEX {}", d.ident(name)),
-                });
-            }
+            Change::DropIndex { name } => out.push(drop_index_sql(d, table, &t, current, name)),
             Change::AddForeignKey { name, columns, ref_table, ref_columns, on_update, on_delete } => {
                 if d == Dialect::Lite {
                     return Err(Error::SqliteRebuild("add a foreign key"));
@@ -310,21 +500,61 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 Dialect::My => format!("ALTER TABLE {t} DROP FOREIGN KEY {}", d.ident(name)),
                 Dialect::Lite => return Err(Error::SqliteRebuild("drop a foreign key")),
             }),
-            Change::Rename { to } => rename = Some(rename_sql(d, &t, not_blank(to, "the table needs a name")?)),
-            Change::Comment { comment } => {
-                let comment = blank_is_none(comment.as_ref());
-                out.push(match d {
-                    Dialect::Pg => {
-                        format!("COMMENT ON TABLE {t} IS {}", comment.map_or_else(|| "NULL".into(), |c| d.literal(c)))
-                    }
-                    Dialect::My => format!("ALTER TABLE {t} COMMENT = {}", d.literal(comment.unwrap_or_default())),
-                    Dialect::Lite => return Err(Error::Invalid("SQLite tables have no comments")),
-                });
+            Change::AddCheck { name, expression } => {
+                if d == Dialect::Lite {
+                    return Err(Error::SqliteRebuild("add a check constraint"));
+                }
+                out.push(format!("ALTER TABLE {t} ADD {}", check_sql(d, name, expression)?));
             }
+            Change::DropCheck { name } => out.push(match d {
+                Dialect::Lite => return Err(Error::SqliteRebuild("drop a check constraint")),
+                // MariaDB and MySQL 8.0.19+ both read DROP CONSTRAINT; MySQL's own DROP CHECK isn't MariaDB's.
+                _ => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
+            }),
+            Change::AddTrigger { name, timing, events, body } => {
+                out.push(trigger_sql(d, &t, name, *timing, events, body)?);
+            }
+            Change::DropTrigger { name } => out.push(drop_trigger_sql(d, &t, name)),
+            Change::SetPrimaryKey { columns } => out.extend(primary_key_sql(d, &t, current, columns)?),
+            Change::Engine { engine } => out.push(format!("ALTER TABLE {t} ENGINE = {}", mysql_option(d, engine)?)),
+            Change::Collation { collation } => {
+                out.push(format!("ALTER TABLE {t} COLLATE = {}", mysql_option(d, collation)?));
+            }
+            Change::MoveColumn { name, after } => moves.push(move_clause(d, current, changes, name, after.as_deref())?),
+            Change::Rename { to } => rename = Some(rename_sql(d, &t, not_blank(to, "the table needs a name")?)),
+            Change::Comment { comment } => out.push(comment_sql(d, &t, blank_is_none(comment.as_ref()))?),
         }
+    }
+    if !moves.is_empty() {
+        out.push(format!("ALTER TABLE {t} {}", moves.join(", ")));
     }
     out.extend(rename);
     Ok(out)
+}
+
+/// `table` as given (Postgres: schema-qualified), `t` as an identifier.
+fn drop_index_sql(d: Dialect, table: &str, t: &str, current: &Structure, name: &str) -> String {
+    let index = current.indexes.iter().find(|i| i.name == name);
+    let constraint = index.is_some_and(|i| i.constraint);
+    match d {
+        Dialect::Pg if constraint => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
+        // An index lives in its table's schema.
+        Dialect::Pg => match table.split_once('.') {
+            Some((schema, _)) => format!("DROP INDEX {}.{}", d.ident(schema), d.ident(name)),
+            None => format!("DROP INDEX {}", d.ident(name)),
+        },
+        Dialect::My if index.is_some_and(|i| i.primary) => format!("ALTER TABLE {t} DROP PRIMARY KEY"),
+        Dialect::My => format!("DROP INDEX {} ON {t}", d.ident(name)),
+        Dialect::Lite => format!("DROP INDEX {}", d.ident(name)),
+    }
+}
+
+fn comment_sql(d: Dialect, t: &str, comment: Option<&str>) -> Result<String> {
+    Ok(match d {
+        Dialect::Pg => format!("COMMENT ON TABLE {t} IS {}", comment.map_or_else(|| "NULL".into(), |c| d.literal(c))),
+        Dialect::My => format!("ALTER TABLE {t} COMMENT = {}", d.literal(comment.unwrap_or_default())),
+        Dialect::Lite => return Err(Error::Invalid("SQLite tables have no comments")),
+    })
 }
 
 fn rename_sql(d: Dialect, t: &str, to: &str) -> String {
@@ -333,6 +563,59 @@ fn rename_sql(d: Dialect, t: &str, to: &str) -> String {
     match d {
         Dialect::My => format!("RENAME TABLE {t} TO {}", d.ident(to)),
         _ => format!("ALTER TABLE {t} RENAME TO {}", d.ident(to)),
+    }
+}
+
+/// Restating a MySQL generated column would drop its expression, turning it into a plain column.
+const GENERATED: &str = "a generated column can't be changed or moved here yet; use ALTER TABLE in a SQL tab";
+
+/// A MySQL column move: the column restated in full, as it will be once the other changes ran (added, changed, or as
+/// it is), placed after `after` or first.
+fn move_clause(d: Dialect, current: &Structure, changes: &[Change], name: &str, after: Option<&str>) -> Result<String> {
+    if d != Dialect::My {
+        return Err(if d == Dialect::Lite {
+            Error::SqliteRebuild("reorder columns")
+        } else {
+            Error::Invalid("Postgres can't reorder columns")
+        });
+    }
+    let added = changes.iter().find_map(|c| match c {
+        Change::AddColumn { column } if column.name.trim() == name => Some(column.clone()),
+        _ => None,
+    });
+    let modified = changes.iter().find_map(|c| match c {
+        Change::ModifyColumn { from, column } if column.name.trim() == name => Some((from.as_str(), column.clone())),
+        _ => None,
+    });
+    let (def, kept) = match (added, modified) {
+        (Some(column), _) => (column, None),
+        (None, Some((from, column))) => (column, current.columns.iter().find(|c| c.name == from)),
+        (None, None) => {
+            let cur = current
+                .columns
+                .iter()
+                .find(|c| c.name == name)
+                .ok_or(Error::Invalid("a moved column no longer exists; reopen the structure"))?;
+            (column_def(cur), Some(cur))
+        }
+    };
+    if kept.is_some_and(|k| k.generated) {
+        return Err(Error::Invalid(GENERATED));
+    }
+    let place = after.map_or_else(|| "FIRST".to_string(), |a| format!("AFTER {}", d.ident(a)));
+    Ok(format!("MODIFY COLUMN {} {place}", column_sql(d, &def, kept)?))
+}
+
+/// A column as it is, as the definition the structure editor would send for it.
+fn column_def(c: &ColumnInfo) -> ColumnDef {
+    ColumnDef {
+        name: c.name.clone(),
+        data_type: c.data_type.clone(),
+        nullable: c.nullable,
+        default: c.default.clone(),
+        comment: c.comment.clone(),
+        auto_increment: c.auto_increment,
+        primary: c.primary,
     }
 }
 
@@ -355,7 +638,10 @@ fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) ->
     match d {
         Dialect::My => {
             if renamed || retyped || renulled || redefaulted || recommented || reincremented {
-                let def = column_sql(d, want, cur.on_update.as_deref())?;
+                if cur.generated {
+                    return Err(Error::Invalid(GENERATED));
+                }
+                let def = column_sql(d, want, Some(cur))?;
                 out.push(format!("ALTER TABLE {t} CHANGE COLUMN {} {def}", d.ident(&cur.name)));
             }
         }
@@ -403,12 +689,14 @@ fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) ->
     Ok(out)
 }
 
-/// CREATE TABLE with the added columns and foreign keys inline, then its indexes and (Postgres) comments.
+/// CREATE TABLE with the added columns, foreign keys and checks inline (MySQL: its engine and collation too), then
+/// its indexes and (Postgres) comments.
 fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
     let mut defs = Vec::new();
     let mut primary = Vec::new();
     let mut after = Vec::new();
     let mut table_comment = None;
+    let mut options = Vec::new();
     for change in changes {
         match change {
             Change::AddColumn { column } => {
@@ -428,14 +716,15 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
                     _ => {}
                 }
             }
-            Change::AddIndex { name, columns, unique } => {
-                if columns.is_empty() {
-                    return Err(Error::Invalid("an index needs at least one column"));
-                }
-                let unique = if *unique { "UNIQUE " } else { "" };
-                let name = d.ident(not_blank(name, "every index needs a name")?);
-                after.push(format!("CREATE {unique}INDEX {name} ON {t} ({})", idents(d, columns)));
+            Change::AddIndex { name, columns, unique, method } => {
+                after.push(index_sql(d, t, name, columns, *unique, *method)?);
             }
+            Change::AddCheck { name, expression } => defs.push(check_sql(d, name, expression)?),
+            Change::AddTrigger { name, timing, events, body } => {
+                after.push(trigger_sql(d, t, name, *timing, events, body)?);
+            }
+            Change::Engine { engine } => options.push(format!(" ENGINE = {}", mysql_option(d, engine)?)),
+            Change::Collation { collation } => options.push(format!(" COLLATE = {}", mysql_option(d, collation)?)),
             Change::AddForeignKey { name, columns, ref_table, ref_columns, on_update, on_delete } => {
                 if columns.is_empty() || columns.len() != ref_columns.len() {
                     return Err(Error::Invalid("a foreign key needs as many referenced columns as columns"));
@@ -448,7 +737,11 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
                 ));
             }
             Change::Comment { comment } => table_comment = blank_is_none(comment.as_ref()),
-            _ => return Err(Error::Invalid("a new table can only have columns, indexes and foreign keys added")),
+            _ => {
+                return Err(Error::Invalid(
+                    "a new table can only have columns, indexes, foreign keys, checks and triggers",
+                ));
+            }
         }
     }
     if !changes.iter().any(|c| matches!(c, Change::AddColumn { .. })) {
@@ -459,7 +752,7 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
         let n = changes.iter().filter(|c| matches!(c, Change::AddColumn { .. })).count();
         defs.insert(n, format!("PRIMARY KEY ({})", idents(d, &primary)));
     }
-    let mut create = format!("CREATE TABLE {t} (\n  {}\n)", defs.join(",\n  "));
+    let mut create = format!("CREATE TABLE {t} (\n  {}\n){}", defs.join(",\n  "), options.concat());
     match (d, table_comment) {
         (Dialect::My, Some(c)) => create = format!("{create} COMMENT = {}", d.literal(c)),
         (Dialect::Pg, Some(c)) => after.insert(0, format!("COMMENT ON TABLE {t} IS {}", d.literal(c))),
@@ -556,7 +849,46 @@ impl Conn {
     /// The statements for structure `changes` to `table`; `create` builds a new table instead.
     pub async fn alter_sql(&mut self, table: &str, create: bool, changes: &[Change]) -> Result<Vec<String>> {
         let current = if create { None } else { Some(self.structure(table).await?) };
+        if let (Conn::Lite(_), Some(cur)) = (&*self, &current)
+            && rebuild::needed(cur, changes)
+        {
+            let sources = self.rebuild_sources(table).await?;
+            return rebuild::rebuild_sql(table, cur, changes, &sources);
+        }
         alter_sql(self.dialect(), table, current.as_ref(), changes)
+    }
+
+    /// What SQLite's table rebuild reads: the table's CREATE statement, its indexes and triggers, and whether foreign
+    /// keys are on.
+    async fn rebuild_sources(&mut self, table: &str) -> Result<rebuild::Sources> {
+        let t = [Some(table)];
+        let pairs = |rows: Vec<Vec<Option<String>>>| -> Vec<(String, String)> {
+            rows.into_iter().filter_map(|mut r| Some((r.get_mut(0)?.take()?, r.get_mut(1)?.take()?))).collect()
+        };
+        let create = self
+            .fetch_with("select sql from sqlite_master where type = 'table' and name = $1", &t)
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|mut r| r.pop().flatten())
+            .ok_or(Error::Invalid("no such table"))?;
+        let indexes = pairs(
+            self.fetch_with(
+                "select name, sql from sqlite_master where type = 'index' and tbl_name = $1 and sql is not null",
+                &t,
+            )
+            .await?,
+        );
+        let triggers = pairs(
+            self.fetch_with("select name, sql from sqlite_master where type = 'trigger' and tbl_name = $1", &t).await?,
+        );
+        let foreign_keys_on = self
+            .fetch_with("pragma foreign_keys", &[])
+            .await?
+            .first()
+            .and_then(|r| r.first())
+            .is_some_and(|v| v.as_deref() == Some("1"));
+        Ok(rebuild::Sources { create, indexes, triggers, foreign_keys_on })
     }
 
     pub(crate) async fn is_view(&mut self, table: &str) -> Result<bool> {
@@ -863,6 +1195,30 @@ impl Conn {
     /// statement as it goes, so it runs them one by one and, on an error, says which had already run. A single
     /// statement runs on its own: it needs no transaction, and Postgres's CREATE and DROP DATABASE refuse one.
     pub async fn run_ddl(&mut self, statements: &[String]) -> Result<()> {
+        // SQLite ignores PRAGMA foreign_keys inside a transaction: a rebuild's first and last ones run around it, and
+        // the last (turning them back on) runs whatever happened in between.
+        let lite = matches!(self, Conn::Lite(_));
+        let fk = |s: &&String| lite && s.starts_with("PRAGMA foreign_keys");
+        let (pre, post) =
+            (statements.iter().take_while(|s| fk(s)).count(), statements.iter().rev().take_while(|s| fk(s)).count());
+        if pre + post > 0 && pre + post < statements.len() {
+            for s in &statements[..pre] {
+                self.query(s).await?;
+            }
+            let r = self.run_in_transaction(&statements[pre..statements.len() - post]).await;
+            for s in &statements[statements.len() - post..] {
+                let restored = self.query(s).await;
+                if r.is_ok() {
+                    restored?;
+                }
+            }
+            return r;
+        }
+        self.run_in_transaction(statements).await
+    }
+
+    /// [`Conn::run_ddl`] without the foreign key pragmas around it.
+    async fn run_in_transaction(&mut self, statements: &[String]) -> Result<()> {
         if !matches!(self, Conn::My(_)) && statements.len() > 1 {
             self.query("begin").await?;
             for s in statements {
@@ -920,11 +1276,12 @@ fn without_fk_checks(ignore: bool, statement: String) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Change, ColumnDef, DbOp, Rule, TableOp, alter_sql, create_database_sql, pg_create_sql, sqlite_renamed_create,
+        Change, ColumnDef, DbOp, IndexMethod, Rule, TableOp, TriggerEvent, TriggerTiming, alter_sql,
+        create_database_sql, pg_create_sql, sqlite_renamed_create,
     };
     use crate::db::{Conn, Dialect, Engine, Options};
     use crate::error::Error;
-    use crate::structure::{ColumnInfo, ForeignKeyInfo, IndexInfo, NamedDef, Structure};
+    use crate::structure::{ColumnInfo, ForeignKeyInfo, IndexInfo, NamedDef, Structure, TriggerInfo};
     use crate::tls::Tls;
 
     fn col(name: &str, data_type: &str) -> ColumnDef {
@@ -940,20 +1297,19 @@ mod tests {
     }
 
     fn info(name: &str, data_type: &str) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            data_type: data_type.into(),
-            nullable: true,
-            default: None,
-            comment: None,
-            auto_increment: false,
-            primary: false,
-            on_update: None,
-        }
+        ColumnInfo { name: name.into(), data_type: data_type.into(), nullable: true, ..ColumnInfo::default() }
     }
 
     fn structure(columns: Vec<ColumnInfo>) -> Structure {
-        Structure { columns, indexes: vec![], foreign_keys: vec![], checks: vec![], triggers: vec![], comment: None }
+        Structure {
+            columns,
+            indexes: vec![],
+            foreign_keys: vec![],
+            checks: vec![],
+            triggers: vec![],
+            comment: None,
+            options: None,
+        }
     }
 
     #[test]
@@ -1026,6 +1382,258 @@ mod tests {
         );
     }
 
+    fn add_index(method: Option<IndexMethod>) -> Change {
+        Change::AddIndex { name: "i".into(), columns: vec!["a".into()], unique: false, method }
+    }
+
+    fn primary_index(name: &str) -> IndexInfo {
+        IndexInfo {
+            name: name.into(),
+            columns: vec!["id".into()],
+            unique: true,
+            primary: true,
+            method: None,
+            constraint: true,
+        }
+    }
+
+    #[test]
+    fn alter_sql_should_put_the_index_method_where_each_engine_wants_it() {
+        let current = structure(vec![info("a", "text")]);
+        let pg = alter_sql(Dialect::Pg, "s.t", Some(&current), &[add_index(Some(IndexMethod::Gin))]).unwrap();
+        assert_eq!(pg, [r#"CREATE INDEX "i" ON "s"."t" USING gin ("a")"#]);
+        let my = alter_sql(Dialect::My, "t", Some(&current), &[add_index(Some(IndexMethod::Hash))]).unwrap();
+        assert_eq!(my, ["CREATE INDEX `i` ON `t` (`a`) USING HASH"]);
+        let default = alter_sql(Dialect::Lite, "t", Some(&current), &[add_index(None)]).unwrap();
+        assert_eq!(default, [r#"CREATE INDEX "i" ON "t" ("a")"#]);
+    }
+
+    #[test]
+    fn alter_sql_should_refuse_an_index_method_the_engine_lacks() {
+        let current = structure(vec![info("a", "text")]);
+        assert!(matches!(
+            alter_sql(Dialect::My, "t", Some(&current), &[add_index(Some(IndexMethod::Gist))]),
+            Err(Error::Invalid(_))
+        ));
+        assert!(matches!(
+            alter_sql(Dialect::Lite, "t", Some(&current), &[add_index(Some(IndexMethod::Btree))]),
+            Err(Error::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn alter_sql_should_add_and_drop_named_checks() {
+        let current = structure(vec![info("a", "integer")]);
+        let changes = [
+            Change::AddCheck { name: "a_positive".into(), expression: "a > 0".into() },
+            Change::DropCheck { name: "old check".into() },
+        ];
+        assert_eq!(
+            alter_sql(Dialect::Pg, "t", Some(&current), &changes).unwrap(),
+            [
+                r#"ALTER TABLE "t" ADD CONSTRAINT "a_positive" CHECK (a > 0)"#,
+                r#"ALTER TABLE "t" DROP CONSTRAINT "old check""#
+            ]
+        );
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &changes).unwrap(),
+            [
+                "ALTER TABLE `t` ADD CONSTRAINT `a_positive` CHECK (a > 0)",
+                "ALTER TABLE `t` DROP CONSTRAINT `old check`"
+            ]
+        );
+    }
+
+    #[test]
+    fn alter_sql_should_refuse_a_blank_check_and_sqlite_check_changes() {
+        let current = structure(vec![info("a", "integer")]);
+        let blank = [Change::AddCheck { name: String::new(), expression: "  ".into() }];
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &blank), Err(Error::Invalid(_))));
+        let add = [Change::AddCheck { name: String::new(), expression: "a > 0".into() }];
+        assert!(matches!(alter_sql(Dialect::Lite, "t", Some(&current), &add), Err(Error::SqliteRebuild(_))));
+    }
+
+    #[test]
+    fn alter_sql_should_replace_a_mysql_primary_key_in_one_statement() {
+        let mut current = structure(vec![info("id", "int"), info("b", "int")]);
+        current.indexes = vec![primary_index("PRIMARY")];
+        let set = |columns: &[&str]| [Change::SetPrimaryKey { columns: columns.iter().map(|c| (*c).into()).collect() }];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &set(&["id", "b"])).unwrap(),
+            ["ALTER TABLE `t` DROP PRIMARY KEY, ADD PRIMARY KEY (`id`, `b`)"]
+        );
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &set(&[])).unwrap(),
+            ["ALTER TABLE `t` DROP PRIMARY KEY"]
+        );
+        current.indexes.clear();
+        assert_eq!(alter_sql(Dialect::My, "t", Some(&current), &set(&[])).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn alter_sql_should_drop_the_postgres_primary_key_constraint_by_name_then_add_the_new_one() {
+        let mut current = structure(vec![info("id", "int"), info("b", "int")]);
+        current.indexes = vec![primary_index("t_pkey")];
+        let changes = [Change::SetPrimaryKey { columns: vec!["b".into()] }];
+        assert_eq!(
+            alter_sql(Dialect::Pg, "s.t", Some(&current), &changes).unwrap(),
+            [r#"ALTER TABLE "s"."t" DROP CONSTRAINT "t_pkey""#, r#"ALTER TABLE "s"."t" ADD PRIMARY KEY ("b")"#]
+        );
+        assert!(matches!(alter_sql(Dialect::Lite, "t", Some(&current), &changes), Err(Error::SqliteRebuild(_))));
+    }
+
+    fn add_trigger(events: Vec<TriggerEvent>, body: &str) -> Change {
+        Change::AddTrigger { name: "touch".into(), timing: TriggerTiming::Before, events, body: body.into() }
+    }
+
+    #[test]
+    fn alter_sql_should_write_each_engines_row_trigger() {
+        let current = structure(vec![info("a", "int")]);
+        let pg = [add_trigger(vec![TriggerEvent::Insert, TriggerEvent::Update], "touch()")];
+        assert_eq!(
+            alter_sql(Dialect::Pg, "s.t", Some(&current), &pg).unwrap(),
+            [r#"CREATE TRIGGER "touch" BEFORE INSERT OR UPDATE ON "s"."t" FOR EACH ROW EXECUTE FUNCTION touch()"#]
+        );
+        let my = [add_trigger(vec![TriggerEvent::Delete], "SET @n = @n + 1")];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &my).unwrap(),
+            ["CREATE TRIGGER `touch` BEFORE DELETE ON `t` FOR EACH ROW SET @n = @n + 1"]
+        );
+        let lite = [add_trigger(vec![TriggerEvent::Insert], "select 1")];
+        assert_eq!(
+            alter_sql(Dialect::Lite, "t", Some(&current), &lite).unwrap(),
+            ["CREATE TRIGGER \"touch\" BEFORE INSERT ON \"t\" FOR EACH ROW BEGIN\n  select 1;\nEND"]
+        );
+    }
+
+    #[test]
+    fn alter_sql_should_refuse_several_events_on_mysql_and_sqlite_and_a_blank_body() {
+        let current = structure(vec![info("a", "int")]);
+        let two = [add_trigger(vec![TriggerEvent::Insert, TriggerEvent::Update], "select 1")];
+        assert!(matches!(alter_sql(Dialect::My, "t", Some(&current), &two), Err(Error::Invalid(_))));
+        assert!(matches!(alter_sql(Dialect::Lite, "t", Some(&current), &two), Err(Error::Invalid(_))));
+        let blank = [add_trigger(vec![TriggerEvent::Insert], " ")];
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &blank), Err(Error::Invalid(_))));
+        let none = [add_trigger(vec![], "f()")];
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &none), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn alter_sql_should_drop_a_postgres_trigger_on_its_table() {
+        let current = structure(vec![info("a", "int")]);
+        let drop = [Change::DropTrigger { name: "touch".into() }];
+        assert_eq!(
+            alter_sql(Dialect::Pg, "s.t", Some(&current), &drop).unwrap(),
+            [r#"DROP TRIGGER "touch" ON "s"."t""#]
+        );
+        assert_eq!(alter_sql(Dialect::My, "t", Some(&current), &drop).unwrap(), ["DROP TRIGGER `touch`"]);
+    }
+
+    fn move_to(name: &str, after: Option<&str>) -> Change {
+        Change::MoveColumn { name: name.into(), after: after.map(Into::into) }
+    }
+
+    #[test]
+    fn alter_sql_should_move_mysql_columns_in_one_statement_keeping_their_definition() {
+        let current = structure(vec![
+            ColumnInfo { nullable: false, ..info("id", "int") },
+            ColumnInfo {
+                collation: Some("utf8mb4_bin".into()),
+                comment: Some("it's".into()),
+                ..info("name", "varchar(20)")
+            },
+            ColumnInfo { on_update: Some("CURRENT_TIMESTAMP".into()), ..info("at", "timestamp") },
+        ]);
+        let changes = [move_to("at", None), move_to("name", Some("id"))];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &changes).unwrap(),
+            ["ALTER TABLE `t` MODIFY COLUMN `at` timestamp NULL ON UPDATE CURRENT_TIMESTAMP FIRST, \
+              MODIFY COLUMN `name` varchar(20) COLLATE utf8mb4_bin NULL COMMENT 'it''s' AFTER `id`"]
+        );
+    }
+
+    #[test]
+    fn alter_sql_should_move_a_changed_or_added_column_as_it_will_be() {
+        let current = structure(vec![info("id", "int"), info("old", "varchar(5)")]);
+        let changes = [
+            Change::ModifyColumn { from: "old".into(), column: col("new", "varchar(9)") },
+            Change::AddColumn { column: col("extra", "int") },
+            move_to("new", None),
+            move_to("extra", Some("new")),
+        ];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &changes).unwrap(),
+            [
+                "ALTER TABLE `t` CHANGE COLUMN `old` `new` varchar(9) NULL",
+                "ALTER TABLE `t` ADD COLUMN `extra` int NULL",
+                "ALTER TABLE `t` MODIFY COLUMN `new` varchar(9) NULL FIRST, MODIFY COLUMN `extra` int NULL AFTER `new`",
+            ]
+        );
+    }
+
+    #[test]
+    fn alter_sql_should_keep_a_mysql_columns_collation_only_while_its_type_stays() {
+        let current = structure(vec![ColumnInfo { collation: Some("utf8mb4_bin".into()), ..info("a", "varchar(5)") }]);
+        let longer = [Change::ModifyColumn {
+            from: "a".into(),
+            column: ColumnDef { nullable: false, ..col("a", "varchar(5)") },
+        }];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &longer).unwrap(),
+            ["ALTER TABLE `t` CHANGE COLUMN `a` `a` varchar(5) COLLATE utf8mb4_bin NOT NULL"]
+        );
+        let retyped = [Change::ModifyColumn { from: "a".into(), column: col("a", "int") }];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &retyped).unwrap(),
+            ["ALTER TABLE `t` CHANGE COLUMN `a` `a` int NULL"]
+        );
+    }
+
+    #[test]
+    fn alter_sql_should_refuse_to_restate_a_mysql_generated_column() {
+        let current = structure(vec![info("a", "int"), ColumnInfo { generated: true, ..info("g", "int") }]);
+        let moved = [move_to("g", None)];
+        assert!(matches!(alter_sql(Dialect::My, "t", Some(&current), &moved), Err(Error::Invalid(_))));
+        let changed = [Change::ModifyColumn { from: "g".into(), column: col("h", "int") }];
+        assert!(matches!(alter_sql(Dialect::My, "t", Some(&current), &changed), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn alter_sql_should_say_postgres_and_sqlite_cant_reorder_in_place() {
+        let current = structure(vec![info("a", "int"), info("b", "int")]);
+        let moved = [move_to("b", None)];
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &moved), Err(Error::Invalid(_))));
+        assert!(matches!(alter_sql(Dialect::Lite, "t", Some(&current), &moved), Err(Error::SqliteRebuild(_))));
+    }
+
+    #[test]
+    fn alter_sql_should_set_mysql_engine_and_collation_only_as_plain_names() {
+        let current = structure(vec![info("a", "int")]);
+        let ok = [Change::Engine { engine: "MyISAM".into() }, Change::Collation { collation: "utf8mb4_bin".into() }];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", Some(&current), &ok).unwrap(),
+            ["ALTER TABLE `t` ENGINE = MyISAM", "ALTER TABLE `t` COLLATE = utf8mb4_bin"]
+        );
+        let sneaky = [Change::Engine { engine: "InnoDB; drop table t".into() }];
+        assert!(matches!(alter_sql(Dialect::My, "t", Some(&current), &sneaky), Err(Error::Invalid(_))));
+        assert!(matches!(alter_sql(Dialect::Pg, "t", Some(&current), &ok), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn create_sql_should_put_checks_inline_and_mysql_options_after_the_columns() {
+        let changes = [
+            Change::AddColumn { column: ColumnDef { primary: true, nullable: false, ..col("id", "int") } },
+            Change::AddCheck { name: "id_positive".into(), expression: "id > 0".into() },
+            Change::Engine { engine: "InnoDB".into() },
+        ];
+        assert_eq!(
+            alter_sql(Dialect::My, "t", None, &changes).unwrap(),
+            [
+                "CREATE TABLE `t` (\n  `id` int NOT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `id_positive` CHECK (id > 0)\n) ENGINE = InnoDB"
+            ]
+        );
+    }
+
     #[test]
     fn alter_sql_should_run_the_table_rename_last() {
         let current = structure(vec![info("a", "text")]);
@@ -1083,7 +1691,12 @@ mod tests {
                 on_update: Rule::NoAction,
                 on_delete: Rule::Cascade,
             },
-            Change::AddIndex { name: "pets_owner_idx".into(), columns: vec!["owner".into()], unique: false },
+            Change::AddIndex {
+                name: "pets_owner_idx".into(),
+                columns: vec!["owner".into()],
+                unique: false,
+                method: None,
+            },
         ];
         assert_eq!(
             alter_sql(Dialect::Pg, "public.pets", None, &changes).unwrap(),
@@ -1131,8 +1744,16 @@ mod tests {
             {"op":"drop_column","name":"c"},{"op":"add_index","name":"i","columns":["id"],"unique":false},
             {"op":"drop_index","name":"j"},{"op":"add_foreign_key","name":"f","columns":["a"],"ref_table":"public.o",
             "ref_columns":["id"],"on_update":"NO ACTION","on_delete":"SET NULL"},{"op":"drop_foreign_key","name":"g"},
-            {"op":"rename","to":"u"},{"op":"comment","comment":null}]"#;
-        assert_eq!(serde_json::from_str::<Vec<Change>>(sent).unwrap().len(), 9);
+            {"op":"rename","to":"u"},{"op":"comment","comment":null},
+            {"op":"add_index","name":"k","columns":["id"],"unique":true,"method":"gin"},
+            {"op":"add_index","name":"m","columns":["id"],"unique":false,"method":null},
+            {"op":"add_check","name":"c","expression":"a > 0"},{"op":"drop_check","name":"d"},
+            {"op":"set_primary_key","columns":["id","a"]},{"op":"engine","engine":"InnoDB"},
+            {"op":"collation","collation":"utf8mb4_bin"},{"op":"move_column","name":"a","after":null},
+            {"op":"move_column","name":"b","after":"a"}]"#;
+        assert_eq!(serde_json::from_str::<Vec<Change>>(sent).unwrap().len(), 18);
+        let unknown_method = r#"[{"op":"add_index","name":"k","columns":["id"],"unique":true,"method":"rtree"}]"#;
+        assert!(serde_json::from_str::<Vec<Change>>(unknown_method).is_err());
         let ops = r#"[{"op":"truncate","table":"t","cascade":false,"restart_identity":true,"ignore_fk":false},
             {"op":"drop","table":"t","cascade":true,"ignore_fk":false},{"op":"clone","table":"t","to":"u","data":true},
             {"op":"rename","table":"t","to":"u"},{"op":"reset_auto_increment","table":"t"},
@@ -1184,8 +1805,13 @@ mod tests {
                 on_delete: "SET NULL".into(),
             }],
             checks: vec![NamedDef { name: "owner_positive".into(), definition: "CHECK (owner > 0)".into() }],
-            triggers: vec![NamedDef { name: "touch".into(), definition: "CREATE TRIGGER touch …".into() }],
+            triggers: vec![TriggerInfo {
+                name: "touch".into(),
+                definition: "CREATE TRIGGER touch …".into(),
+                ..TriggerInfo::default()
+            }],
             comment: Some("pets".into()),
+            options: None,
         };
         assert_eq!(
             pg_create_sql("public.pets", &s),
@@ -1248,7 +1874,7 @@ mod tests {
             let changes = [
                 Change::AddColumn { column: ColumnDef { default: Some("'?'".into()), ..col("kind", "text") } },
                 Change::ModifyColumn { from: "name".into(), column: col("label", "text") },
-                Change::AddIndex { name: "pets_kind".into(), columns: vec!["kind".into()], unique: true },
+                Change::AddIndex { name: "pets_kind".into(), columns: vec!["kind".into()], unique: true, method: None },
                 Change::Rename { to: "animals".into() },
             ];
             apply(&mut c, "pets", false, &changes).await.unwrap();
@@ -1261,6 +1887,167 @@ mod tests {
 
             apply(&mut c, "animals", false, &[Change::DropColumn { name: "label".into() }]).await.unwrap();
             assert_eq!(c.structure("animals").await.unwrap().columns.len(), 2);
+        });
+    }
+
+    /// pets(id, name, kind) with rows, a COLLATE and a CHECK the editor doesn't show, an index, a trigger and a view.
+    async fn sqlite_pets() -> Conn {
+        let mut c = sqlite().await;
+        c.query(
+            "create table pets(id integer primary key, name text collate nocase, kind text default 'dog', \
+             constraint name_short check (length(name) < 20), check (kind <> ''));
+             create index pets_name on pets(name);
+             create table log(n int);
+             create trigger pets_log after insert on pets begin insert into log values (new.id); end;
+             create view dogs as select * from pets where kind = 'dog';
+             insert into pets values (1, 'Rex', 'dog'), (2, 'Tom', null);",
+        )
+        .await
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_change_type_nullability_and_default_keeping_rows_and_the_rest() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            let kind = ColumnDef { default: Some("'cat'".into()), ..col("kind", "varchar(10)") };
+            apply(&mut c, "pets", false, &[Change::ModifyColumn { from: "kind".into(), column: kind }]).await.unwrap();
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(
+                (s.columns[2].data_type.as_str(), s.columns[2].default.as_deref()),
+                ("VARCHAR(10)", Some("'cat'"))
+            );
+            assert_eq!(c.query("select count(*) from pets").await.unwrap().rows[0][0].as_deref(), Some("2"));
+            assert!(s.indexes.iter().any(|i| i.name == "pets_name") && s.triggers.iter().any(|t| t.name == "pets_log"));
+            assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["name_short", "check 2"]);
+            let create =
+                c.query("select sql from sqlite_master where name = 'pets'").await.unwrap().rows[0][0].clone().unwrap();
+            assert!(create.contains("COLLATE nocase"), "{create}");
+            assert_eq!(
+                c.query("select count(*) from dogs").await.unwrap().rows[0][0].as_deref(),
+                Some("1"),
+                "the view still works"
+            );
+            c.query("insert into pets(name) values ('Kit')").await.unwrap();
+            assert_eq!(
+                c.query("select kind from pets where name = 'Kit'").await.unwrap().rows[0][0].as_deref(),
+                Some("cat")
+            );
+            assert_eq!(
+                c.query("select count(*) from log").await.unwrap().rows[0][0].as_deref(),
+                Some("3"),
+                "the trigger fired for Kit (the two rows before, not for the copy)"
+            );
+        });
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_leave_everything_as_it_was_when_the_rows_dont_fit() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            let not_null = ColumnDef { nullable: false, default: Some("'dog'".into()), ..col("kind", "text") };
+            let r =
+                apply(&mut c, "pets", false, &[Change::ModifyColumn { from: "kind".into(), column: not_null }]).await;
+            assert!(r.is_err(), "Tom's kind is NULL");
+            assert!(c.structure("pets").await.unwrap().columns[2].nullable);
+            assert_eq!(c.query("select count(*) from pets").await.unwrap().rows[0][0].as_deref(), Some("2"));
+            let tables = c.query("select count(*) from sqlite_master where name like 'pets__rebuild'").await.unwrap();
+            assert_eq!(tables.rows[0][0].as_deref(), Some("0"));
+        });
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_move_columns_and_rename_after() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            let changes = [
+                Change::ModifyColumn {
+                    from: "name".into(),
+                    column: ColumnDef { nullable: true, ..col("label", "varchar(20)") },
+                },
+                move_to("kind", Some("id")),
+            ];
+            apply(&mut c, "pets", false, &changes).await.unwrap();
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "kind", "label"]);
+            assert_eq!(
+                c.query("select label from pets where id = 1").await.unwrap().rows[0][0].as_deref(),
+                Some("Rex")
+            );
+            let index =
+                c.query("select sql from sqlite_master where name = 'pets_name'").await.unwrap().rows[0][0].clone();
+            assert!(index.unwrap().contains("label"), "the rename reached the index");
+        });
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_add_and_drop_checks_and_foreign_keys_without_cascading() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            c.query(
+                "pragma foreign_keys = on; create table toys(pet int references pets(id) on delete cascade); \
+                     insert into toys values (1)",
+            )
+            .await
+            .unwrap();
+            let changes = [
+                Change::DropCheck { name: "check 2".into() },
+                Change::AddCheck { name: "id_positive".into(), expression: "id > 0".into() },
+                Change::AddForeignKey {
+                    name: String::new(),
+                    columns: vec!["id".into()],
+                    ref_table: "log".into(),
+                    ref_columns: vec!["n".into()],
+                    on_update: Rule::NoAction,
+                    on_delete: Rule::NoAction,
+                },
+            ];
+            let sql = c.alter_sql("pets", false, &changes).await.unwrap();
+            assert_eq!(
+                (sql.first().map(String::as_str), sql.last().map(String::as_str)),
+                (Some("PRAGMA foreign_keys = OFF"), Some("PRAGMA foreign_keys = ON"))
+            );
+            c.run_ddl(&sql).await.unwrap();
+            assert_eq!(
+                c.query("select count(*) from toys").await.unwrap().rows[0][0].as_deref(),
+                Some("1"),
+                "nothing cascaded"
+            );
+            assert_eq!(c.query("pragma foreign_keys").await.unwrap().rows[0][0].as_deref(), Some("1"), "back on");
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["name_short", "id_positive"]);
+            let fk = s.foreign_keys[0].name.clone();
+            apply(&mut c, "pets", false, &[Change::DropForeignKey { name: fk }]).await.unwrap();
+            assert_eq!(c.structure("pets").await.unwrap().foreign_keys, []);
+        });
+    }
+
+    #[test]
+    fn sqlite_rebuild_should_change_the_primary_key() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            apply(&mut c, "pets", false, &[Change::SetPrimaryKey { columns: vec!["id".into(), "name".into()] }])
+                .await
+                .unwrap();
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(
+                s.columns.iter().filter(|c| c.primary).map(|c| c.name.as_str()).collect::<Vec<_>>(),
+                ["id", "name"]
+            );
+            assert_eq!(c.query("select count(*) from pets").await.unwrap().rows[0][0].as_deref(), Some("2"));
+        });
+    }
+
+    #[test]
+    fn sqlite_changes_alter_table_can_make_need_no_rebuild() {
+        tauri::async_runtime::block_on(async {
+            let mut c = sqlite_pets().await;
+            let sql = c
+                .alter_sql("pets", false, &[Change::ModifyColumn { from: "name".into(), column: col("label", "text") }])
+                .await
+                .unwrap();
+            assert_eq!(sql, [r#"ALTER TABLE "pets" RENAME COLUMN "name" TO "label""#]);
         });
     }
 
@@ -1423,6 +2210,176 @@ mod tests {
         Ok(())
     }
 
+    /// Checks, a new primary key, an index method, triggers and table options, in a scratch database dropped after.
+    #[test]
+    #[ignore = "needs a local MySQL 8.0.19+ or MariaDB; creates and drops a scratch database"]
+    fn local_mysql_checks_keys_triggers_and_options() {
+        tauri::async_runtime::block_on(async {
+            let url = "mysql://root@127.0.0.1:3306";
+            let mut c = Conn::open(Engine::Mysql, url, None, &Tls::default(), &Options::default(), None).await.unwrap();
+            let db = format!("dbm_keys_{}", std::process::id());
+            c.query(&format!("create database {db}")).await.unwrap();
+            c.use_database(&db).await.unwrap();
+            let outcome = mysql_keys_scenario(&mut c).await;
+            c.query(&format!("drop database {db}")).await.unwrap();
+            outcome.unwrap();
+        });
+    }
+
+    async fn mysql_keys_scenario(c: &mut Conn) -> crate::error::Result<()> {
+        let create = [
+            Change::AddColumn { column: ColumnDef { nullable: false, primary: true, ..col("id", "int") } },
+            Change::AddColumn { column: ColumnDef { nullable: false, ..col("n", "int") } },
+            Change::AddCheck { name: "n_small".into(), expression: "n < 100".into() },
+            Change::Engine { engine: "InnoDB".into() },
+            Change::Collation { collation: "utf8mb4_bin".into() },
+        ];
+        apply(c, "t", true, &create).await?;
+        let s = c.structure("t").await?;
+        assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["n_small"]);
+        let options = s.options.as_ref().expect("MySQL tables have options");
+        assert_eq!((options.engine.as_deref(), options.collation.as_deref()), (Some("InnoDB"), Some("utf8mb4_bin")));
+        assert!(options.engines.iter().any(|e| e == "InnoDB") && options.collations.iter().any(|c| c == "utf8mb4_bin"));
+        assert!(c.query("insert into t values (1, 500)").await.is_err(), "the check holds");
+
+        let changes = [
+            Change::DropCheck { name: "n_small".into() },
+            Change::AddCheck { name: "n_positive".into(), expression: "n > 0".into() },
+            Change::SetPrimaryKey { columns: vec!["id".into(), "n".into()] },
+            Change::AddIndex {
+                name: "t_n".into(),
+                columns: vec!["n".into()],
+                unique: false,
+                method: Some(IndexMethod::Btree),
+            },
+            Change::Collation { collation: "utf8mb4_general_ci".into() },
+        ];
+        apply(c, "t", false, &changes).await?;
+        let s = c.structure("t").await?;
+        assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["n_positive"]);
+        assert_eq!(
+            s.indexes.iter().find(|i| i.primary).map(|i| i.columns.clone()),
+            Some(vec!["id".into(), "n".into()])
+        );
+        assert_eq!(s.indexes.iter().find(|i| i.name == "t_n").and_then(|i| i.method.as_deref()), Some("BTREE"));
+        assert_eq!(s.options.and_then(|o| o.collation).as_deref(), Some("utf8mb4_general_ci"));
+        c.query("insert into t values (1, 500)").await?;
+
+        // A trigger with a compound body, then changed (drop and add) and dropped.
+        let body = "BEGIN\n  SET NEW.n = NEW.n + 1;\nEND";
+        let add = Change::AddTrigger {
+            name: "t_bump".into(),
+            timing: TriggerTiming::Before,
+            events: vec![TriggerEvent::Insert],
+            body: body.into(),
+        };
+        apply(c, "t", false, &[add]).await?;
+        c.query("insert into t values (2, 5)").await?;
+        assert_eq!(c.query("select n from t where id = 2").await?.rows[0][0].as_deref(), Some("6"));
+        let s = c.structure("t").await?;
+        let tr = &s.triggers[0];
+        assert_eq!(
+            (tr.timing.as_deref(), tr.events.clone(), tr.body.as_deref()),
+            (Some("BEFORE"), vec!["INSERT".into()], Some(body))
+        );
+        let edit = [
+            Change::DropTrigger { name: "t_bump".into() },
+            Change::AddTrigger {
+                name: "t_bump".into(),
+                timing: TriggerTiming::Before,
+                events: vec![TriggerEvent::Insert],
+                body: "SET NEW.n = 1".into(),
+            },
+        ];
+        apply(c, "t", false, &edit).await?;
+        c.query("insert into t values (3, 5)").await?;
+        assert_eq!(c.query("select n from t where id = 3").await?.rows[0][0].as_deref(), Some("1"));
+        apply(c, "t", false, &[Change::DropTrigger { name: "t_bump".into() }]).await?;
+        assert_eq!(c.structure("t").await?.triggers, []);
+
+        // A text column with a collation of its own moves first and keeps it.
+        c.query("alter table t add column label varchar(10) collate utf8mb4_bin").await?;
+        apply(c, "t", false, &[move_to("label", None)]).await?;
+        let s = c.structure("t").await?;
+        assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["label", "id", "n"]);
+        assert_eq!(s.columns[0].collation.as_deref(), Some("utf8mb4_bin"));
+        Ok(())
+    }
+
+    /// The same on Postgres, where the edits run in one transaction. `DBM_PG_URL` points elsewhere than the default.
+    #[test]
+    #[ignore = "needs a local Postgres; creates and drops a scratch database"]
+    fn local_postgres_checks_keys_and_triggers() {
+        tauri::async_runtime::block_on(async {
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+            let open = |url: String| async move {
+                Conn::open(Engine::Postgres, &url, None, &Tls::default(), &Options::default(), None).await.unwrap()
+            };
+            let mut admin = open(url.clone()).await;
+            let db = format!("dbm_keys_{}", std::process::id());
+            admin.query(&format!("create database {db}")).await.unwrap();
+            let mut u = url::Url::parse(&url).unwrap();
+            u.set_path(&db);
+            let mut c = open(u.to_string()).await;
+            let outcome = postgres_keys_scenario(&mut c).await;
+            drop(c);
+            admin.query(&format!("drop database {db}")).await.unwrap();
+            outcome.unwrap();
+        });
+    }
+
+    async fn postgres_keys_scenario(c: &mut Conn) -> crate::error::Result<()> {
+        let create = [
+            Change::AddColumn { column: ColumnDef { nullable: false, primary: true, ..col("id", "integer") } },
+            Change::AddColumn { column: ColumnDef { nullable: false, ..col("tags", "text[]") } },
+            Change::AddCheck { name: "tags_some".into(), expression: "cardinality(tags) > 0".into() },
+        ];
+        apply(c, "public.t", true, &create).await?;
+        let changes = [
+            Change::DropCheck { name: "tags_some".into() },
+            Change::AddCheck { name: "id_positive".into(), expression: "id > 0".into() },
+            Change::SetPrimaryKey { columns: vec!["id".into(), "tags".into()] },
+            Change::AddIndex {
+                name: "t_tags".into(),
+                columns: vec!["tags".into()],
+                unique: false,
+                method: Some(IndexMethod::Gin),
+            },
+        ];
+        apply(c, "public.t", false, &changes).await?;
+        let s = c.structure("public.t").await?;
+        assert_eq!(s.checks.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["id_positive"]);
+        assert_eq!(
+            s.indexes.iter().find(|i| i.primary).map(|i| i.columns.clone()),
+            Some(vec!["id".into(), "tags".into()])
+        );
+        assert_eq!(s.indexes.iter().find(|i| i.name == "t_tags").and_then(|i| i.method.as_deref()), Some("gin"));
+        // A failing statement rolls the whole set back: the key and checks stay as they were.
+        let bad =
+            [Change::DropCheck { name: "id_positive".into() }, Change::SetPrimaryKey { columns: vec!["nope".into()] }];
+        assert!(apply(c, "public.t", false, &bad).await.is_err());
+        assert_eq!(c.structure("public.t").await?.checks.len(), 1);
+
+        c.query("create function bump() returns trigger language plpgsql as $$ begin new.id := new.id + 1; return new; end $$")
+            .await?;
+        let add = Change::AddTrigger {
+            name: "t_bump".into(),
+            timing: TriggerTiming::Before,
+            events: vec![TriggerEvent::Insert, TriggerEvent::Update],
+            body: "bump()".into(),
+        };
+        apply(c, "public.t", false, &[add]).await?;
+        c.query("insert into t values (1, '{a}')").await?;
+        assert_eq!(c.query("select id from t").await?.rows[0][0].as_deref(), Some("2"));
+        let tr = &c.structure("public.t").await?.triggers[0];
+        assert_eq!(tr.events, ["INSERT", "UPDATE"]);
+        assert_eq!((tr.timing.as_deref(), tr.body.as_deref()), (Some("BEFORE"), Some("bump()")));
+        apply(c, "public.t", false, &[Change::DropTrigger { name: "t_bump".into() }]).await?;
+        assert_eq!(c.structure("public.t").await?.triggers, []);
+        Ok(())
+    }
+
     async fn mysql_scenario(c: &mut Conn) -> crate::error::Result<()> {
         let id = ColumnDef { nullable: false, auto_increment: true, primary: true, ..col("id", "int") };
         let owners = [Change::AddColumn { column: id.clone() }, Change::Comment { comment: Some("people".into()) }];
@@ -1462,7 +2419,7 @@ mod tests {
         let changes = [
             Change::ModifyColumn { from: "name".into(), column: same_name },
             Change::ModifyColumn { from: "at".into(), column: at },
-            Change::AddIndex { name: "pets_name".into(), columns: vec!["name".into()], unique: false },
+            Change::AddIndex { name: "pets_name".into(), columns: vec!["name".into()], unique: false, method: None },
             Change::DropForeignKey { name: "pets_owner".into() },
         ];
         let sql = c.alter_sql("pets", false, &changes).await?;

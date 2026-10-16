@@ -63,6 +63,13 @@ body { margin: 0; height: 100vh; display: flex; flex-direction: column; backgrou
 input, select, textarea, button { font: inherit; color: inherit; }
 /* Shapes: controls and rows are pills, windows and panels 16-20px, the grid square. */
 input, select { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); min-width: 0; }
+/* WebKit keeps a select's native square shape unless appearance is off; the chevron is drawn back in, in the text colour. */
+select:not([multiple]) {
+  appearance: none; -webkit-appearance: none; padding-right: 28px;
+  background-image: conic-gradient(from -45deg at 50% 100%, var(--muted) 90deg, transparent 0); /* ▼, one shape, no seam */
+  background-position: calc(100% - 12px) 55%; background-size: 9px 4.5px; background-repeat: no-repeat;
+}
+textarea { padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); min-width: 0; }
 input::placeholder { color: color-mix(in srgb, var(--fg) 45%, transparent); }
 :focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
 button { padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); cursor: default; transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1), background-color 120ms ease-out; }
@@ -73,7 +80,7 @@ button.primary:hover { background: var(--accent); color: var(--on-accent); }
 button.danger { background: var(--orange); border-color: transparent; color: var(--ink); font-weight: 600; }
 button.ghost { border-color: transparent; background: none; color: var(--muted); padding: 4px 6px; }
 button.ghost:hover { color: var(--fg); background: var(--hover); }
-kbd { font: 11px var(--mono); opacity: 0.75; margin-left: 4px; }
+kbd { font: 600 12px var(--mono); margin-left: 6px; padding: 1px 5px; border-radius: 6px; background: color-mix(in srgb, currentColor 12%, transparent); }
 .status { color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.4em; margin: 0; }
 .status.error { color: var(--danger); }
 .status.done { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
@@ -143,14 +150,15 @@ dialog footer { display: flex; gap: 8px; align-items: center; margin-top: 16px; 
 .dbs .current { margin-left: auto; font-size: 11px; color: var(--muted); }
 #dbpicker .status { margin-top: 6px; }
 fieldset { border: 1px solid var(--line); border-radius: 16px; padding: 12px; margin: 0 0 12px; display: grid; gap: 9px; background: var(--raised); }
-label { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 10px; color: var(--muted); }
+/* Form rows; :where keeps it weak and out of the editor's panels (find and replace has labels of its own). */
+label:where(:not(.cm-panel label)) { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 10px; color: var(--muted); }
 label > input, label > select { color: var(--fg); }
 .pair { display: grid; grid-template-columns: 1fr 150px; gap: 12px; }
 .pair .port { grid-template-columns: auto 1fr; }
 .pick { display: flex; gap: 6px; min-width: 0; }
 .pick > input { flex: 1; min-width: 0; color: var(--fg); }
 .tls-files { display: grid; gap: 9px; }
-label > textarea { color: var(--fg); padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); min-width: 0; resize: vertical; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+label > textarea { color: var(--fg); resize: vertical; font: 12px/1.4 var(--mono); }
 details.more { margin: 0 0 12px; }
 details.more > summary { color: var(--muted); padding: 2px 4px 8px; cursor: default; }
 .opt-row { display: grid; grid-template-columns: 96px 1fr; gap: 10px; color: var(--muted); }
@@ -164,6 +172,7 @@ aside { display: flex; flex-direction: column; }
 .side-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
 .tree-row { display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 4px; border-radius: 999px; cursor: default; user-select: none; white-space: nowrap; }
+.show-more { margin: 2px 0 4px 22px; padding: 2px 8px; font-size: 12px; color: var(--muted); }
 .tree-row:hover { background: var(--hover); }
 .tree-row:active { background: var(--press); }
 .tree-row.active { background: var(--accent); color: var(--on-accent); }
@@ -195,12 +204,16 @@ aside { display: flex; flex-direction: column; }
 .tab:hover .close, .tab[aria-selected="true"] .close { opacity: 0.7; }
 .tab .close:hover { opacity: 1; background: var(--press); }
 .tab-sql { font: 700 9px var(--mono); color: var(--accent); }
-.sql-pane { display: flex; flex-direction: column; height: 38%; min-height: 140px; flex: none; }
+.sql-pane { position: relative; display: flex; flex-direction: column; height: var(--sql-h, 38%); min-height: 120px; max-height: calc(100% - 140px); flex: none; }
 .sql-pane .editor { background: var(--editor-bg); flex: 1; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--line); }
 .cursor { font: 11px var(--mono); color: var(--muted); }
 .table-foot { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); flex: none; }
 .page-info { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-foot button.ghost { font-size: 16px; padding: 2px 10px; }
+/* Filters, Columns, Export…: outlined pills like the Data / Structure segment beside them; on is filled, as there */
+.table-foot button.tool { font-size: 13px; padding: 4px 12px; color: var(--fg); border-color: var(--line); background: var(--raised); }
+.table-foot button.tool:hover { background: var(--hover); }
+.table-foot button.tool[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
 button:disabled { opacity: 0.35; pointer-events: none; }
 th.rownum, td.rownum { position: sticky; left: 0; text-align: right; color: var(--muted); background: var(--side); min-width: 44px; font-variant-numeric: tabular-nums; }
 th.rownum { z-index: 2; }
@@ -224,6 +237,10 @@ dialog.prefs { width: min(600px, calc(100vw - 32px)); padding: 0; overflow: hidd
 .prefs-tabs button[aria-selected="true"] { color: var(--bg); background: var(--fg); }
 .prefs-tabs svg, .ghost svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .ghost svg { width: 16px; height: 16px; vertical-align: -3px; }
+/* The header's icon toolbar: each button runs a command (data-command), the same as its menu item and shortcut */
+.tool-icons { display: inline-flex; gap: 2px; }
+.tool-icons button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; }
+.tool-icons button[aria-pressed="true"] { color: var(--fg); background: var(--press); }
 dialog.prefs section { padding: 22px 28px 8px; display: grid; gap: 14px; }
 dialog.prefs footer { padding: 12px 18px 16px; margin: 0; }
 .row { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 14px; }
@@ -242,7 +259,23 @@ dialog.prefs footer { padding: 12px 18px 16px; margin: 0; }
 .ws-head { display: flex; justify-content: space-between; align-items: center; }
 
 /* ---------- Workspace ---------- */
-#workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 248px 1fr; }
+#workspace { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: min(var(--side-w, 248px), 50vw) 1fr; }
+/* Dividers (splitters.ts): a 7px grab strip on the edge, drawn as a 2px accent line on hover, drag and focus */
+.divider { position: absolute; z-index: 6; touch-action: none; outline: none; }
+.divider.x { top: 0; bottom: 0; width: 7px; cursor: col-resize; }
+.divider.y { left: 0; right: 0; height: 7px; cursor: row-resize; }
+.divider::after { content: ""; position: absolute; inset: 0; margin: auto; transition: background-color 120ms ease-out; }
+.divider.x::after { width: 2px; }
+.divider.y::after { height: 2px; }
+.divider:hover::after, .divider.active::after, .divider:focus-visible::after { background: var(--accent); }
+.side-edge { left: calc(min(var(--side-w, 248px), 50vw) - 4px); }
+.sql-edge { bottom: -4px; }
+.console-edge { top: -4px; }
+#workspace.no-sidebar { grid-template-columns: 1fr; }
+#workspace.no-sidebar > :is(aside, .side-edge) { display: none; }
+/* Results hidden: a SQL tab's editor takes the whole pane */
+#workspace.no-results .sql-pane { flex: 1; height: auto; max-height: none; }
+#workspace.no-results .sql-edge, #workspace.no-results .pane:has(> .sql-pane:not([hidden])) > :is(.result-strip, .filters, .grid-area) { display: none; }
 body[data-env="production"] #workspace { box-shadow: inset 0 3px 0 var(--danger); } /* never forget where you are */
 aside { background: var(--side); color: var(--side-fg); border-right: 1px solid var(--line); padding: 8px; overflow: auto; }
 .ws-head { padding: 2px 0 4px; }
@@ -314,8 +347,9 @@ td.null { color: var(--grid-null); font-style: italic; }
 .filter-row .clone { grid-column: 7; }
 .filter-row .rm { grid-column: 8; }
 .filter-row .add { grid-column: 9; }
+/* Glyph buttons sized like the inputs beside them, in ink rather than the ghost style's muted grey. */
+.filter-row button.ghost { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--fg); font-size: 17px; line-height: 1; }
 .filter-foot { display: flex; gap: 6px; align-items: center; }
-#toggle-filters[aria-pressed="true"] { color: var(--accent); }
 th.sortable { cursor: default; user-select: none; }
 th .sort { margin-left: 4px; color: var(--accent); font-size: 10px; }
 th .fk-mark { margin-left: 4px; color: var(--muted); font-size: 10px; }
@@ -363,12 +397,21 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .preview-grid th { position: sticky; top: 0; background: var(--raised); }
 .preview-grid td.null { color: var(--muted); font-style: italic; }
 .sql-preview { max-height: 300px; overflow: auto; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; font: 12px/1.4 var(--mono); white-space: pre-wrap; }
-.jobs { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: 8px; width: min(340px, calc(100vw - 32px)); }
+.jobs { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600; text-align: center; }
+.notes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 60vh; overflow: auto; }
+.notes li { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); }
+.notes li .reveal { justify-self: start; }
+.note-head { display: flex; align-items: center; gap: 8px; }
+.note-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.note-text { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes li.failed .note-text { color: var(--danger); }
 .job { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--raised); box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); }
 .job strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job progress { width: 100%; }
 .job-foot { display: flex; gap: 8px; align-items: center; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
 .job-foot .error-text { color: var(--danger); }
+.job-foot .reveal { margin-left: auto; } /* with Close at the right, not in the middle */
 
 /* ---------- Launcher groups, colors, tags (connections.ts) ---------- */
 #conn-sort { border-radius: 999px; padding: 5px 10px; }

@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { $, el } from "./dom";
 import { addCommands } from "./commands";
+import { divider } from "./splitters";
 import { highlightSql } from "./editor";
 
 type Entry = { id: number; at: number; sql: string };
@@ -19,6 +20,11 @@ const panel = el("section", { className: "console", hidden: true },
   el("header", {}, el("strong", { textContent: "Console" }), el("span", { className: "spacer" }), clear, close),
   el("div", { className: "console-body" }, list, empty));
 $("workspace").querySelector("main")!.append(panel);
+divider({
+  host: panel, className: "console-edge", variable: "--console-h", pref: "layout.console", axis: "y", sign: -1, min: 80,
+  max: () => panel.parentElement!.getBoundingClientRect().height - 160, size: () => panel.getBoundingClientRect().height,
+  label: "Console height",
+});
 const button = el("button", { type: "button", className: "ghost", textContent: "Console", title: "Console log: every statement sent" });
 $("new-sql").before(button);
 button.onclick = () => toggle();

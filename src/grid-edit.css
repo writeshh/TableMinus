@@ -6,17 +6,27 @@
 #out tr.added td.rownum { color: var(--ok); font-weight: 600; text-align: center; }
 #out td.default { color: var(--muted); font-style: italic; font-size: 10px; letter-spacing: 0.04em; }
 #out td.file { font-style: italic; }
-select.cell-input { padding: 3px 6px; }
+select.cell-input { padding: 3px 24px 3px 6px; }
 
 dialog.cell-dialog { width: min(900px, calc(100vw - 32px)); display: none; }
 dialog.cell-dialog[open] { display: grid; gap: 10px; }
 dialog.cell-dialog h3, dialog.cell-dialog p, dialog.cell-dialog footer { margin: 0; }
 .cell-tools { display: flex; gap: 6px; align-items: center; }
 .cell-tools .check { margin-left: auto; }
-.cell-text { width: 100%; height: min(60vh, 520px); resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font: 12px/1.5 var(--mono); tab-size: 2; }
+.cell-text { width: 100%; height: min(60vh, 520px); resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); font: 12px/1.5 var(--mono); tab-size: 2; }
 .json-check { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .json-check.ok { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
 .json-check.error { color: var(--danger); }
+.json-tree { height: min(60vh, 520px); overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); font: 12px/1.6 var(--mono); user-select: text; }
+.json-tree details > :not(summary) { margin-left: 16px; }
+.json-tree summary { cursor: default; }
+.jt-leaf { cursor: copy; white-space: pre-wrap; word-break: break-all; }
+.jt-leaf:hover { background: var(--hover); }
+.jt-key { color: var(--syn-keyword); }
+.jt-meta, .jt-null { color: var(--muted); }
+.jt-string { color: var(--syn-string); }
+.jt-number { color: var(--syn-number); }
+.jt-boolean { color: var(--syn-type); }
 .hex-view { margin: 0; max-height: 60vh; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); font: 12px/1.5 var(--mono); white-space: pre; user-select: text; }
 
 .row-detail { width: 300px; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-left: 1px solid var(--line); background: var(--side); overflow: auto; }
@@ -26,7 +36,7 @@ dialog.cell-dialog h3, dialog.cell-dialog p, dialog.cell-dialog footer { margin:
 .row-detail .name { font: 600 11px/1.4 var(--mono); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-detail .type { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
 .row-detail label.field > :is(input, textarea, select) { grid-column: 1 / -1; width: 100%; color: var(--fg); font: 12px/1.4 var(--mono); }
-.row-detail textarea { padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); resize: vertical; field-sizing: content; max-height: 240px; }
+.row-detail textarea { padding: 5px 8px; resize: vertical; field-sizing: content; max-height: 240px; }
 .row-detail .changed { background: color-mix(in srgb, var(--warn) 18%, var(--bg)); }
 .table-foot #add-row, .table-foot #preview-edits { font-size: 12px; white-space: nowrap; flex: none; }
 .table-foot .edit-info { white-space: nowrap; }

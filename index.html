@@ -9,7 +9,9 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <nav id="db-tabs" class="db-tabs" role="tablist" aria-label="Open workspaces" hidden></nav>
+    <!-- macOS: the title bar is see-through (tauri.conf.json); this strip and the workspace tabs drag the window -->
+    <div class="drag-strip" data-tauri-drag-region aria-hidden="true"></div>
+    <nav id="db-tabs" class="db-tabs" role="tablist" aria-label="Open workspaces" data-tauri-drag-region hidden></nav>
     <!-- Launcher: shown until a connection opens -->
     <section id="home">
       <div class="intro">
@@ -100,7 +102,7 @@
         <details class="more">
           <summary>More options</summary>
           <fieldset>
-            <label>Startup SQL <textarea name="opt_startup_sql" rows="2" placeholder="Runs after connecting, e.g. SET search_path TO app"></textarea></label>
+            <label data-engines="postgres mysql mariadb sqlite">Startup SQL <textarea name="opt_startup_sql" rows="2" placeholder="Runs after connecting, e.g. SET search_path TO app"></textarea></label>
             <label>Startup script <textarea name="opt_startup_script" rows="2" placeholder="Shell script run before connecting, e.g. to start a VPN"></textarea></label>
             <div class="opt-row" data-engines="postgres">
               <span>Postgres</span>
@@ -262,6 +264,7 @@
           <span class="k">Export</span>
           <label class="check"><input type="checkbox" id="reveal-export" /> Show the files in Finder when an export finishes</label>
         </div>
+        <div class="row" id="csv-defaults"></div>
         <p class="hint note">Above the threshold, a table without filters shows the database's estimate of its rows (Postgres and MySQL); Count in the page settings counts them exactly. The log of original values is in the console (⇧⌘C).</p>
       </section>
       <section data-pane="editor" hidden>
@@ -349,7 +352,7 @@
     <section id="workspace" hidden>
       <aside>
         <div class="ws-head">
-          <button id="back" class="ghost" title="All connections">‹ Connections</button>
+          <button id="back" class="ghost" title="All connections; this workspace stays open in its tab">‹ Connections</button>
           <button class="ghost open-settings" title="Settings" aria-label="Settings">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
           </button>
@@ -377,7 +380,7 @@
         </div>
         <div id="side-history" class="side-pane" hidden>
           <div class="history-head">
-            <input id="history-search" type="search" placeholder="Search history" />
+            <input id="history-search" type="search" placeholder="Search queries" title="Search the history and the saved queries" />
             <button id="clear-history" class="ghost" title="Clear this connection's history">Clear</button>
           </div>
           <div id="history"></div>
@@ -388,9 +391,18 @@
         <header id="where">
           <span id="where-conn" class="where-conn" role="button" tabindex="0" title="Workspaces"></span>
           <span class="spacer"></span>
+          <span class="tool-icons" role="toolbar" aria-label="Workspace tools">
+            <button class="ghost" data-command="open-file" title="Open a SQL file" aria-label="Open a SQL file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10V19H3z" /></svg></button>
+            <button class="ghost" data-command="reload-tab" title="Reload the tab" aria-label="Reload the tab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v5h-5" /></svg></button>
+            <button class="ghost" data-command="toggle-row-detail" id="row-detail-button" title="Row detail" aria-label="Row detail" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2" /><path d="M15 4.5v15" /></svg></button>
+            <button class="ghost" data-command="toggle-assistant" id="assistant-button" title="Assistant" aria-label="Assistant" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8zM18 15l.9 2.1 2.1.9-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z" /></svg></button>
+            <button class="ghost" data-command="metrics-board" title="Metrics board" aria-label="Metrics board"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20v-8M12 20V5M19 20v-5" /></svg></button>
+            <button class="ghost" data-command="users" id="users-button" title="Users and privileges" aria-label="Users and privileges"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5" /><path d="M5 20c1.2-3.6 3.8-5.5 7-5.5s5.8 1.9 7 5.5" /></svg></button>
+          </span>
           <span id="pill" class="pill" role="button" tabindex="0" title="Connection info"></span>
           <button id="db-button" class="ghost" title="Open a database"></button>
           <button id="tools-button" class="ghost" title="Backup, restore and processes">Tools ▾</button>
+          <button id="notes-button" class="ghost" hidden>Jobs <span id="notes-badge" class="badge" hidden></span></button>
           <button id="new-sql" class="ghost sql-btn" title="New SQL query">SQL</button>
         </header>
         <div id="conn-info" class="popover" hidden>
@@ -442,6 +454,7 @@
           <span id="result-found" class="result-found"></span>
           <button id="result-chart" class="ghost" title="Show the result as a chart" aria-pressed="false" hidden>Chart</button>
           <input id="result-search" type="search" placeholder="Search result" hidden />
+          <button id="result-replace" class="ghost" title="Replace text in this result's cells; the changes are staged to review and save" hidden>Replace…</button>
         </nav>
         <div id="filters" class="filters" hidden></div>
         <style id="column-layout"></style>
@@ -451,9 +464,9 @@
         </div>
         <footer id="table-foot" class="table-foot" hidden>
           <div class="seg" id="view-seg"><button data-view="data">Data</button><button data-view="structure">Structure</button></div>
-          <button id="toggle-filters" class="ghost" title="Filter rows (⌘F)">Filters</button>
-          <button id="columns-button" class="ghost" title="Show, hide and size columns">Columns</button>
-          <button id="export-table" class="ghost" title="Export these rows to a file">Export…</button>
+          <button id="toggle-filters" class="tool" title="Filter rows (⌘F)">Filters</button>
+          <button id="columns-button" class="tool" title="Show, hide and size columns">Columns</button>
+          <button id="export-table" class="tool" title="Export these rows to a file">Export…</button>
           <span id="foot-msg" class="foot-msg"></span>
           <span class="spacer"></span>
           <button id="add-row" class="ghost" title="Add a row" hidden>+ Row</button>

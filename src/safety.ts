@@ -39,7 +39,8 @@ export const useTouchId = () => touchIdHere && security.touchId;
 
 // ---------- Approval: what to resend with after safe mode stopped a request ----------
 
-export type Unlock = { password: string } | "touch_id";
+/** `grant` is a token from batch_grant: one Touch ID prompt standing for a whole Run All (safety.rs). */
+export type Unlock = { password: string } | "touch_id" | { grant: string };
 export type Approval = { confirmed: boolean; unlock: Unlock | null };
 export const NOT_APPROVED: Approval = { confirmed: false, unlock: null };
 /** What `guarded` throws when the user says no. */

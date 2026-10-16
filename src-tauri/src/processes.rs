@@ -32,6 +32,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Engine::Postgres => POSTGRES,
         Engine::Mysql | Engine::Mariadb => MYSQL,
         Engine::Sqlite => return Err(Error::Invalid("SQLite has no process list")),
+        Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),
     };
     let r = live.conn.query(sql).await;
     if r.as_ref().is_err_and(|e| live.conn.lost_by(e)) {
@@ -67,6 +68,7 @@ pub async fn kill_process(
             live.conn.query(&sql).await?;
         }
         Engine::Sqlite => return Err(Error::Invalid("SQLite has no process list")),
+        Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),
     }
     Ok(())
 }
