@@ -1,0 +1,28 @@
+# `npm run check` on every push and pull request: tsc, the UI tests, rustfmt, clippy (warnings are errors) and the
+# Rust tests. macOS, as the app's Touch ID and keychain code is built for it. Tests that need a live database stay
+# ignored here, as they are locally.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      # tauri's generate_context! embeds ../dist, so the frontend is built before cargo runs.
+      - run: npm run build
+      - run: npm run check

@@ -2,7 +2,7 @@
 // switches between, the theme editor, and importing and exporting theme files. The data side is theme-file.ts.
 // Themes are kept with the settings (prefs.ts). Installing and updating them from a Git repository is TODO §23.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { $, el } from "./dom";
 import { modal } from "./backup";

@@ -48,10 +48,12 @@ impl Options {
     }
 }
 
-/// Runs the connection's startup script with `/bin/sh -c`. The script is the user's own shell code, so a
-/// shell is exactly what it needs; nothing from elsewhere is interpolated into it.
+/// Runs the connection's startup script with `/bin/sh -c` (`cmd /C` on Windows). The script is the user's own shell
+/// code, so a shell is exactly what it needs; nothing from elsewhere is interpolated into it. Imported connections
+/// only bring one along when the user saw it and chose to keep it (`launcher::Scripts`).
 pub async fn run_startup_script(script: &str) -> Result<()> {
-    let run = tokio::process::Command::new("/bin/sh").arg("-c").arg(script).kill_on_drop(true).output();
+    let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("/bin/sh", "-c") };
+    let run = tokio::process::Command::new(shell).arg(flag).arg(script).kill_on_drop(true).output();
     let out = tokio::time::timeout(CONNECT_TIMEOUT, run)
         .await
         .map_err(|_| Error::StartupScript(format!("still running after {} seconds", CONNECT_TIMEOUT.as_secs())))??;

@@ -7,7 +7,7 @@
 // Queries go through run_query, so safe mode applies. A widget whose query may change data runs only from its own
 // Run button, after asking; auto-refresh and parameter changes skip it, and skip anything safe mode wants approved.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { connName, el } from "./dom";
 import { docEntry, setDocEntry } from "./locations";

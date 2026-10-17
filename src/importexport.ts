@@ -1,7 +1,7 @@
 // Export and import dialogs, and the panel that follows running jobs. The backend does the work on a connection
 // of its own (export.rs, import.rs, jobs.rs); this module gathers the options and shows progress.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { connName, el } from "./dom";

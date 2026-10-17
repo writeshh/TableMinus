@@ -2,6 +2,7 @@
 // rows, paste, undo and redo, and saving (or previewing) everything as one transaction through save_rows.
 
 import { CANCELLED, guarded, type Approval } from "./safety";
+import { codeOf } from "./ipc";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { connName, el } from "./dom";
 import {
@@ -44,9 +45,6 @@ export type GridHost = {
 
 let host: GridHost;
 export const initGridEdit = (h: GridHost) => void (host = h);
-
-/** The backend's text for a key matching several rows (Error::SeveralRows). */
-const SEVERAL_ROWS = "a key matched more than one row; nothing was saved";
 
 const pageRows = (tab: EditTab) => tab.result?.rows.length ?? 0;
 const engine = () => host.conn()?.kind ?? "";
@@ -411,7 +409,7 @@ export async function save(tab: EditTab, confirmed = false, byIdentity = false):
     await host.reload(tab);
   } catch (e) {
     if (e === CANCELLED) return;
-    if (e === SEVERAL_ROWS && tab.ids && !byIdentity) {
+    if (codeOf(e) === "several_rows" && tab.ids && !byIdentity) {
       const id = conn.kind === "postgres" ? "ctid" : "rowid";
       const again = await host.confirm(
         `A key matched more than one row, so nothing was saved. Save again, finding each row by its row identity (${id}) instead?`,

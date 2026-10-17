@@ -3,7 +3,7 @@
 // module can read synchronously at startup. The file wins: when it differs from the copy (changed on another Mac),
 // the copy is refreshed and the page starts again once with it.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc.ts"; // with the extension, for the tests node runs
 
 /** localStorage keys that aren't preferences: kept SQL tabs and history, which moved to files of their own. */
 const NOT_PREFS = ["sql-tabs:", "history:"];

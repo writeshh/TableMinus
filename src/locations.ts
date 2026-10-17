@@ -2,7 +2,7 @@
 // (locations.rs). Each file is one JSON object keyed by connection name, held in memory here and written back shortly
 // after a change.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { $, el } from "./dom";
 import { flushPrefs, loadPrefs, prefsProblem } from "./prefs";

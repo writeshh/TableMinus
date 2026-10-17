@@ -91,10 +91,11 @@ pub async fn lock_at_startup(open: crate::Open) {
     }
 }
 
-/// The UI locked itself (time away); databases lock with it.
+/// The UI locked itself (time away); databases lock with it. A keychain that can't be read locks them too, as at
+/// startup, rather than leaving them reachable behind a locked window.
 #[tauri::command]
 pub async fn lock(open: State<'_, crate::Open>) -> Result<()> {
-    if blocking(|| Ok(stored_hash()?.is_some())).await? {
+    if !matches!(blocking(|| Ok(stored_hash()?.is_some())).await, Ok(false)) {
         open.locked.store(true, Ordering::SeqCst);
     }
     Ok(())

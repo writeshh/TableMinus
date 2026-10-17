@@ -2,7 +2,7 @@
 // (set, change, remove, auto-lock, Touch ID). The backend (passcode.rs) keeps only an argon2 hash, in the keychain.
 // ponytail: a dialog opened after locking (an MCP approval) shows above the lock; hold those back while locked if it matters.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { $, el } from "./dom";
 import { modal } from "./backup";
 import { saveSecurity, security, touchIdAvailable, touchIdChecked, useTouchId } from "./safety";

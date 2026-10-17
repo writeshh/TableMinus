@@ -2,7 +2,7 @@
 // asks the user to allow an agent's query. Imported by main.ts before it wires the settings tabs, so the tab added
 // here is wired with the rest.
 
-import { invoke } from "@tauri-apps/api/core";
+import { codeOf, invoke } from "./ipc";
 import { listen } from "@tauri-apps/api/event";
 import { $, el } from "./dom";
 import { askPassword } from "./safety";
@@ -276,7 +276,7 @@ async function answer(ok: boolean) {
         await invoke("mcp_answer", { id: current.id, allow: true, unlock });
         break;
       } catch (e) {
-        if (e === "WRONG PASSWORD") continue;
+        if (codeOf(e) === "wrong_password") continue;
         // Allowing failed for another reason (no saved password): it can never be allowed, so deny it.
         invoke("mcp_answer", { id: current.id, allow: false, unlock: null }).catch(() => {});
         break;

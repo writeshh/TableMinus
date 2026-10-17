@@ -252,7 +252,8 @@ impl Tools {
         }
         if !open.is_open(name).await {
             let live = crate::open_saved(open, &self.0.dir, name).await?;
-            open.insert(name.to_string(), live).await;
+            // The UI may have opened it meanwhile; then its session stays.
+            open.insert_new(name.to_string(), live).await;
         }
         let live = open.get(name).await?;
         Ok((live.saved.kind, live.saved.safety, live.password.clone()))

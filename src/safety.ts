@@ -1,7 +1,7 @@
 // Safe mode in the UI: the five levels, asking the way a level wants when the backend stops a request
 // (safety.rs decides), and the toolbar lock that switches the active connection's level.
 
-import { invoke } from "@tauri-apps/api/core";
+import { codeOf, invoke } from "./ipc";
 import { $, connName, el } from "./dom";
 import { readPref, writePref } from "./prefs";
 
@@ -44,14 +44,15 @@ export type Approval = { confirmed: boolean; unlock: Unlock | null };
 export const NOT_APPROVED: Approval = { confirmed: false, unlock: null };
 /** What `guarded` throws when the user says no. */
 export const CANCELLED = "Cancelled";
-export const isSafetyStop = (e: unknown) => e === "CONFIRM" || e === "PASSWORD" || e === "WRONG PASSWORD";
+export const isSafetyStop = (e: unknown) => ["confirm", "password", "wrong_password"].includes(codeOf(e) ?? "");
 
 /** After safe mode stopped a request with `e`: `confirm` for the Alert levels, the password (or Touch ID) for the
  * Safe ones. Resolves to what to resend with, or null when the user cancels; any other error is rethrown. */
 export async function approval(e: unknown, conn: string, confirm: () => Promise<boolean>): Promise<Approval | null> {
-  if (e === "CONFIRM") return (await confirm()) ? { confirmed: true, unlock: null } : null;
-  if (e === "PASSWORD" || e === "WRONG PASSWORD") {
-    const unlock = await askPassword(conn, e === "WRONG PASSWORD");
+  const code = codeOf(e);
+  if (code === "confirm") return (await confirm()) ? { confirmed: true, unlock: null } : null;
+  if (code === "password" || code === "wrong_password") {
+    const unlock = await askPassword(conn, code === "wrong_password");
     return unlock && { confirmed: true, unlock };
   }
   throw e;

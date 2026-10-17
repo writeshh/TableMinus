@@ -200,6 +200,11 @@ impl Open {
         self.conns.lock().await.insert(name, Arc::new(Mutex::new(live)));
     }
 
+    /// Adds `live` unless another request opened the session meanwhile; then that one stays and `live` closes.
+    async fn insert_new(&self, name: String, live: Live) {
+        self.conns.lock().await.entry(name).or_insert_with(|| Arc::new(Mutex::new(live)));
+    }
+
     /// Takes the connection out of the map; it closes once a request still using it finishes.
     async fn remove(&self, name: &str) -> Option<Arc<Mutex<Live>>> {
         self.conns.lock().await.remove(name)
@@ -230,6 +235,17 @@ fn list_connections(app: AppHandle) -> Result<Vec<store::Saved>> {
     store::load(&dir(&app)?)
 }
 
+/// Leaving a Safe level wants the password (or Touch ID), or changing the level some other way would get around it.
+async fn may_change_safety(old: &store::Saved, new: safety::Safety, unlock: Option<&safety::Unlock>) -> Result<()> {
+    if !old.safety.wants_password() || new == old.safety {
+        return Ok(());
+    }
+    let unlock = unlock.ok_or(Error::PasswordRequired)?;
+    let stored = store::stored(store::Secret::Database, &old.name)?;
+    safety::verify(unlock, stored.as_ref()).await
+}
+
+/// Saves a connection from the form. Changing a Safe level here wants the password, as the toolbar lock does.
 #[tauri::command]
 async fn save_connection(
     app: AppHandle,
@@ -238,13 +254,19 @@ async fn save_connection(
     password: Option<SecretString>,
     ssh_password: Option<SecretString>,
     previous: Option<String>,
+    unlock: Option<safety::Unlock>,
 ) -> Result<()> {
+    let dir = dir(&app)?;
+    let old_name = previous.as_deref().unwrap_or(&conn.name);
+    if let Some(old) = store::load(&dir)?.into_iter().find(|c| c.name == old_name) {
+        may_change_safety(&old, conn.safety, unlock.as_ref()).await?;
+    }
     // Drop live connections so the next connect uses the new settings.
     open.remove_all(&conn.name).await;
     if let Some(old) = &previous {
         open.remove_all(old).await;
     }
-    store::save(&dir(&app)?, conn, password.as_ref(), ssh_password.as_ref(), previous.as_deref())
+    store::save(&dir, conn, password.as_ref(), ssh_password.as_ref(), previous.as_deref())
 }
 
 #[tauri::command]
@@ -305,16 +327,18 @@ async fn connect(app: AppHandle, open: State<'_, Open>, name: String, database: 
         switch_database(&mut live, db).await?;
     }
     let r = info(&mut live).await;
-    open.insert(name, live).await;
+    // Two connects can race here (the session wasn't open when both checked); the first one's session stays.
+    open.insert_new(name, live).await;
     r
 }
 
-/// Closes the connection (and its tunnel) and opens it again from its saved settings. The database chosen
-/// after connecting is chosen again.
+/// Opens the connection again from its saved settings and replaces the old one (and its tunnel), which stays when
+/// reopening fails. The database chosen after connecting is chosen again.
 #[tauri::command]
 async fn reconnect(app: AppHandle, open: State<'_, Open>, name: String) -> Result<Info> {
     open.unlocked()?;
-    let database = match open.remove(&name).await {
+    let old = open.conns.lock().await.get(&name).cloned();
+    let database = match old {
         // A dead connection can't say.
         Some(old) => old.lock().await.conn.current_database().await.ok().flatten(),
         None => None,
@@ -660,10 +684,7 @@ async fn set_safety(
     let dir = dir(&app)?;
     let mut saved =
         store::load(&dir)?.into_iter().find(|c| c.name == name).ok_or_else(|| Error::NoSuchConnection(name.clone()))?;
-    if saved.safety.wants_password() && safety != saved.safety {
-        let stored = store::stored(store::Secret::Database, &name)?;
-        safety::verify(&unlock.ok_or(Error::PasswordRequired)?, stored.as_ref()).await?;
-    }
+    may_change_safety(&saved, safety, unlock.as_ref()).await?;
     saved.safety = safety;
     store::save(&dir, saved, None, None, None)?;
     // Every session of the connection, the map's lock let go before waiting on theirs.
@@ -915,6 +936,20 @@ mod tests {
     }
 
     #[test]
+    fn may_change_safety_should_want_the_password_only_to_leave_a_safe_level() {
+        use crate::safety::Safety;
+        tauri::async_runtime::block_on(async {
+            let mut old = live(Engine::Sqlite, ":memory:").await.saved;
+            old.safety = Safety::Safe2;
+            let leaving = super::may_change_safety(&old, Safety::Silent, None).await;
+            assert!(matches!(leaving, Err(Error::PasswordRequired)));
+            assert!(super::may_change_safety(&old, Safety::Safe2, None).await.is_ok(), "unchanged");
+            old.safety = Safety::Silent;
+            assert!(super::may_change_safety(&old, Safety::Safe1, None).await.is_ok(), "entering one is free");
+        });
+    }
+
+    #[test]
     fn open_should_key_sessions_by_connection_and_remove_them_together() {
         tauri::async_runtime::block_on(async {
             assert_eq!(super::saved_name("prod\u{1f}2"), "prod");
@@ -929,6 +964,18 @@ mod tests {
             open.remove_all("prod").await;
             assert!(!open.any_open("prod").await);
             assert!(open.is_open("prod 2").await, "another connection's name only looks alike");
+        });
+    }
+
+    #[test]
+    fn insert_new_should_keep_the_session_that_was_there_first() {
+        tauri::async_runtime::block_on(async {
+            let open = super::Open::default();
+            open.insert_new("a".into(), live(Engine::Sqlite, ":memory:").await).await;
+            let mut late = live(Engine::Sqlite, ":memory:").await;
+            late.url = "late".into();
+            open.insert_new("a".into(), late).await;
+            assert_eq!(open.get("a").await.unwrap().url, ":memory:");
         });
     }
 

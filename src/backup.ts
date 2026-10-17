@@ -1,6 +1,6 @@
 // Backup and restore windows, and the panel that follows their jobs while they run (Rust side: backup.rs).
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { el } from "./dom";

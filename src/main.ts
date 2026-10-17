@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { codeOf, invoke } from "./ipc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
@@ -563,14 +563,16 @@ function formToSaved(): Saved {
   return conn;
 }
 
+/** Saves the form. Changing a Safe level asks for the password first, as the toolbar lock does. */
 async function saveForm() {
   const conn = formToSaved();
-  await invoke("save_connection", {
+  await guarded(editing?.name ?? conn.name, (a) => invoke("save_connection", {
     conn,
     password: conn.password_mode ? null : secretField().value || null,
     sshPassword: field("ssh_password").value || null,
     previous: editing?.name ?? null,
-  });
+    unlock: a.unlock,
+  }));
   return conn;
 }
 
@@ -629,7 +631,7 @@ async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(cmd, args);
   } catch (e) {
-    if (e === "DISCONNECTED") ($("lost").hidden = false), renderDbTabs();
+    if (codeOf(e) === "disconnected") ($("lost").hidden = false), renderDbTabs();
     throw e;
   }
 }
@@ -2049,7 +2051,7 @@ async function execute(statements: string[]) {
       done++;
       addHistory(sql);
     } catch (e) {
-      if (isSafetyStop(e) && !(e === "CONFIRM" && approved.confirmed)) {
+      if (isSafetyStop(e) && !(codeOf(e) === "confirm" && approved.confirmed)) {
         say("", "");
         const rest = statements.slice(i).join(";\n");
         const question =

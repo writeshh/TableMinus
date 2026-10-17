@@ -3,7 +3,7 @@
 // diagram files, and PNG/SVG export. Geometry and the file format live in diagram-layout.ts; the data comes from the
 // `diagram` command (diagram.rs) in one round trip.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { connName, el } from "./dom";
 import { modal } from "./backup";

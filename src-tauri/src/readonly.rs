@@ -6,8 +6,8 @@ use sqlparser::dialect::{Dialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect
 use sqlparser::parser::Parser;
 use std::ops::ControlFlow;
 
-/// Built-in functions that change something even when called from a SELECT: sequences, sessions, server state,
-/// large objects, files, settings and other databases (`dblink`). Matched by name, lowercase, any schema.
+/// Built-in functions that change something even when called from a SELECT: sequences, sessions, locks, server
+/// state, large objects, files, settings and other databases (`dblink`). Matched by name, lowercase, any schema.
 const SIDE_EFFECTS: &[&str] = &[
     // Postgres
     "nextval",
@@ -44,6 +44,22 @@ const SIDE_EFFECTS: &[&str] = &[
     "pg_file_unlink",
     "dblink",
     "dblink_exec",
+    // Advisory locks outlive the query that takes them (the session-level ones) or block other sessions.
+    "pg_advisory_lock",
+    "pg_advisory_lock_shared",
+    "pg_advisory_xact_lock",
+    "pg_advisory_xact_lock_shared",
+    "pg_try_advisory_lock",
+    "pg_try_advisory_lock_shared",
+    "pg_try_advisory_xact_lock",
+    "pg_try_advisory_xact_lock_shared",
+    "pg_advisory_unlock",
+    "pg_advisory_unlock_shared",
+    "pg_advisory_unlock_all",
+    // MySQL / MariaDB (MariaDB's sequences use nextval and setval, as above)
+    "get_lock",
+    "release_lock",
+    "release_all_locks",
     // SQLite
     "load_extension",
     "writefile",
@@ -137,6 +153,9 @@ mod tests {
         assert!(!is_read_only(Postgres, "select * from t where id = (select setval('s', 1))"));
         assert!(!is_read_only(Postgres, "select * from dblink('db', 'delete from t') as x(n int)"));
         assert!(!is_read_only(Sqlite, "select load_extension('x')"));
+        assert!(!is_read_only(Postgres, "select pg_advisory_lock(1)"));
+        assert!(!is_read_only(Mysql, "select get_lock('job', 10)"));
+        assert!(!is_read_only(Mysql, "select release_all_locks()"));
         assert!(is_read_only(Postgres, "select currval('s'), lower(name) from t"), "reading a sequence is fine");
     }
 

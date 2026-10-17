@@ -2,7 +2,7 @@
 // Copy as URL), exporting and importing connections as a file, "ask every time" passwords and the Open Recent list.
 // Everything lands in the connections file through launcher.rs; main.ts draws the list.
 
-import { invoke } from "@tauri-apps/api/core";
+import { codeOf, invoke } from "./ipc";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { el } from "./dom";
 import { readPref, writePref } from "./prefs";
@@ -64,7 +64,7 @@ export async function withAskedPassword<T>(name: string, send: () => Promise<T>)
   try {
     return await send();
   } catch (e) {
-    if (e !== "ASK PASSWORD") throw e;
+    if (codeOf(e) !== "ask_password") throw e;
   }
   const password = await prompt({ title: "Password", text: `Enter the database password of “${name}”. It's kept until you close the workspace.`, ok: "Connect", secret: true });
   if (password === null) return null;
@@ -271,18 +271,52 @@ export function exportConnections(scope: Scope, what: string, done: (text: strin
   };
 }
 
-/** Picks an exported file and adds its connections, asking for the file's password when it has one. */
+type Scripts = "keep" | "drop";
+const scriptsText = el("pre", { className: "mcp-code" });
+Object.assign(scriptsText.style, { maxHeight: "40vh", overflow: "auto" });
+const scriptsCancel = el("button", { type: "button", textContent: "Cancel" });
+const scriptsDrop = el("button", { type: "button", className: "primary", textContent: "Import Without Them" });
+const scriptsKeep = el("button", { type: "button", textContent: "Keep Them" });
+const scriptsDialog = el("dialog", {},
+  el("h3", { textContent: "Startup scripts" }),
+  el("p", { textContent: "Keep them only if you trust whoever made this file: they run each time you connect." }),
+  scriptsText, el("footer", {}, scriptsCancel, el("span", { className: "spacer" }), scriptsKeep, scriptsDrop));
+document.body.append(scriptsDialog);
+
+/** Shows the startup scripts a connections file brings along; null when cancelled. */
+function chooseScripts(text: string): Promise<Scripts | null> {
+  scriptsText.textContent = text;
+  scriptsDialog.showModal();
+  scriptsDrop.focus(); // the safe choice for a stray Enter
+  return new Promise((resolve) => {
+    let result: Scripts | null = null;
+    scriptsDrop.onclick = () => ((result = "drop"), scriptsDialog.close());
+    scriptsKeep.onclick = () => ((result = "keep"), scriptsDialog.close());
+    scriptsCancel.onclick = () => scriptsDialog.close();
+    scriptsDialog.onclose = () => resolve(result);
+  });
+}
+
+/** Picks an exported file and adds its connections, asking for the file's password when it has one, and what to do
+ *  with startup scripts when it brings any. */
 export async function importConnections(done: (text: string, error?: boolean) => void) {
   const path = await openFileDialog({ multiple: false, directory: false, filters: FILES });
   if (typeof path !== "string") return;
   let password: string | null = null;
+  let scripts: Scripts | null = null;
   let error = "";
   for (;;) {
     try {
-      const n = await invoke<number>("import_connections", { path, password });
+      const n = await invoke<number>("import_connections", { path, password, scripts });
       return done(`Imported ${n} connection${n === 1 ? "" : "s"}.`);
     } catch (e) {
-      if (e !== "FILE PASSWORD" && !(password !== null && String(e).startsWith("wrong password"))) return done(String(e), true);
+      const code = codeOf(e);
+      if (code === "import_scripts") {
+        scripts = await chooseScripts(String(e));
+        if (scripts === null) return;
+        continue;
+      }
+      if (code !== "file_password" && !(password !== null && code === "file_unseal_failed")) return done(String(e), true);
       if (password !== null) error = String(e);
     }
     password = await prompt({ title: "Import connections", text: "This file is password-protected.", ok: "Import", secret: true, error });

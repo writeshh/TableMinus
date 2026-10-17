@@ -1,6 +1,6 @@
 // The process list window: the server's sessions and their queries, with cancel and kill (Rust: processes.rs).
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { el } from "./dom";
 import { modal, type Confirm, type Conn } from "./backup";
 

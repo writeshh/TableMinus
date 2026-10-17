@@ -1,27 +1,30 @@
-//! The one error type every command returns. It reaches the UI as its message text.
+//! The one error type every command returns. It reaches the UI as `{ code, message }`: the message to show, and for
+//! the errors the UI acts on rather than shows, a stable [`Error::code`].
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Safe mode stopped a write. The UI matches this exact text, asks, then resends with `confirmed: true`.
-    #[error("CONFIRM")]
+    /// Safe mode stopped a write. The UI asks, then resends with `confirmed: true`.
+    #[error("safe mode wants a confirmation before running this")]
     ConfirmRequired,
-    /// Safe 1 and 2 want the database password (or Touch ID). The UI matches this exact text, asks, then resends
-    /// with `unlock`.
-    #[error("PASSWORD")]
+    /// Safe 1 and 2 want the database password (or Touch ID). The UI asks, then resends with `unlock`.
+    #[error("safe mode wants the database password before running this")]
     PasswordRequired,
-    /// The connection asks for its password every time and none was given yet. The UI matches this exact text, asks,
-    /// then hands it over with `set_session_password` and connects again.
-    #[error("ASK PASSWORD")]
+    /// The connection asks for its password every time and none was given yet. The UI asks, then hands it over with
+    /// `set_session_password` and connects again.
+    #[error("this connection asks for its password every time, and none was given yet")]
     AskPassword,
-    /// An exported connections file is password-protected. The UI matches this exact text and asks for it.
-    #[error("FILE PASSWORD")]
+    /// An exported connections file is password-protected. The UI asks for it.
+    #[error("the connections file is password-protected")]
     FilePasswordRequired,
     #[error("wrong password, or the file is damaged")]
     FileUnsealFailed,
+    /// Imported connections run shell commands before connecting. The UI shows them and imports again with or without.
+    #[error("{0}")]
+    ImportHasScripts(String),
     #[error("encryption: {0}")]
     Crypto(String),
-    /// The UI matches this exact text and asks again.
-    #[error("WRONG PASSWORD")]
+    /// The UI asks again.
+    #[error("that isn't the connection's saved password")]
     WrongPassword,
     #[error(
         "this safe mode level checks the connection's saved password, and it has none; save one in the connection's \
@@ -43,8 +46,8 @@ pub enum Error {
     NotConnected,
     #[error("the query was stopped after the {0}-second query timeout (Settings › General)")]
     QueryTimeout(u64),
-    /// The server or network dropped the connection. The UI matches this exact text and offers to reconnect.
-    #[error("DISCONNECTED")]
+    /// The server or network dropped the connection. The UI offers to reconnect.
+    #[error("the connection to the server was lost")]
     Disconnected,
     #[error("no saved connection named {0:?}")]
     NoSuchConnection(String),
@@ -115,16 +118,39 @@ pub enum Error {
     Statement { n: u64, source: Box<Error> },
     #[error("not a JSON array of objects: {0}")]
     JsonImport(serde_json::Error),
-    /// An update or delete would hit several rows. The UI matches this exact text and offers row identity.
+    /// An update or delete would hit several rows. The UI offers row identity.
     #[error("a key matched more than one row; nothing was saved")]
     SeveralRows,
     #[error("the SSH server could not reach {host}:{port}: {reason}")]
     SshForward { host: String, port: u16, reason: String },
 }
 
+impl Error {
+    /// What the UI branches on, for the errors it acts on (asks, retries, offers something); the message stays free to
+    /// change. `ipc.ts` lists the same codes.
+    fn code(&self) -> Option<&'static str> {
+        Some(match self {
+            Error::ConfirmRequired => "confirm",
+            Error::PasswordRequired => "password",
+            Error::WrongPassword => "wrong_password",
+            Error::AskPassword => "ask_password",
+            Error::FilePasswordRequired => "file_password",
+            Error::FileUnsealFailed => "file_unseal_failed",
+            Error::ImportHasScripts(_) => "import_scripts",
+            Error::Disconnected => "disconnected",
+            Error::SeveralRows => "several_rows",
+            _ => return None,
+        })
+    }
+}
+
 impl serde::Serialize for Error {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.collect_str(self)
+        use serde::ser::SerializeStruct;
+        let mut out = s.serialize_struct("Error", 2)?;
+        out.serialize_field("code", &self.code())?;
+        out.serialize_field("message", &self.to_string())?;
+        out.end()
     }
 }
 
@@ -149,6 +175,20 @@ fn postgres_message(e: &tokio_postgres::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::Error;
+
+    #[test]
+    fn an_error_the_ui_acts_on_should_serialize_with_its_code() {
+        let json = serde_json::to_value(Error::ConfirmRequired).unwrap();
+        assert_eq!(json["code"], "confirm");
+        assert_eq!(json["message"], Error::ConfirmRequired.to_string());
+    }
+
+    #[test]
+    fn an_error_the_ui_only_shows_should_serialize_without_a_code() {
+        let json = serde_json::to_value(Error::NotConnected).unwrap();
+        assert!(json["code"].is_null());
+        assert_eq!(json["message"], "not connected");
+    }
 
     #[test]
     fn a_postgres_connect_error_should_say_why() {
