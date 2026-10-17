@@ -363,6 +363,18 @@ fn lite_cell(v: rusqlite::types::ValueRef) -> Option<String> {
     }
 }
 
+/// The config for dialling `url` through a local tunnel port. `host` stays the real name, so TLS is checked against
+/// it, while `hostaddr` sends the connection to 127.0.0.1.
+fn tunnelled_postgres_config(url: &str, tunnel_port: u16) -> Result<tokio_postgres::Config> {
+    let mut u = url::Url::parse(url)?;
+    // The URL's port is replaced, not added to: tokio-postgres fills in 5432 for a URL without one, so adding the
+    // tunnel's port with `Config::port` would leave two ports for one host, which it refuses.
+    let _ = u.set_port(Some(tunnel_port)); // Err only for URLs that can't have a port, which parse() then reports
+    let mut cfg: tokio_postgres::Config = u.as_str().parse()?;
+    cfg.hostaddr(std::net::Ipv4Addr::LOCALHOST.into());
+    Ok(cfg)
+}
+
 async fn open_postgres(
     url: &str,
     password: Option<&SecretString>,
@@ -371,14 +383,7 @@ async fn open_postgres(
     tunnel_port: Option<u16>,
 ) -> Result<tokio_postgres::Client> {
     let mut cfg: tokio_postgres::Config = match tunnel_port {
-        Some(port) => {
-            // The URL's port would be dialled alongside the tunnel's, so drop it before adding the tunnel's.
-            let mut u = url::Url::parse(url)?;
-            let _ = u.set_port(None); // Err only for URLs that can't have a port, which parse() then reports
-            let mut cfg: tokio_postgres::Config = u.as_str().parse()?;
-            cfg.hostaddr(std::net::Ipv4Addr::LOCALHOST.into()).port(port);
-            cfg
-        }
+        Some(port) => tunnelled_postgres_config(url, port)?,
         None => url.parse()?,
     };
     if let Some(password) = password {
@@ -935,6 +940,18 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
+    use tokio_postgres::config::Host;
+
+    #[test]
+    fn tunnelled_postgres_config_should_have_one_port_whether_or_not_the_url_names_one() {
+        for url in ["postgresql://u@db.internal/app", "postgresql://u@db.internal:6543/app"] {
+            let cfg = super::tunnelled_postgres_config(url, 40_001).unwrap();
+            assert_eq!(cfg.get_ports(), [40_001], "{url}");
+            assert_eq!(cfg.get_hostaddrs(), [std::net::Ipv4Addr::LOCALHOST]);
+            assert!(matches!(cfg.get_hosts(), [Host::Tcp(h)] if h == "db.internal"), "{url}: TLS checks the real name");
+        }
+    }
+
     /// Quoting can't be broken out of: whatever the name or value, the SQL parser reads back exactly it.
     mod quoting {
         use crate::db::Dialect;

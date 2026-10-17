@@ -1,0 +1,36 @@
+# Throwaway servers for trying SSH tunnels and remote databases (scripts/test-env.sh up|down).
+# Only sshd is reachable from the host, on 127.0.0.1:2222. The databases sit on an internal network behind it, so
+# they answer only through a tunnel: connect with SSH host 127.0.0.1:2222 and database host `postgres` or `mysql`.
+name: tableminus-test
+
+services:
+  sshd:
+    image: alpine:3.20
+    ports: ["127.0.0.1:2222:22"]
+    volumes: ["${KEYS:?run scripts/test-env.sh}:/keys:ro"]
+    networks: [front, back]
+    # User `tunnel`: password `tunnelpass`, or the key in .test-env/.
+    command: >
+      sh -c "apk add --no-cache openssh >/dev/null &&
+      adduser -D tunnel && echo 'tunnel:tunnelpass' | chpasswd &&
+      install -d -m 700 -o tunnel /home/tunnel/.ssh &&
+      install -m 600 -o tunnel /keys/id_ed25519.pub /home/tunnel/.ssh/authorized_keys &&
+      ssh-keygen -A &&
+      exec /usr/sbin/sshd -D -e -o AllowTcpForwarding=yes -o PasswordAuthentication=yes -o PermitRootLogin=no"
+    healthcheck: { test: ["CMD", "pgrep", "sshd"], interval: 2s, retries: 30 }
+
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: testpass, POSTGRES_DB: app }
+    networks: [back]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "postgres"], interval: 2s, retries: 30 }
+
+  mysql:
+    image: mysql:8.0
+    environment: { MYSQL_ROOT_PASSWORD: testpass, MYSQL_DATABASE: app }
+    networks: [back]
+    healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ptestpass"], interval: 3s, retries: 40 }
+
+networks:
+  front: {}
+  back: { internal: true }
