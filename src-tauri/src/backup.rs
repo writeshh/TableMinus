@@ -868,6 +868,7 @@ mod tests {
             color: None,
             group: String::new(),
             flavor: None,
+            needs_credentials: false,
         }
     }
 

@@ -9,6 +9,7 @@ mod console;
 mod db;
 mod ddl;
 mod diagram;
+mod discover;
 mod error;
 mod export;
 mod import;
@@ -161,6 +162,10 @@ async fn open_saved(open: &Open, dir: &std::path::Path, key: &str) -> Result<Liv
     let password = store::password_for(&saved)?;
     let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
     let (conn, tunnel) = open_db(&saved, password.as_ref(), ssh_secret).await?;
+    if saved.needs_credentials {
+        // The badge is only a hint: failing to take it off must not fail a connect that worked.
+        let _ = store::clear_needs_credentials(dir, &saved.name);
+    }
     Ok(Live { url: saved.url.clone(), saved, password, conn, tunnel })
 }
 
@@ -985,6 +990,8 @@ pub fn run() -> tauri::Result<()> {
             launcher::export_connections,
             launcher::import_connections,
             launcher::take_opened,
+            discover::discover_local,
+            discover::save_discovered,
             users::users,
             users::user_privileges,
             users::user_sql,
@@ -1041,6 +1048,7 @@ mod tests {
             color: None,
             group: String::new(),
             flavor: None,
+            needs_credentials: false,
         };
         let conn = Conn::open(engine, url, None, &saved.tls, &saved.options, None).await.unwrap();
         Live { url: url.into(), saved, password: None, conn, tunnel: None }

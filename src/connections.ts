@@ -328,6 +328,48 @@ export async function importConnections(done: (text: string, error?: boolean) =>
   }
 }
 
+// ---------- Local databases found on this computer ----------
+
+type Found = { conn: Record<string, unknown> & { name: string }; detail: string };
+
+const foundList = el("div", { className: "found-list" });
+const foundCancel = el("button", { type: "button", textContent: "Cancel" });
+const foundSave = el("button", { className: "primary", textContent: "Save" });
+const foundDialog = el("dialog", {}, el("h3", { textContent: "Local databases found" }),
+  el("p", { textContent: "Tick the ones to save. A server that refused the default sign-in is saved too, marked so you can give its credentials." }),
+  el("form", { method: "dialog" }, foundList, el("footer", {}, foundCancel, el("span", { className: "spacer" }), foundSave)));
+document.body.append(foundDialog);
+
+/** Asks which of `found` to save; the ones ticked, or null when cancelled. */
+function chooseFound(found: Found[]): Promise<Found[] | null> {
+  const boxes = found.map(() => el("input", { type: "checkbox", checked: true }));
+  foundList.replaceChildren(...found.map((f, i) => el("label", { className: "check found" }, boxes[i],
+    el("span", {}, el("strong", { textContent: f.conn.name }),
+      el("small", { textContent: f.conn.needs_credentials ? `Needs credentials. ${f.detail}`.trim() : f.detail })))));
+  foundDialog.showModal();
+  return new Promise((resolve) => {
+    let result: Found[] | null = null;
+    foundSave.onclick = () => (result = found.filter((_, i) => boxes[i].checked));
+    foundCancel.onclick = () => foundDialog.close();
+    foundDialog.onclose = () => resolve(result);
+  });
+}
+
+/** Looks for database servers on this computer, asks which to save, and saves them under free names. New ones get the
+ *  default safe mode level `safety`. */
+export async function discoverLocal(safety: string, done: (text: string, error?: boolean) => void) {
+  try {
+    const found = await invoke<Found[]>("discover_local");
+    if (!found.length) return done("No new local databases found.");
+    const picked = await chooseFound(found);
+    if (!picked?.length) return done("");
+    const n = await invoke<number>("save_discovered", { found: picked.map((f) => ({ ...f.conn, safety })) });
+    done(`Saved ${n} connection${n === 1 ? "" : "s"}.`);
+  } catch (e) {
+    done(String(e), true);
+  }
+}
+
 // ---------- Open Recent, and the workspaces to reopen at startup ----------
 
 const RECENT_MAX = 10;

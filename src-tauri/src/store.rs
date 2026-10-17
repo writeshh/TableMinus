@@ -64,6 +64,10 @@ pub struct Saved {
     /// `kind` does; what the server can't do is found from its version once connected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flavor: Option<Flavor>,
+    /// Found by discovery (discover.rs) on a server that wouldn't take the default credentials. The launcher row
+    /// shows a badge until a connect succeeds; only the backend sets or clears it, so the form can't.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_credentials: bool,
 }
 
 /// Where a connection's database password (or SQLite passphrase) is kept.
@@ -317,6 +321,7 @@ pub fn save(
     strip_password(&mut c);
     let all = &mut file.connections;
     let old_name = previous.unwrap_or(&c.name);
+    c.needs_credentials = all.iter().any(|x| x.name == old_name && x.needs_credentials);
     let had_ssh = all.iter().any(|x| x.name == old_name && x.ssh.is_some());
     if let Some(old) = previous.filter(|old| *old != c.name) {
         for which in [Secret::Database, Secret::Ssh] {
@@ -353,6 +358,16 @@ fn strip_password(c: &mut Saved) {
         let _ = u.set_password(None); // Err means it had none
         c.url = u.to_string();
     }
+}
+
+/// Takes the "needs credentials" badge off a connection that has just connected.
+pub fn clear_needs_credentials(dir: &Path, name: &str) -> Result<()> {
+    let mut file = load_all(dir)?;
+    if let Some(c) = file.connections.iter_mut().find(|c| c.name == name && c.needs_credentials) {
+        c.needs_credentials = false;
+        write(dir, &file)?;
+    }
+    Ok(())
 }
 
 pub fn delete(dir: &Path, name: &str) -> Result<()> {
@@ -502,7 +517,7 @@ pub fn delete_tag(dir: &Path, name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Saved, load, save};
+    use super::{PasswordMode, Saved, load, save};
     use crate::db::{Engine, Options};
     use crate::safety::Safety;
     use crate::tls::{Tls, TlsMode};
@@ -529,6 +544,7 @@ mod tests {
             color: None,
             group: String::new(),
             flavor: None,
+            needs_credentials: false,
         }
     }
 
@@ -649,6 +665,24 @@ mod tests {
         delete_group(&dir, "h").unwrap();
         let all = super::load_all(&dir).unwrap();
         assert!(all.groups.is_empty() && all.connections[0].group.is_empty());
+    }
+
+    #[test]
+    fn needs_credentials_survives_an_edit_and_is_cleared_by_clear_needs_credentials() {
+        let dir = temp_dir("badge");
+        let flagged = Saved {
+            password_mode: PasswordMode::NoPassword,
+            needs_credentials: true,
+            ..conn("found", "postgres://postgres@127.0.0.1:5432")
+        };
+        // Discovery writes it; `save`, which the form uses, never sets it.
+        super::write(&dir, &super::ConnectionsFile { connections: vec![flagged], ..Default::default() }).unwrap();
+        // The form never sends the flag, so an edit would drop it if save didn't carry it over.
+        let edited = Saved { password_mode: PasswordMode::NoPassword, ..conn("found", "postgres://me@127.0.0.1:5432") };
+        save(&dir, edited, None, None, None).unwrap();
+        assert!(load(&dir).unwrap()[0].needs_credentials);
+        super::clear_needs_credentials(&dir, "found").unwrap();
+        assert!(!load(&dir).unwrap()[0].needs_credentials);
     }
 
     #[test]

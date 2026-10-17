@@ -39,6 +39,7 @@ fn saved(name: &str, url: &str) -> store::Saved {
         color: None,
         group: String::new(),
         flavor: None,
+        needs_credentials: false,
     }
 }
 

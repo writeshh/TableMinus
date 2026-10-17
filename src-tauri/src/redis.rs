@@ -602,7 +602,12 @@ pub async fn redis_connect(
     }
     let password = store::password_for(&saved)?;
     let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
+    let badge = saved.needs_credentials.then(|| saved.name.clone());
     let mut s = open_session(saved, password, ssh_secret, db).await?;
+    if let Some(badge) = badge {
+        // The badge is only a hint: failing to take it off must not fail a connect that worked.
+        let _ = store::clear_needs_credentials(&crate::dir(&app)?, &badge);
+    }
     let r = info(&prefs, &mut s).await;
     sessions.0.lock().await.insert(name, Arc::new(Mutex::new(s)));
     r
@@ -1167,6 +1172,7 @@ mod tests {
                 color: None,
                 group: String::new(),
                 flavor: None,
+                needs_credentials: false,
             };
             let mut s = super::open_session(saved.clone(), None, None, None).await.unwrap();
             assert_eq!(s.db, 13);

@@ -449,3 +449,10 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .pw-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0 10px 24px; }
 dialog form > .check { margin: 6px 0; }
 .prompt-form input { width: 100%; }
+
+/* Discovered connections whose server refused the default sign-in: a button on the launcher row. */
+.badge-credentials { font-size: 11px; font-weight: 600; padding: 1px 8px; border: 0; border-radius: 999px; color: var(--ink); background: var(--orange); cursor: pointer; }
+.found-list { display: flex; flex-direction: column; gap: 10px; max-height: 50vh; overflow: auto; margin: 12px 0; }
+.check.found { align-items: flex-start; }
+.check.found span { display: flex; flex-direction: column; gap: 2px; }
+.check.found small { color: var(--muted); word-break: break-word; }

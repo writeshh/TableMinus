@@ -70,6 +70,8 @@ type Saved = {
   password_mode?: "keychain" | "ask" | "no_password"; color?: string | null; group?: string;
   /** A Postgres-compatible server it is shown as; it connects as `kind`. */
   flavor?: "cockroach";
+  /** Found by discovery on a server that refused the default sign-in; cleared by the backend on the first connect. */
+  needs_credentials?: boolean;
 };
 type Engine = {
   /** The picker entry: the kind, or the flavor for a Postgres-compatible server. */
@@ -241,6 +243,15 @@ function groupMenu(g: launcher.Group): MenuItem[] {
   ];
 }
 
+/** Marks a discovered connection whose server refused the default sign-in; clicking it opens the form for the credentials. */
+function credentialsBadge(c: Saved) {
+  if (!c.needs_credentials) return "";
+  const badge = el("button", { className: "badge-credentials", textContent: "Needs credentials", title: "The server refused the default sign-in. Enter its user and password." });
+  badge.onclick = (e) => (e.stopPropagation(), openEditor(engineId(c), c));
+  badge.ondblclick = (e) => e.stopPropagation();
+  return badge;
+}
+
 function connRow(c: Saved) {
   const edit = el("button", { className: "icon", textContent: "Edit", title: `Edit ${c.name}` });
   const del = el("button", { className: "icon", textContent: "Delete", title: `Delete ${c.name}` });
@@ -250,7 +261,7 @@ function connRow(c: Saved) {
     "li",
     { tabIndex: 0 },
     avatar(engineId(c)),
-    el("div", { className: "who" }, el("div", { className: "name" }, el("span", { textContent: c.name }), tagPill(c.tag)), el("div", { className: "host", textContent: hostOf(c) })),
+    el("div", { className: "who" }, el("div", { className: "name" }, el("span", { textContent: c.name }), tagPill(c.tag), credentialsBadge(c)), el("div", { className: "host", textContent: hostOf(c) })),
     el("div", { className: "actions" }, edit, del),
   );
   if (c.color) li.style.setProperty("--conn-color", COLORS[c.color] ?? "transparent"), li.classList.add("colored");
@@ -322,6 +333,7 @@ function launcherMenu(): MenuItem[] {
     ["New Group…", async () => (await launcher.editGroup()) && refresh()],
     ["Manage Tags…", () => launcher.manageTags(refresh)],
     "-",
+    ["Find Local Databases…", findLocal],
     ["Import from URL…", importFromUrl],
     ["Import Connections…", () => launcher.importConnections(homeNote)],
     ["Export All Connections…", () => launcher.exportConnections({ kind: "all" }, "all connections", homeNote)],
@@ -331,6 +343,11 @@ $("launcher-menu").onclick = () => {
   const r = $("launcher-menu").getBoundingClientRect();
   contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), launcherMenu());
 };
+
+function findLocal() {
+  setStatus("home-status", "Looking for local databases…", "busy");
+  return launcher.discoverLocal(settings.safeLevel, homeNote);
+}
 
 /** Opens a new connection's form filled from a URL or SQLite path; saving it is up to the user. */
 async function importFromUrl(text?: string) {
@@ -768,6 +785,7 @@ async function openWorkspace(c: Saved, database?: string) {
   const i = await launcher.withAskedPassword(c.name, () => invoke<Info>(connectCommand(c.kind), { name: key, database }));
   if (!i) return; // the password prompt was cancelled
   launcher.addRecent(c.name);
+  if (c.needs_credentials) refresh(); // the backend took the badge off
   const at = ws && workspaces.includes(ws) ? workspaces.indexOf(ws) + 1 : workspaces.length;
   stashWorkspace();
   pane = newPane();
@@ -3436,7 +3454,8 @@ addCommands([
   { id: "close-other-tabs", label: "Close Other Tabs", menu: "File", when: () => inWorkspace() && tabs.length > 1,
     run: () => closeOtherTabs(currentId) },
   { id: "rename-tab", label: "Rename Tab…", menu: "File", when: inWorkspace, run: () => renameTab(currentId) },
-  { id: "import-url", label: "Import Connection from URL…", menu: "File", sep: true, run: () => (newWorkspace(), importFromUrl()) },
+  { id: "find-local", label: "Find Local Databases…", menu: "File", sep: true, run: () => (newWorkspace(), findLocal()) },
+  { id: "import-url", label: "Import Connection from URL…", menu: "File", run: () => (newWorkspace(), importFromUrl()) },
   { id: "import-connections", label: "Import Connections…", menu: "File", run: () => (newWorkspace(), launcher.importConnections(homeNote)) },
   { id: "export-connections", label: "Export Connections…", menu: "File",
     run: () => (newWorkspace(), launcher.exportConnections({ kind: "all" }, "all connections", homeNote)) },
