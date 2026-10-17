@@ -3575,6 +3575,11 @@ divider({
   label: "Assistant width",
 });
 divider({
+  host: $("row-detail").parentElement!, className: "row-detail-edge", variable: "--rd-w", pref: "layout.rowDetail", axis: "x", sign: -1, min: 220,
+  max: () => Math.min(640, $("row-detail").parentElement!.getBoundingClientRect().width * 0.6), size: () => $("row-detail").getBoundingClientRect().width,
+  label: "Row detail width",
+});
+divider({
   host: $("sql-pane"), className: "sql-edge", variable: "--sql-h", pref: "layout.editor", axis: "y", sign: 1, min: 120,
   max: () => $("live").getBoundingClientRect().height - 140, size: () => $("sql-pane").getBoundingClientRect().height,
   label: "Editor height",

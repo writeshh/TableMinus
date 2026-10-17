@@ -1,5 +1,5 @@
 /* Grid editing, its dialogs and the row detail sidebar (grid-edit.ts, cell-editors.ts, rowdetail.ts) */
-.grid-area { flex: 1; min-height: 0; display: flex; }
+.grid-area { position: relative; flex: 1; min-height: 0; display: flex; }
 .grid-area > #out { min-width: 0; }
 #out tr.deleted td:not(.rownum) { text-decoration: line-through; color: var(--muted); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 #out tr.added td { background: color-mix(in srgb, var(--ok) 10%, transparent); }
@@ -29,7 +29,9 @@ dialog.cell-dialog h3, dialog.cell-dialog p, dialog.cell-dialog footer { margin:
 .jt-boolean { color: var(--syn-type); }
 .hex-view { margin: 0; max-height: 60vh; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); font: 12px/1.5 var(--mono); white-space: pre; user-select: text; }
 
-.row-detail { width: 300px; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-left: 1px solid var(--line); background: var(--side); overflow: auto; }
+.row-detail { width: min(var(--rd-w, 300px), 60%); flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-left: 1px solid var(--line); background: var(--side); overflow: auto; }
+.row-detail-edge { right: calc(min(var(--rd-w, 300px), 60%) - 4px); }
+.row-detail[hidden] ~ .row-detail-edge { display: none; }
 .row-detail header { display: flex; align-items: center; gap: 6px; }
 .row-detail .fields { display: grid; gap: 8px; }
 .row-detail label.field { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; color: var(--muted); }
