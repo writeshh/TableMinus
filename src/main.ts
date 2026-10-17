@@ -23,6 +23,7 @@ import * as grid from "./grid-edit";
 import * as vgrid from "./vgrid";
 import { syncRowDetail, toggleRowDetail } from "./rowdetail";
 import { divider, initHiding, togglePane } from "./splitters";
+import { openViewer } from "./viewer";
 import { applyTheme } from "./themes"; // also adds the theme rows to Settings › Appearance
 import "./passcode"; // the lock screen, and its rows in Settings › Security
 import { withVault } from "./vault";
@@ -3454,7 +3455,8 @@ addCommands([
   { id: "close-other-tabs", label: "Close Other Tabs", menu: "File", when: () => inWorkspace() && tabs.length > 1,
     run: () => closeOtherTabs(currentId) },
   { id: "rename-tab", label: "Rename Tab…", menu: "File", when: inWorkspace, run: () => renameTab(currentId) },
-  { id: "find-local", label: "Find Local Databases…", menu: "File", sep: true, run: () => (newWorkspace(), findLocal()) },
+  { id: "sql-viewer", label: "New SQL Viewer", menu: "File", sep: true, run: () => openViewer(confirmDialog) },
+  { id: "find-local", label: "Find Local Databases…", menu: "File", run: () => (newWorkspace(), findLocal()) },
   { id: "import-url", label: "Import Connection from URL…", menu: "File", run: () => (newWorkspace(), importFromUrl()) },
   { id: "import-connections", label: "Import Connections…", menu: "File", run: () => (newWorkspace(), launcher.importConnections(homeNote)) },
   { id: "export-connections", label: "Export Connections…", menu: "File",
@@ -3610,10 +3612,14 @@ showKeys();
 addEventListener("connections-moved", refresh); // Settings › Locations
 show("home");
 
-/** `.sqlite` files and database links opened from Finder or a browser, one form at a time. */
+/** `.sqlite` files and database links opened from Finder or a browser, one form at a time; `.sql` files open in the viewer. */
 async function openFromOs() {
   const items = await invoke<string[]>("take_opened").catch(() => [] as string[]);
   for (const item of items) {
+    if (/\.sql$/i.test(item)) {
+      await openViewer(confirmDialog, item);
+      continue;
+    }
     await importFromUrl(item);
     const d = $<HTMLDialogElement>("editor");
     if (d.open) await new Promise((r) => d.addEventListener("close", r, { once: true }));

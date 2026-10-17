@@ -456,3 +456,11 @@ dialog form > .check { margin: 6px 0; }
 .check.found { align-items: flex-start; }
 .check.found span { display: flex; flex-direction: column; gap: 2px; }
 .check.found small { color: var(--muted); word-break: break-word; }
+
+/* The SQL viewer (viewer.ts): a large dialog around one editor */
+dialog.viewer { width: min(960px, calc(100vw - 32px)); height: min(720px, calc(100vh - 48px)); padding: 12px; }
+dialog.viewer[open] { display: flex; flex-direction: column; gap: 8px; }
+.viewer header { display: flex; align-items: center; gap: 8px; }
+.viewer-title { font: 600 13px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-body { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.viewer footer { min-height: 1.4em; }

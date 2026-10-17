@@ -48,6 +48,14 @@
         "name": "SQLite database",
         "role": "Editor",
         "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "sql"
+        ],
+        "name": "SQL script",
+        "role": "Editor",
+        "rank": "Alternate"
       }
     ]
   }
