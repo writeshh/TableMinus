@@ -368,6 +368,20 @@ export function paste(tab: EditTab, block: { r0: number; c0: number; r1: number;
   host.render();
 }
 
+/** Stages many cells as one undo step (find and replace), skipping cells that can't be typed into; how many changed. */
+export function stageCells(tab: EditTab, cells: [number, number, string][]) {
+  if (!findBy(tab) || !tab.result) return 0;
+  const n = pageRows(tab);
+  const ok = cells.filter(([ri, ci]) => !readOnly(tab, ri, ci));
+  if (!ok.length) return 0;
+  tab.staged.change(() => {
+    for (const [ri, ci, v] of ok) tab.staged.set(ri, ci, v, n, ri < n ? tab.result!.rows[ri][ci] : null);
+  });
+  tab.message = [`Replaced ${plural(ok.length, "value")}; review, then Save`, "done"];
+  host.render();
+  return ok.length;
+}
+
 export function undo(tab: EditTab) {
   if (tab.staged.undo()) host.render();
 }

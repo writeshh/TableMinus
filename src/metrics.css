@@ -3,7 +3,7 @@ dialog.metrics-board { width: calc(100vw - 32px); height: calc(100vh - 32px); ma
 dialog.metrics-board[open] { display: flex; flex-direction: column; }
 .board-head { display: flex; align-items: center; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .board-head > select:first-child { max-width: 220px; font-weight: 600; }
-.board-head select { padding: 4px 8px; }
+.board-head select { padding: 4px 28px 4px 8px; }
 .board-foot { margin: 0; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 12px; }
 .metrics-board.locked .edit-only { display: none; }
 .board-grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 64px; gap: 10px; padding: 12px; align-content: start; background: var(--side); }
@@ -41,5 +41,5 @@ dialog.board-edit h3, dialog.metrics-board ~ dialog h3 { margin: 0 0 14px; font-
 .board-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; align-items: start; }
 .board-row > span:first-child { padding-top: 6px; color: var(--muted); }
 .board-sql { font: 12px/1.45 var(--mono); padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); resize: vertical; width: 100%; }
-.board-form textarea:not(.board-sql) { padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); resize: vertical; width: 100%; }
+.board-form textarea:not(.board-sql) { resize: vertical; width: 100%; }
 @media (prefers-reduced-motion: reduce) { .widget-tools { transition: none; } }

@@ -6,7 +6,7 @@ import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from "@tau
 /** The errors the UI acts on rather than shows; error.rs's `Error::code` gives the same names. */
 export type Code =
   | "confirm" | "password" | "wrong_password" | "ask_password" | "file_password" | "file_unseal_failed"
-  | "import_scripts" | "disconnected" | "several_rows";
+  | "import_scripts" | "disconnected" | "several_rows" | "vault_locked";
 
 export class AppError extends Error {
   readonly code: Code | null;

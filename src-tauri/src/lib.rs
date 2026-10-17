@@ -1,5 +1,7 @@
 //! TableMinus's Tauri commands: the only surface the UI can call.
 
+mod acp;
+mod ai;
 mod backup;
 mod browse;
 mod catalog;
@@ -16,15 +18,29 @@ mod locations;
 mod mcp;
 mod objects;
 mod passcode;
+mod plugins;
 mod processes;
 mod readonly;
+mod redis;
 mod rows;
 mod safety;
+mod secrets;
 mod ssh;
 mod store;
 mod structure;
+mod themes;
 mod tls;
 mod users;
+
+/// What `cargo fuzz` drives (`fuzz/fuzz_targets/read_only.rs`): safe mode's read-only check on arbitrary text, for
+/// every engine. Built only with `--cfg fuzzing`, which cargo-fuzz sets, so the app's surface stays as it is.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub fn fuzz_read_only(sql: &str) {
+    for engine in [Engine::Postgres, Engine::Mysql, Engine::Sqlite] {
+        readonly::is_read_only(engine, sql);
+    }
+}
 
 use db::Engine;
 use error::{Error, Result};
@@ -294,6 +310,9 @@ async fn test_connection(
     };
     let password = fallback(password, store::Secret::Database)?;
     let ssh_secret = if conn.ssh.is_some() { fallback(ssh_password, store::Secret::Ssh)? } else { None };
+    if conn.kind == Engine::Redis {
+        return redis::test(conn, password, ssh_secret).await;
+    }
     let (mut db, _tunnel) = open_db(&conn, password.as_ref(), ssh_secret).await?;
     let n = db.tables(conn.options.system_schemas).await?.len();
     Ok(format!("Connected · {n} tables"))
@@ -355,24 +374,26 @@ async fn reconnect(app: AppHandle, open: State<'_, Open>, name: String) -> Resul
 
 /// Safe mode's check for a request on an open connection; see [`safety::check`]. `reads` says whether the request
 /// is read-only for the connection's engine. The connection lock is let go before checking, since Touch ID waits for
-/// the user.
+/// the user. Returns the connection's level.
 async fn guard(
     open: &Open,
     name: &str,
     reads: impl FnOnce(Engine) -> bool,
     confirmed: bool,
     unlock: Option<&safety::Unlock>,
-) -> Result<()> {
+) -> Result<safety::Safety> {
     let (level, kind, password) = {
         let live = open.get(name).await?;
         (live.saved.safety, live.saved.kind, live.password.clone())
     };
-    safety::check(level, reads(kind), confirmed, unlock, password.as_ref()).await
+    safety::check(level, reads(kind), confirmed, unlock, password.as_ref()).await?;
+    Ok(level)
 }
 
 /// Drops the live connection; the next connect opens a fresh one.
 #[tauri::command]
-async fn disconnect(open: State<'_, Open>, name: String) -> Result<()> {
+async fn disconnect(open: State<'_, Open>, redis: State<'_, redis::Sessions>, name: String) -> Result<()> {
+    redis.remove(&name).await;
     open.remove(&name).await;
     Ok(())
 }
@@ -501,6 +522,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::Postgres => "tokio-postgres",
                 Engine::Mysql | Engine::Mariadb => "mysql_async",
                 Engine::Sqlite => "rusqlite (bundled SQLite)",
+                Engine::Redis => "TableMinus RESP2 client",
             },
             cipher: live.conn.tls_cipher().await?,
             ssh: live.saved.ssh.as_ref().map(|s| s.host.clone()),
@@ -535,13 +557,33 @@ async fn run_query(
         read_only = readonly::is_read_only(kind, &sql);
         read_only
     };
-    guard(&open, &name, reads, confirmed, unlock.as_ref()).await?;
+    let level = guard(&open, &name, reads, confirmed, unlock.as_ref()).await?;
+    // The level asks before writes and the parse saw none, so nobody was asked: the database makes sure, refusing
+    // what the parse can't see (a function that writes). Once the user has said yes, it runs as it is.
+    let bounded = read_only && level.asks(false) && !confirmed && unlock.is_none();
     let mut live = open.get(&name).await?;
+    let (start, end) = live.conn.read_only_bounds();
+    if bounded {
+        let r = live.conn.query(start).await;
+        live.check(r)?;
+    }
     let max = max_rows.map(|n| n as usize);
     let r =
         with_limit(&mut live, query_limit(&prefs), move |c| Box::pin(async move { c.query_results(&sql, max).await }))
             .await;
-    Ok(Ran { results: live.check(r)?, read_only })
+    if bounded {
+        let ended = live.conn.query(end).await;
+        if r.is_ok() {
+            live.check(ended)?;
+        }
+    }
+    match r {
+        // It did try to write: ask as for any write, and the answer sends it again unbounded.
+        Err(e) if bounded && db::Conn::refused_as_read_only(&e) => {
+            Err(if level.wants_password() { Error::PasswordRequired } else { Error::ConfirmRequired })
+        }
+        r => Ok(Ran { results: live.check(r)?, read_only }),
+    }
 }
 
 /// Whether safe mode counts `sql` as only reading. The metrics board asks before running anything else, and never
@@ -550,6 +592,62 @@ async fn run_query(
 async fn is_read_only(open: State<'_, Open>, name: String, sql: String) -> Result<bool> {
     let kind = open.get(&name).await?.saved.kind;
     Ok(readonly::is_read_only(kind, &sql))
+}
+
+/// The most rows the AI assistant's query shows the model.
+const AI_ROWS: usize = 50;
+
+/// Runs a query the AI assistant asked for, once the user approved it in the pane (which counts as the safe mode
+/// confirmation; password levels still want `unlock`).
+#[tauri::command]
+async fn ai_run(
+    open: State<'_, Open>,
+    prefs: State<'_, Prefs>,
+    name: String,
+    sql: String,
+    unlock: Option<safety::Unlock>,
+) -> Result<db::QueryResult> {
+    refuse_writes(&open, &name, &sql).await?; // before safe mode asks for anything
+    guard(&open, &name, |_| true, true, unlock.as_ref()).await?;
+    run_read_only(&open, &prefs, &name, &sql, AI_ROWS).await
+}
+
+async fn refuse_writes(open: &Open, name: &str, sql: &str) -> Result<()> {
+    let kind = open.get(name).await?.saved.kind;
+    if readonly::is_read_only(kind, sql) {
+        Ok(())
+    } else {
+        Err(Error::Invalid("only read-only SQL runs here; insert it into the editor to run it"))
+    }
+}
+
+/// Runs SQL for the assistant or a plugin: only what the parse calls read-only, and inside read-only bounds, so the
+/// database refuses a function that writes. At most `max_rows` rows come back. Safe mode is the caller's to check.
+pub(crate) async fn run_read_only(
+    open: &Open,
+    prefs: &Prefs,
+    name: &str,
+    sql: &str,
+    max_rows: usize,
+) -> Result<db::QueryResult> {
+    refuse_writes(open, name, sql).await?;
+    let mut live = open.get(name).await?;
+    let (start, end) = live.conn.read_only_bounds();
+    let r = live.conn.query(start).await;
+    live.check(r)?;
+    let sql = sql.to_string();
+    let r = with_limit(&mut live, query_limit(prefs), move |c| {
+        Box::pin(async move { c.query_limited(&sql, Some(max_rows)).await })
+    })
+    .await;
+    let ended = live.conn.query(end).await;
+    if r.is_ok() {
+        live.check(ended)?;
+    }
+    match r {
+        Err(e) if db::Conn::refused_as_read_only(&e) => Err(Error::Invalid("the database refused it as a write")),
+        r => live.check(r),
+    }
 }
 
 /// The largest SQL file the editor opens.
@@ -676,6 +774,7 @@ async fn run_ddl(
 async fn set_safety(
     app: AppHandle,
     open: State<'_, Open>,
+    redis: State<'_, redis::Sessions>,
     name: String,
     safety: safety::Safety,
     unlock: Option<safety::Unlock>,
@@ -693,6 +792,7 @@ async fn set_safety(
     for live in sessions {
         live.lock().await.saved.safety = safety;
     }
+    redis.set_safety(&name, safety).await;
     Ok(())
 }
 
@@ -765,8 +865,11 @@ pub fn run() -> tauri::Result<()> {
         .manage(backup::Jobs::default())
         .manage(processes::Sessions::default())
         .manage(jobs::Jobs::default())
+        .manage(acp::Agents::default())
+        .manage(redis::Sessions::default())
         .manage(launcher::Opened::default())
         .setup(|app| {
+            secrets::init(&app.path().app_config_dir()?);
             tauri::async_runtime::spawn(keep_alive(app.handle().clone()));
             tauri::async_runtime::spawn(passcode::lock_at_startup(open.clone()));
             mcp::setup(app.handle(), open, prefs)?;
@@ -812,6 +915,34 @@ pub fn run() -> tauri::Result<()> {
             console::console_clear,
             set_safety,
             safety::touch_id_available,
+            safety::batch_grant,
+            mcp::mcp_install,
+            ai::ai_chat,
+            ai::ai_has_key,
+            ai::ai_set_key,
+            ai_run,
+            secrets::vault_status,
+            secrets::vault_unlock,
+            secrets::vault_reset,
+            themes::theme_git_fetch,
+            acp::acp_start,
+            acp::acp_prompt,
+            acp::acp_cancel,
+            acp::acp_permission,
+            acp::acp_stop,
+            plugins::plugin_list,
+            plugins::plugin_fetch,
+            plugins::plugin_install,
+            plugins::plugin_remove,
+            plugins::plugin_enable,
+            plugins::plugin_run,
+            redis::redis_connect,
+            redis::redis_databases,
+            redis::redis_scan,
+            redis::redis_value,
+            redis::redis_edit,
+            redis::redis_command,
+            redis::redis_connection_info,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,
@@ -836,6 +967,7 @@ pub fn run() -> tauri::Result<()> {
             mcp::mcp_revoke_token,
             mcp::mcp_activity,
             mcp::mcp_clear_activity,
+            mcp::mcp_clients,
             mcp::mcp_answer,
             jobs::start_export,
             jobs::start_import,
@@ -868,7 +1000,12 @@ pub fn run() -> tauri::Result<()> {
             objects::save_sequence_sql
         ])
         .build(tauri::generate_context!())?
-        .run(launcher::on_event);
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                acp::stop_all(&app.state::<acp::Agents>());
+            }
+            launcher::on_event(app, event);
+        });
     Ok(())
 }
 

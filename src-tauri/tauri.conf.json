@@ -15,7 +15,10 @@
       {
         "title": "TableMinus",
         "width": 1200,
-        "height": 800
+        "height": 800,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 13 }
       }
     ],
     "security": {

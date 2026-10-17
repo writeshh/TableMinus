@@ -10,6 +10,14 @@
 
 /* Database tabs: one per open workspace above the header, marked with its connection's tag colour. */
 .db-tabs { display: flex; gap: 4px; padding: 6px 8px; background: var(--side); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; }
+/* macOS (main.ts sets overlay-title): the window's title bar is see-through, so the workspace tabs sit beside the
+   traffic lights and their empty parts drag the window. With no tabs (the launcher) a strip of the same height does. */
+.drag-strip { display: none; }
+body.overlay-title { --title-h: 40px; }
+body.overlay-title .drag-strip { display: block; position: fixed; top: 0; left: 0; right: 0; height: var(--title-h); z-index: 1; }
+body.overlay-title:has(> #db-tabs[hidden]) { padding-top: var(--title-h); box-sizing: border-box; }
+body.overlay-title .db-tabs { position: relative; z-index: 2; min-height: var(--title-h); box-sizing: border-box; align-items: center; padding-left: 80px; }
+body.overlay-title.full-screen .db-tabs { padding-left: 8px; }
 .db-tab { --tag: color-mix(in srgb, var(--muted) 60%, transparent); display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 260px; padding: 4px 6px 4px 10px; border: 1px solid transparent; border-radius: 999px; background: none; color: var(--muted); white-space: nowrap; }
 .db-tab:hover { color: var(--fg); }
 .db-tab[aria-selected="true"] { background: var(--bg); color: var(--fg); border-color: var(--line); }

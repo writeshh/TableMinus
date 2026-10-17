@@ -15,16 +15,8 @@ const SERVICE: &str = "dev.ritesh.dbmanager.passcode";
 const ACCOUNT: &str = "app";
 const MIN_LEN: usize = 4;
 
-fn entry() -> Result<keyring::Entry> {
-    Ok(keyring::Entry::new(SERVICE, ACCOUNT)?)
-}
-
 fn stored_hash() -> Result<Option<String>> {
-    match entry()?.get_password() {
-        Ok(h) => Ok(Some(h)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    Ok(crate::secrets::get(SERVICE, ACCOUNT)?.map(|h| h.expose_secret().to_string()))
 }
 
 fn hash(passcode: &SecretString) -> Result<String> {
@@ -66,7 +58,7 @@ pub async fn set_passcode(current: Option<SecretString>, passcode: SecretString)
         return Err(Error::Invalid("use at least 4 characters"));
     }
     check(current.unwrap_or_default()).await?;
-    blocking(move || Ok(entry()?.set_password(&hash(&passcode)?)?)).await
+    blocking(move || crate::secrets::set(SERVICE, ACCOUNT, &hash(&passcode)?.into())).await
 }
 
 #[tauri::command]
@@ -78,10 +70,7 @@ pub async fn remove_passcode(open: State<'_, crate::Open>, current: SecretString
 }
 
 fn forget_hash() -> Result<()> {
-    match entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    crate::secrets::delete(SERVICE, ACCOUNT)
 }
 
 /// The app starts locked; this lets it go when no passcode is set. A keychain that can't be read keeps it locked.

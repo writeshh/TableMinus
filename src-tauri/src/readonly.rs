@@ -74,6 +74,8 @@ pub fn is_read_only(engine: Engine, sql: &str) -> bool {
         Engine::Postgres => &PostgreSqlDialect {},
         Engine::Mysql | Engine::Mariadb => &MySqlDialect {},
         Engine::Sqlite => &SQLiteDialect {},
+        // Redis commands aren't SQL; redis.rs has its own list.
+        Engine::Redis => return false,
     };
     let Ok(stmts) = Parser::parse_sql(dialect, sql) else { return false };
     !stmts.is_empty() && stmts.visit(&mut Writes).is_continue()
@@ -169,5 +171,48 @@ mod tests {
     fn unparseable_or_empty_sql_needs_confirmation() {
         assert!(!is_read_only(Postgres, "not valid sql at all"));
         assert!(!is_read_only(Postgres, ""));
+    }
+
+    /// Properties over generated input: the check never panics, sees a write after any read, and passes plain
+    /// SELECTs of any quoted names.
+    mod props {
+        use super::is_read_only;
+        use crate::db::{Dialect, Engine};
+        use proptest::prelude::*;
+
+        const ENGINES: [(Engine, Dialect); 3] =
+            [(Engine::Postgres, Dialect::Pg), (Engine::Mysql, Dialect::My), (Engine::Sqlite, Dialect::Lite)];
+        const WRITES: [&str; 5] = [
+            "DELETE FROM {}",
+            "UPDATE {} SET a = 1",
+            "INSERT INTO {} VALUES (1)",
+            "DROP TABLE {}",
+            "TRUNCATE TABLE {}",
+        ];
+
+        proptest! {
+            #[test]
+            fn is_read_only_never_panics(sql in any::<String>()) {
+                for (engine, _) in ENGINES {
+                    is_read_only(engine, &sql);
+                }
+            }
+
+            #[test]
+            fn a_write_after_a_read_is_never_read_only(table in "\\PC{1,20}", write in prop::sample::select(&WRITES[..])) {
+                for (engine, d) in ENGINES {
+                    let sql = format!("SELECT 1; {}", write.replace("{}", &d.ident(&table)));
+                    prop_assert!(!is_read_only(engine, &sql), "{}", sql);
+                }
+            }
+
+            #[test]
+            fn a_select_of_any_quoted_names_is_read_only(table in "\\PC{1,20}", column in "\\PC{1,20}") {
+                for (engine, d) in ENGINES {
+                    let sql = format!("SELECT {} FROM {}", d.ident(&column), d.ident(&table));
+                    prop_assert!(is_read_only(engine, &sql), "{}", sql);
+                }
+            }
+        }
     }
 }

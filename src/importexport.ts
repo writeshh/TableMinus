@@ -4,7 +4,8 @@
 import { invoke } from "./ipc";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { connName, el } from "./dom";
+import { connName, el, revealButton } from "./dom";
+import { jobsPanel, notify } from "./jobs";
 import { guarded } from "./safety";
 import { fileName, matchColumns } from "./transfer";
 import { readPref, writePref } from "./prefs";
@@ -54,7 +55,8 @@ function modal(title: string, className = "") {
 
 // ---------- Jobs ----------
 
-type Shown = { bar: HTMLProgressElement; text: HTMLElement; button: HTMLButtonElement; after?: (d: Done) => void };
+/** `paths` are the files the job writes, for Show in Finder once it's done; `after` runs once it ends. */
+type Shown = { label: string; paths: string[]; bar: HTMLProgressElement; text: HTMLElement; button: HTMLButtonElement; after?: (d: Done) => void };
 const shown = new Map<number, Shown>();
 const early = new Map<number, Done>(); // job-done can beat the start command's reply for tiny jobs
 let listening: Promise<unknown> | null = null;
@@ -84,21 +86,19 @@ function finish(d: Done) {
   s.button.textContent = "Close";
   s.button.disabled = false;
   s.button.onclick = () => s.button.closest(".job")?.remove();
+  if (!d.error && s.paths.length) s.button.before(revealButton(s.paths));
+  notify(s.label, s.text.textContent, !d.error, d.error ? [] : s.paths);
   s.after?.(d);
 }
 
-function jobsPanel() {
-  return document.querySelector<HTMLElement>(".jobs") ?? document.body.appendChild(el("div", { className: "jobs" }));
-}
-
 /** Starts a job, asking first when safe mode wants confirmation, and shows it in the jobs panel. */
-async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<string, unknown>, after?: (d: Done) => void) {
+async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<string, unknown>, after?: Shown["after"], paths: string[] = []) {
   await listenOnce();
   const bar = el("progress", { max: 1, value: 0 });
   const text = el("span", { textContent: "Starting…" });
   const button = el("button", { type: "button", textContent: "Cancel" });
   jobsPanel().append(el("div", { className: "job" }, el("strong", { textContent: label }), bar, el("div", { className: "job-foot" }, text, button)));
-  const show: Shown = { bar, text, button, after };
+  const show: Shown = { label, paths, bar, text, button, after };
   bar.removeAttribute("value"); // indeterminate until a total arrives
   try {
     const id = await guarded(ctx.conn, (a) => invoke<number>(cmd, { ...args, name: ctx.conn, ...a }),
@@ -117,16 +117,51 @@ async function startJob(ctx: Ctx, label: string, cmd: string, args: Record<strin
 
 type ExportPrefs = {
   format: "csv" | "json" | "sql"; delimiter: string; crlf: boolean; header: boolean; quoteAll: boolean; nullEmpty: boolean;
+  quote: string; decimal: string;
   structure: boolean; drop: boolean; content: boolean; gzip: boolean; pattern: string;
 };
 const EXPORT_DEFAULTS: ExportPrefs = {
-  format: "csv", delimiter: ",", crlf: false, header: true, quoteAll: false, nullEmpty: true,
+  format: "csv", delimiter: ",", crlf: false, header: true, quoteAll: false, nullEmpty: true, quote: '"', decimal: ".",
   structure: true, drop: true, content: true, gzip: false, pattern: "{table}",
 };
 const PREFS_KEY = "export-options";
 
 function loadPrefs(): ExportPrefs {
   return { ...EXPORT_DEFAULTS, ...readPref<Partial<ExportPrefs>>(PREFS_KEY) };
+}
+
+const DELIMITERS = [[",", "Comma"], [";", "Semicolon"], ["\t", "Tab"], ["|", "Pipe"]];
+const delimiterPick = (value: string) => el("select", {}, ...DELIMITERS.map(([v, t]) => option(v, t, v === value)));
+const quotePick = (value: string) => el("select", {}, option('"', 'Double (")', value === '"'), option("'", "Single (')", value === "'"));
+const decimalPick = (value: string) => el("select", { title: "For values that are plain decimal numbers" }, option(".", "Point (1.5)", value === "."), option(",", "Comma (1,5)", value === ","));
+const lineBreakPick = (crlf: boolean) => el("select", {}, option("lf", "LF (macOS, Linux)", !crlf), option("crlf", "CRLF (Windows)", crlf));
+
+/** Settings › Data: the CSV options the next export starts with. The export dialog keeps its last choices in the
+ *  same place, so this is drawn again each time Settings opens. */
+export function csvDefaults(host: HTMLElement) {
+  const p = loadPrefs();
+  const set = (patch: Partial<ExportPrefs>) => writePref(PREFS_KEY, { ...loadPrefs(), ...patch });
+  const delimiter = delimiterPick(p.delimiter);
+  delimiter.onchange = () => set({ delimiter: delimiter.value });
+  const lineBreak = lineBreakPick(p.crlf);
+  lineBreak.onchange = () => set({ crlf: lineBreak.value === "crlf" });
+  const quote = quotePick(p.quote);
+  quote.onchange = () => set({ quote: quote.value });
+  const decimal = decimalPick(p.decimal);
+  decimal.onchange = () => set({ decimal: decimal.value });
+  const box = (text: string, key: "header" | "quoteAll" | "nullEmpty") => {
+    const c = check(text, p[key]);
+    c.input.onchange = () => set({ [key]: c.input.checked });
+    return c.label;
+  };
+  host.replaceChildren(
+    el("span", { className: "k", textContent: "CSV export" }),
+    el("span", { className: "checks" },
+      el("span", { className: "row-opts" }, labelled("Delimiter", delimiter), labelled("Line break", lineBreak)),
+      el("span", { className: "row-opts" }, labelled("Quote", quote), labelled("Decimal separator", decimal)),
+      box("Field names in the first row", "header"), box("Quote every field (not only where needed)", "quoteAll"),
+      box("NULL as an empty field (otherwise the text NULL)", "nullEmpty")),
+  );
 }
 
 /** The export dialog: what, format and its options, file names; then a folder to write into. */
@@ -153,12 +188,15 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
   if (source.kind === "rows") d.append(labelled("Rows", rows));
 
   const format = el("select", {}, option("csv", "CSV", p.format === "csv"), option("json", "JSON", p.format === "json"), option("sql", "SQL", p.format === "sql"));
-  const delimiter = el("select", {}, ...[[",", "Comma"], [";", "Semicolon"], ["\t", "Tab"], ["|", "Pipe"]].map(([v, t]) => option(v, t, v === p.delimiter)));
-  const lineBreak = el("select", {}, option("lf", "LF (macOS, Linux)", !p.crlf), option("crlf", "CRLF (Windows)", p.crlf));
+  const delimiter = delimiterPick(p.delimiter);
+  const lineBreak = lineBreakPick(p.crlf);
   const header = check("Field names in the first row", p.header);
   const quoteAll = check("Quote every field (not only where needed)", p.quoteAll);
   const nullEmpty = check("NULL as an empty field (otherwise the text NULL)", p.nullEmpty);
-  const csvBox = el("div", { className: "opts" }, labelled("Delimiter", delimiter), labelled("Line break", lineBreak), header.label, quoteAll.label, nullEmpty.label);
+  const quote = quotePick(p.quote);
+  const decimal = decimalPick(p.decimal);
+  const csvBox = el("div", { className: "opts" }, labelled("Delimiter", delimiter), labelled("Line break", lineBreak), labelled("Quote", quote),
+    labelled("Decimal separator", decimal), header.label, quoteAll.label, nullEmpty.label);
 
   const structure = check("Structure (CREATE TABLE)", p.structure);
   const drop = check("DROP TABLE IF EXISTS first", p.drop);
@@ -189,7 +227,7 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
     if (source.kind === "tables" && !tables.length) return void (status.textContent = "Choose at least one table.");
     const prefs: ExportPrefs = {
       format: format.value as ExportPrefs["format"], delimiter: delimiter.value, crlf: lineBreak.value === "crlf",
-      header: header.input.checked, quoteAll: quoteAll.input.checked, nullEmpty: nullEmpty.input.checked,
+      header: header.input.checked, quoteAll: quoteAll.input.checked, nullEmpty: nullEmpty.input.checked, quote: quote.value, decimal: decimal.value,
       structure: structure.input.checked, drop: drop.input.checked, content: content.input.checked,
       gzip: gzip.input.checked, pattern: pattern.value,
     };
@@ -204,16 +242,17 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
       : source.kind === "rows" ? [{ path: path(source.request.table), source: { rows: { request: source.request, page: rows.value === "page" } } }]
       : source.queries.map((q) => ({ path: path(q.name), source: { query: { sql: q.sql, table: insertInto.value.trim() || "table_name" } } }));
     const fmtOpts =
-      prefs.format === "csv" ? { csv: { delimiter: prefs.delimiter, quote_all: prefs.quoteAll, crlf: prefs.crlf, header: prefs.header, null_empty: prefs.nullEmpty } }
+      prefs.format === "csv" ? { csv: { delimiter: prefs.delimiter, quote_all: prefs.quoteAll, crlf: prefs.crlf, header: prefs.header, null_empty: prefs.nullEmpty, quote: prefs.quote, decimal: prefs.decimal } }
       : prefs.format === "sql" ? { sql: { structure: prefs.structure, drop: prefs.drop, content: prefs.content } }
       : "json";
     d.close();
     const label = source.kind !== "tables" ? what : tables.length === 1 ? tables[0] : `${tables.length} tables`;
+    const paths = items.map((i) => i.path);
     const reveal = (d: Done) => {
       // Best effort: the export is done whether or not Finder comes up.
-      if (!d.error && ctx.revealExports?.()) revealItemInDir(items.map((i) => i.path)).catch(() => {});
+      if (!d.error && ctx.revealExports?.()) revealItemInDir(paths).catch(() => {});
     };
-    startJob(ctx, `Export ${label}`, "start_export", { export: { items, format: fmtOpts, gzip: prefs.gzip } }, reveal);
+    startJob(ctx, `Export ${label}`, "start_export", { export: { items, format: fmtOpts, gzip: prefs.gzip } }, reveal, paths);
   };
   d.showModal();
 }

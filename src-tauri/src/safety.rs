@@ -4,6 +4,8 @@ use crate::error::{Error, Result};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 /// How careful a connection is about running SQL.
@@ -60,6 +62,42 @@ pub fn level_or_legacy<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<S
 pub enum Unlock {
     Password(SecretString),
     TouchId,
+    /// A token from [`batch_grant`]: one Touch ID prompt stands for a whole Run All.
+    Grant(SecretString),
+}
+
+/// How long a batch grant lasts. Long enough for a script's statements, short enough that a forgotten one is gone.
+const GRANT_LIFE: Duration = Duration::from_secs(300);
+
+/// Live batch grants, as digests of their tokens and when they expire. In memory only: a restart ends them all.
+static GRANTS: Mutex<Vec<([u8; 32], Instant)>> = Mutex::new(Vec::new());
+
+fn token_digest(token: &SecretString) -> [u8; 32] {
+    Sha256::digest(token.expose_secret().as_bytes()).into()
+}
+
+/// Asks for Touch ID once and returns a token that stands for it for a few minutes, so Run All at a Safe level asks
+/// once for the batch instead of once per statement. A password needs no grant: sending it again doesn't ask.
+#[tauri::command]
+pub async fn batch_grant() -> Result<String> {
+    touch_id("run these statements in safe mode").await?;
+    let token = crate::mcp::random_hex(32)?;
+    let now = Instant::now();
+    let mut grants = GRANTS.lock().unwrap_or_else(PoisonError::into_inner);
+    grants.retain(|(_, until)| *until > now);
+    grants.push((token_digest(&SecretString::from(token.clone())), now + GRANT_LIFE));
+    Ok(token)
+}
+
+/// Whether `token` is a live grant, compared in constant time.
+fn granted(token: &SecretString) -> bool {
+    let digest = token_digest(token);
+    let now = Instant::now();
+    GRANTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|(d, until)| *until > now && bool::from(d.ct_eq(&digest)))
 }
 
 /// Lets a request through, or says what the UI must ask for before sending it again: [`Error::ConfirmRequired`]
@@ -91,6 +129,14 @@ pub async fn verify(unlock: &Unlock, stored: Option<&SecretString>) -> Result<()
             if bool::from(digest(given).ct_eq(&digest(stored))) { Ok(()) } else { Err(Error::WrongPassword) }
         }
         Unlock::TouchId => touch_id("run a query in safe mode").await,
+        // An expired grant asks again, as if none had been given.
+        Unlock::Grant(token) => {
+            if granted(token) {
+                Ok(())
+            } else {
+                Err(Error::PasswordRequired)
+            }
+        }
     }
 }
 
@@ -128,6 +174,7 @@ pub async fn touch_id(reason: &str) -> Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[expect(clippy::unused_async, reason = "the same signature as the macOS version, which awaits the prompt")]
 pub async fn touch_id(_reason: &str) -> Result<()> {
     Err(Error::TouchId("only on macOS".into()))
 }
@@ -140,9 +187,11 @@ pub fn touch_id_available() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Safety, Unlock, check};
+    use super::{GRANTS, Safety, Unlock, check, token_digest};
     use crate::error::Error;
     use secrecy::SecretString;
+    use std::sync::PoisonError;
+    use std::time::{Duration, Instant};
 
     fn run(level: Safety, read_only: bool, confirmed: bool, unlock: Option<&Unlock>) -> Result<(), Error> {
         let stored = SecretString::from("hunter2");
@@ -194,5 +243,39 @@ mod tests {
     fn safe_levels_refuse_when_no_password_is_stored() {
         let r = tauri::async_runtime::block_on(check(Safety::Safe1, true, true, Some(&password("")), None));
         assert!(matches!(r, Err(Error::SafeModeNoPassword)));
+    }
+
+    /// A grant as `batch_grant` would record it after Touch ID, expiring at `until`; the token to send.
+    fn grant(token: &str, until: Instant) -> Unlock {
+        GRANTS.lock().unwrap_or_else(PoisonError::into_inner).push((token_digest(&token.into()), until));
+        Unlock::Grant(token.into())
+    }
+
+    #[test]
+    fn safe_levels_take_a_live_batch_grant() {
+        let g = grant("live-grant", Instant::now() + Duration::from_secs(60));
+        assert!(run(Safety::Safe1, true, false, Some(&g)).is_ok());
+        assert!(run(Safety::Safe2, false, false, Some(&g)).is_ok(), "the same grant serves the next statement");
+    }
+
+    #[test]
+    fn an_expired_or_unknown_grant_asks_again() {
+        let expired = grant("old-grant", Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
+        assert!(matches!(run(Safety::Safe1, true, false, Some(&expired)), Err(Error::PasswordRequired)));
+        let unknown = Unlock::Grant("never-granted".into());
+        assert!(matches!(run(Safety::Safe1, true, false, Some(&unknown)), Err(Error::PasswordRequired)));
+    }
+
+    #[test]
+    fn unlock_should_arrive_from_the_ui_as_json() {
+        let g: Unlock = serde_json::from_str(r#"{"grant":"abc"}"#).unwrap();
+        assert!(matches!(g, Unlock::Grant(_)));
+        assert!(matches!(serde_json::from_str::<Unlock>(r#""touch_id""#).unwrap(), Unlock::TouchId));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn batch_grant_needs_touch_id() {
+        assert!(matches!(tauri::async_runtime::block_on(super::batch_grant()), Err(Error::TouchId(_))));
     }
 }

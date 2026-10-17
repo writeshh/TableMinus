@@ -122,3 +122,32 @@ export const BUNDLED: Theme[] = [
     },
   },
 ];
+
+/** A repository themes were installed from (Settings › Appearance › Install from Git…), and the names they got. */
+export type GitSource = { url: string; commit: string; names: string[] };
+
+/** A kept GitSource, checked again on load like the themes; null when it isn't one. */
+export function gitSource(raw: unknown): GitSource | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const s = raw as Record<string, unknown>;
+  const ok = typeof s.url === "string" && s.url.startsWith("https://") && typeof s.commit === "string" && /^[0-9a-f]{0,64}$/.test(s.commit)
+    && Array.isArray(s.names) && s.names.every((n) => typeof n === "string");
+  return ok ? { url: s.url as string, commit: s.commit as string, names: s.names as string[] } : null;
+}
+
+/** The themes among a repository's files, each checked as an imported file is; the rest are named with the reason.
+ *  A second theme with a name already taken in the repository is skipped. */
+export function gitThemes(files: { path: string; text: string }[]): { themes: Theme[]; skipped: string[] } {
+  const themes: Theme[] = [];
+  const skipped: string[] = [];
+  for (const f of files) {
+    try {
+      const t = parseTheme(f.text);
+      if (themes.some((x) => x.name === t.name)) throw `another file already has the name “${t.name}”`;
+      themes.push(t);
+    } catch (e) {
+      skipped.push(`${f.path}: ${String(e)}`);
+    }
+  }
+  return { themes, skipped };
+}

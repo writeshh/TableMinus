@@ -31,3 +31,21 @@ export function transformText(s: string, t: Transform, width: number) {
 /** Whether a transform works on whole lines (the selected lines, or every line) rather than on the selection or the
  *  word at the cursor. */
 export const byLine = (t: Transform) => t === "trim" || t === "tabs" || t === "spaces";
+
+export type ReplaceOptions = { matchCase: boolean; wholeCell: boolean };
+
+/** Find and replace over a result's cells: [row, column, new value] for every cell that changes. NULL cells are
+ *  skipped (there is no text to search). `find` is plain text, never a pattern. */
+export function replaceCells(rows: (string | null)[][], find: string, replace: string, o: ReplaceOptions): [number, number, string][] {
+  if (!find) return [];
+  const text = find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(o.wholeCell ? `^${text}$` : text, o.matchCase ? "gu" : "giu");
+  const out: [number, number, string][] = [];
+  rows.forEach((row, ri) =>
+    row.forEach((v, ci) => {
+      const next = v === null ? v : v.replace(re, () => replace); // a function, so $& in `replace` stays literal
+      if (next !== null && next !== v) out.push([ri, ci, next]);
+    }),
+  );
+  return out;
+}

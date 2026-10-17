@@ -6,6 +6,7 @@ import { invoke } from "./ipc";
 import { $, el } from "./dom";
 import { modal } from "./backup";
 import { saveSecurity, security, touchIdAvailable, touchIdChecked, useTouchId } from "./safety";
+import { unlockAtStartup, withVault } from "./vault";
 
 const isMac = navigator.userAgent.includes("Mac");
 let passcodeSet = false;
@@ -93,7 +94,8 @@ forgot.onclick = async () => {
   }
 };
 
-invoke<boolean>("passcode_set").then(
+// An existing secrets vault opens first: the passcode's hash is in it.
+unlockAtStartup().then(() => invoke<boolean>("passcode_set")).then(
   (set) => ((passcodeSet = set), set ? lock() : screen.close(), renderRows()),
   () => screen.close(), // outside the app (a plain browser preview) there's no backend
 );
@@ -150,7 +152,7 @@ function passcodeDialog(change: boolean) {
   save.onclick = async () => {
     if (next.value !== again.value) return setStatus("The new passcodes don't match.", "error");
     try {
-      await invoke("set_passcode", { current: change ? current.value : null, passcode: next.value });
+      await withVault(() => invoke("set_passcode", { current: change ? current.value : null, passcode: next.value }));
       passcodeSet = true;
       d.close();
       renderRows();

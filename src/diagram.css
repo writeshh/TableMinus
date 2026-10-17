@@ -22,3 +22,11 @@ dialog.dg-pick { width: min(480px, calc(100vw - 32px)); }
 .dg-pick-bar input { flex: 1; }
 .dg-pick-list { display: grid; gap: 2px; max-height: min(55vh, 460px); overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 8px; }
 .dg-pick-list label { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Printing: printDiagram() puts a copy of the SVG in .dg-print, and only that copy prints. */
+.dg-print { display: none; }
+@media print {
+  body > :not(.dg-print) { display: none !important; }
+  .dg-print { display: block; }
+  .dg-print svg { width: 100%; height: auto; }
+}

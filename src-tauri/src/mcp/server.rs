@@ -9,10 +9,10 @@ use hyper::body::{Bytes, Incoming};
 use hyper::{Request, Response, StatusCode, header};
 use hyper_util::rt::TokioIo;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, JsonObject, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, InitializeRequestParams,
+    InitializeResult, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
-use rmcp::service::RequestContext;
+use rmcp::service::{MaybeSendFuture, RequestContext};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -94,8 +94,14 @@ async fn authorized(
         reply.headers_mut().insert(header::WWW_AUTHENTICATE, header::HeaderValue::from_static("Bearer"));
         return reply;
     };
+    shared.seen(&token);
     req.extensions_mut().insert(token);
     mcp.handle(req).await
+}
+
+/// The token `authorized` attached to the request.
+fn token_of(context: &RequestContext<RoleServer>) -> Option<Token> {
+    context.extensions.get::<hyper::http::request::Parts>().and_then(|p| p.extensions.get::<Token>()).cloned()
 }
 
 /// The tool handler, made for each request.
@@ -163,6 +169,19 @@ fn need<'a>(value: Option<&'a String>, what: &str) -> std::result::Result<&'a st
 }
 
 impl ServerHandler for Tools {
+    /// Remembers the client's name for Settings › MCP › Clients, then answers as rmcp does.
+    fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = std::result::Result<InitializeResult, ErrorData>> + MaybeSendFuture + '_ {
+        if let Some(token) = token_of(&context) {
+            self.0.introduced(&token, &request.client_info.name, &request.client_info.version);
+        }
+        context.peer.set_peer_info(request.clone());
+        std::future::ready(self.negotiate_initialize(&request))
+    }
+
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("table-minus", env!("CARGO_PKG_VERSION")))
@@ -189,9 +208,7 @@ impl ServerHandler for Tools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
-        let Some(token) =
-            context.extensions.get::<hyper::http::request::Parts>().and_then(|p| p.extensions.get::<Token>()).cloned()
-        else {
+        let Some(token) = token_of(&context) else {
             return Err(ErrorData::internal_error("the request reached the tools without a token", None));
         };
         let args: Args = serde_json::from_value(serde_json::Value::Object(request.arguments.unwrap_or_default()))

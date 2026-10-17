@@ -80,7 +80,8 @@ export function renderFilters(host: HTMLElement, state: FilterState, columns: st
     value.oninput = () => (f.value = value.value);
     const value2 = el("input", { type: "text", className: "v2", value: f.value2, placeholder: "and", hidden: !TWO_VALUES.has(f.op) });
     value2.oninput = () => (f.value2 = value2.value);
-    for (const input of [value, value2]) input.onkeydown = (e) => e.key === "Enter" && (e.preventDefault(), apply());
+    // `void`: an on-handler that returns false cancels the event, so every other key would type nothing.
+    for (const input of [value, value2]) input.onkeydown = (e) => void (e.key === "Enter" && (e.preventDefault(), apply()));
 
     const remove = el("button", { type: "button", className: "ghost rm", textContent: "−", title: "Remove this filter" });
     remove.onclick = () => {

@@ -12,7 +12,10 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, State};
+// Only the macOS run events (`on_event`) use these.
+#[cfg(target_os = "macos")]
+use tauri::{Emitter, Manager};
 
 /// Keychain access and argon2 block, so commands run them off the async runtime.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
@@ -126,7 +129,7 @@ fn expose<S: Serializer>(s: &Option<SecretString>, ser: S) -> std::result::Resul
 /// AES-256-GCM over the payload, with the key derived from the password by argon2id. Hex keeps the file plain JSON.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Sealed {
+pub(crate) struct Sealed {
     salt: String,
     nonce: String,
     data: String,
@@ -157,7 +160,7 @@ fn random<const N: usize>() -> Result<[u8; N]> {
     Ok(b)
 }
 
-fn seal(password: &SecretString, plain: &SecretSlice<u8>) -> Result<Sealed> {
+pub(crate) fn seal(password: &SecretString, plain: &SecretSlice<u8>) -> Result<Sealed> {
     let (salt, nonce) = (random::<16>()?, random::<12>()?);
     let data = cipher(password, &salt)?
         .encrypt(&nonce.into(), plain.expose_secret())
@@ -165,7 +168,7 @@ fn seal(password: &SecretString, plain: &SecretSlice<u8>) -> Result<Sealed> {
     Ok(Sealed { salt: hex(&salt), nonce: hex(&nonce), data: hex(&data) })
 }
 
-fn unseal(password: &SecretString, sealed: &Sealed) -> Result<SecretSlice<u8>> {
+pub(crate) fn unseal(password: &SecretString, sealed: &Sealed) -> Result<SecretSlice<u8>> {
     let nonce: [u8; 12] = unhex(&sealed.nonce)?.try_into().map_err(|_| Error::FileUnsealFailed)?;
     let plain = cipher(password, &unhex(&sealed.salt)?)?
         .decrypt(&nonce.into(), unhex(&sealed.data)?.as_slice())
