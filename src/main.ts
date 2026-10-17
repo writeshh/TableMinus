@@ -245,7 +245,7 @@ function connRow(c: Saved) {
     el("div", { className: "actions" }, edit, del),
   );
   if (c.color) li.style.setProperty("--conn-color", COLORS[c.color] ?? "transparent"), li.classList.add("colored");
-  li.onclick = () => !dragged && connect(c);
+  li.ondblclick = () => !dragged && connect(c);
   li.oncontextmenu = (e) => contextMenu(e, connMenu(c));
   li.onkeydown = (e) => void (e.key === "Enter" && connect(c));
   li.onpointerdown = (e) => e.button === 0 && dragToGroup(e, c);
@@ -725,10 +725,8 @@ document.addEventListener("pointerdown", (e) => {
 });
 document.addEventListener("keydown", (e) => e.key === "Escape" && ($("conn-info").hidden = true));
 
-/** Opens a connection as a new workspace; one that's already open is brought forward instead. */
+/** Always a new workspace tab, also when the connection is open already (a second database, or a second look). */
 async function connect(c: Saved) {
-  const open = workspaces.find((w) => w.conn.name === c.name);
-  if (open) return showWorkspace(open);
   setStatus("home-status", `Connecting to ${c.name}…`, "busy");
   try {
     await openWorkspace(c);
@@ -745,6 +743,8 @@ function freeKey(name: string) {
   for (let n = 2; taken.has(key); n++) key = `${name}\u001f${n}`;
   return key;
 }
+
+const PICKER_DELAY_MS = 1000;
 
 /** A new workspace on its own session of `c`, on `database` when given, in the tab after the current one. */
 async function openWorkspace(c: Saved, database?: string) {
@@ -770,9 +770,10 @@ async function openWorkspace(c: Saved, database?: string) {
   renderHistory();
   renderFavorites();
   showSafety(c);
-  status(`Connected · ${i.server}`, "done");
-  // Connected without a database: go straight to choosing one.
-  if (i.can_switch && !i.database) openDbPicker();
+  status(""); // the header already says what is connected
+  // Connected without a database: offer the picker once the workspace has been seen, unless something else got there first.
+  const opened = ws;
+  if (i.can_switch && !i.database) setTimeout(() => ws === opened && !$<HTMLDialogElement>("dbpicker").open && !opened.info?.database && openDbPicker(), PICKER_DELAY_MS);
   else editor.focus();
 }
 
@@ -1238,7 +1239,7 @@ function renderDbs() {
       li.setAttribute("aria-selected", String(i === dbPick));
       if (name === info?.database) li.append(el("span", { className: "current", textContent: "current" }));
       li.onclick = () => ((dbPick = i), renderDbs());
-      li.ondblclick = (e) => (e.altKey ? openDb(name) : openDbInNewTab(name));
+      li.ondblclick = (e) => (e.metaKey || e.ctrlKey ? openDbInNewTab(name) : openDb(name));
       return li;
     }),
   );
@@ -1312,18 +1313,19 @@ $("db-drop").onclick = () => {
     await loadDbs(info?.database ?? "");
   });
 };
-$("db-open-here").onclick = () => openDb();
+$("db-open-new").onclick = () => openDbInNewTab();
 $("db-search").addEventListener("input", () => ((dbPick = 0), renderDbs()));
 $("db-search").addEventListener("keydown", (e) => {
   const n = shownDbs().length;
   if (e.key === "ArrowDown") dbPick = Math.min(n - 1, dbPick + 1);
   else if (e.key === "ArrowUp") dbPick = Math.max(0, dbPick - 1);
-  else if (e.key === "Enter") return e.preventDefault(), e.altKey ? openDb() : openDbInNewTab();
+  else if (e.key === "Escape") return e.preventDefault(), $<HTMLDialogElement>("dbpicker").close(); // a search field would swallow it
+  else if (e.key === "Enter") return e.preventDefault(), e.metaKey || e.ctrlKey ? openDbInNewTab() : openDb();
   else return;
   e.preventDefault();
   renderDbs();
 });
-$("db-open").onclick = () => openDbInNewTab();
+$("db-open").onclick = () => openDb();
 $("db-cancel").onclick = () => $<HTMLDialogElement>("dbpicker").close();
 $("db-button").onclick = openDbPicker;
 

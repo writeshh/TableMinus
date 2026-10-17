@@ -20,7 +20,8 @@ export function setLauncher(d: { groups: Group[]; tags: Tag[] }) {
 
 /** The five status colors, as the backend names them. */
 export const COLORS: Record<string, string> = { red: "#e5484d", orange: "#f76b15", green: "#30a46c", blue: "#0090ff", purple: "#8e4ec6" };
-export const GROUP_ICONS: Record<string, string> = { folder: "📁", server: "🖥️", cloud: "☁️", laptop: "💻", star: "⭐", lock: "🔒" };
+export const GROUP_ICONS: Record<string, string> = { folder: "📁", server: "🖥️", cloud: "☁️", laptop: "💻", star: "⭐", lock: "🔒",
+  database: "🗄️", rocket: "🚀", flask: "🧪", bug: "🐛", briefcase: "💼", home: "🏠", globe: "🌐", fire: "🔥", bolt: "⚡", chart: "📊", gear: "⚙️", shield: "🛡️" };
 const BUILT_IN_TAGS: Record<string, string> = { local: "Local", development: "Development", staging: "Staging", production: "Production" };
 export const tagLabel = (name: string) => BUILT_IN_TAGS[name] ?? name;
 export const tagColor = (name: string) => tags.find((t) => t.name === name)?.color;

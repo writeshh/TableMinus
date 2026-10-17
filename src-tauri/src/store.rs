@@ -100,6 +100,18 @@ pub enum GroupIcon {
     Laptop,
     Star,
     Lock,
+    Database,
+    Rocket,
+    Flask,
+    Bug,
+    Briefcase,
+    Home,
+    Globe,
+    Fire,
+    Bolt,
+    Chart,
+    Gear,
+    Shield,
 }
 
 /// A launcher group. Connections name theirs in [`Saved::group`].

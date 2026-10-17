@@ -118,13 +118,14 @@ button.round { width: 34px; height: 34px; padding: 0; border-radius: 50%; font-s
 .conns { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
 .conns li { display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 8px; border-radius: 999px; cursor: default; }
 .conns li:hover, .conns li:focus-visible { background: var(--hover); }
+.conns li:focus { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: -2px; } /* also on click; inside the row, because the scrolling list clips an outline drawn outside */
 .conns li:active { background: var(--press); }
 .who { flex: 1; min-width: 0; }
 .name { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
 .name > span:first-child, .host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .host { color: var(--muted); font-size: 12px; }
 .actions { display: flex; gap: 4px; opacity: 0; }
-.conns li:hover .actions, .conns li:focus-within .actions { opacity: 1; }
+.conns li:hover > .actions, .conns li:focus-within > .actions { opacity: 1; }
 button.icon { padding: 3px 9px; font-size: 11px; }
 .launcher .status { padding: 6px 4px 0; }
 
@@ -230,9 +231,9 @@ td.editing { padding: 0; outline: 2px solid var(--accent); outline-offset: -2px;
 .edit-info { color: var(--warn); font-weight: 500; font-variant-numeric: tabular-nums; }
 
 /* ---------- Settings: toolbar tabs like macOS preferences ---------- */
-dialog.prefs { width: min(600px, calc(100vw - 32px)); padding: 0; overflow: hidden; }
+dialog.prefs { width: min(760px, calc(100vw - 32px)); padding: 0; overflow: hidden; }
 .prefs-tabs { display: flex; justify-content: center; gap: 4px; padding: 10px 12px 8px; background: var(--side); border-bottom: 1px solid var(--line); }
-.prefs-tabs button { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; min-width: 0; padding: 7px 4px; white-space: nowrap; border: 0; border-radius: 14px; background: none; color: var(--muted); font-size: 12px; }
+.prefs-tabs button { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1 0 auto; padding: 7px 10px; white-space: nowrap; border: 0; border-radius: 14px; background: none; color: var(--muted); font-size: 12px; }
 .prefs-tabs button:hover { background: var(--hover); }
 .prefs-tabs button[aria-selected="true"] { color: var(--bg); background: var(--fg); }
 .prefs-tabs svg, .ghost svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -436,12 +437,15 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .swatches input:not([style]) { background: linear-gradient(135deg, transparent 45%, var(--muted) 45% 55%, transparent 55%); }
 .swatches input:checked { outline: 2px solid var(--accent); outline-offset: 2px; }
 .pw-row { grid-template-columns: 1fr 150px; align-items: center; }
-.icon-pick { display: flex; gap: 4px; flex-wrap: wrap; }
-.icon-pick button { padding: 4px 8px; font-size: 16px; }
-.icon-pick button[aria-pressed="true"] { outline: 2px solid var(--accent); }
+.icon-pick { display: grid; grid-template-columns: repeat(6, 30px); gap: 6px; padding: 4px 0 2px; }
+.opt-row:has(.icon-pick) { margin-top: 10px; }
+.icon-pick button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border-radius: 50%; font-size: 16px; line-height: 1; }
+.icon-pick button[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tag-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; }
 .tag-row { display: grid; grid-template-columns: 36px 1fr auto; gap: 8px; align-items: center; }
-.tag-row input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 999px; background: none; }
+.tag-row input[type="color"] { appearance: none; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: none; overflow: hidden; }
+.tag-row input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.tag-row input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 50%; }
 .pw-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0 10px 24px; }
 dialog form > .check { margin: 6px 0; }
 .prompt-form input { width: 100%; }
