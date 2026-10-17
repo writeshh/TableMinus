@@ -35,7 +35,7 @@ import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type Ex
 import { addCommands, bindings, commands, isMac, onBindingsChanged, runCommand, setOverrides } from "./commands";
 import { renderShortcuts } from "./shortcuts";
 import { openAnything, type Item as AnythingItem } from "./openanything";
-import { initMenu, setRecent } from "./menu";
+import { initMenu, refreshMenu, setRecent } from "./menu";
 import {
   columnOrderMenu, forgetItems, initSearch, initSidebar, loadedItems, newItemsMenu, noteOpened, renderTree, shownSchema, sortColumns, treeMenu,
 } from "./sidebar";
@@ -629,6 +629,7 @@ function show(view: "home" | "workspace") {
   $("home").hidden = view !== "home";
   $("workspace").hidden = view !== "workspace";
   renderDbTabs();
+  refreshMenu();
   if (view === "home") $("search").focus();
 }
 
@@ -1691,6 +1692,7 @@ async function reloadTab() {
 }
 
 function renderMain() {
+  refreshMenu(); // the tab decides which items apply (Save needs a SQL tab)
   const tab = current();
   $("tabs").replaceChildren(
     ...tabs.map((t) => {

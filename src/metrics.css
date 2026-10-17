@@ -12,6 +12,7 @@ dialog.metrics-board[open] { display: flex; flex-direction: column; }
 .widget.moving { z-index: 1; box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); }
 .widget > header { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: grab; touch-action: none; }
 .metrics-board.locked .widget > header { cursor: default; }
+.widget > header:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; border-radius: 6px; }
 .widget-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .widget-tools { margin-left: auto; display: flex; gap: 2px; opacity: 0; transition: opacity 120ms ease-out; }
 .widget:hover .widget-tools, .widget:focus-within .widget-tools { opacity: 1; }

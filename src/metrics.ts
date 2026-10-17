@@ -331,6 +331,7 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
     place(node, w);
     drag(head, node, w, false);
     drag(resize, node, w, true);
+    if (!board.locked) arrows(head, node, w);
     s.node = node;
     fillBody(w, body);
     return node;
@@ -364,6 +365,22 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
       };
       handle.addEventListener("pointermove", move);
       handle.addEventListener("lostpointercapture", end, { once: true });
+    });
+  }
+
+  /** The keyboard's way of dragging: arrows move the focused header a cell, Shift + arrows resize. */
+  function arrows(head: HTMLElement, node: HTMLElement, w: Widget) {
+    head.tabIndex = 0;
+    head.title = "Arrow keys move the widget, Shift + arrow keys resize it";
+    head.addEventListener("keydown", (e) => {
+      const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      if (!step || e.target !== head || e.metaKey || e.ctrlKey || e.altKey) return;
+      e.preventDefault();
+      const [dx, dy] = step;
+      if (e.shiftKey) [w.w, w.h] = [Math.min(COLS - w.x, Math.max(1, w.w + dx)), Math.min(50, Math.max(1, w.h + dy))];
+      else [w.x, w.y] = [Math.min(COLS - w.w, Math.max(0, w.x + dx)), Math.max(0, w.y + dy)];
+      place(node, w);
+      save();
     });
   }
 

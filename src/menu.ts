@@ -2,7 +2,7 @@
 // Every item is a command from commands.ts, so the menu, the keyboard and Open Anything run the same code, and
 // rebinding a shortcut rebuilds the menu with the new accelerator. Only the app window has a menu bar; in a plain
 // browser preview this does nothing.
-import { Menu, type MenuItemOptions, type PredefinedMenuItemOptions, type SubmenuOptions } from "@tauri-apps/api/menu";
+import { Menu, MenuItem, Submenu, type MenuItemOptions, type PredefinedMenuItemOptions, type SubmenuOptions } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { bindings, commands, isMac, onBindingsChanged, runCommand, type MenuName } from "./commands";
 
@@ -57,6 +57,40 @@ async function build() {
   });
   const menu = await Menu.new({ items: isMac ? [app, ...menus] : menus });
   await menu.setAsAppMenu();
+  handles.clear();
+  shown.clear();
+  await collect(menu);
+  await applyEnabled();
+}
+
+/** The live menu items by command id, so their enabled state can follow the commands' `when`. */
+const handles = new Map<string, MenuItem>();
+/** What each item was last set to, so a refresh only calls the backend for what changed. */
+const shown = new Map<string, boolean>();
+
+async function collect(parent: Menu | Submenu) {
+  for (const item of await parent.items()) {
+    if (item instanceof Submenu) await collect(item);
+    else if (item instanceof MenuItem) handles.set(item.id, item);
+  }
+}
+
+async function applyEnabled() {
+  for (const c of commands) {
+    const item = handles.get(c.id);
+    if (!item || !c.when) continue;
+    const on = c.when();
+    if (shown.get(c.id) === on) continue;
+    shown.set(c.id, on);
+    await item.setEnabled(on);
+  }
+}
+
+let refreshTimer = 0;
+/** Greys out the menu items whose command doesn't apply right now. Call when the view, workspace or tab changes. */
+export function refreshMenu() {
+  clearTimeout(refreshTimer);
+  refreshTimer = window.setTimeout(() => void (pending = pending.then(applyEnabled).catch((e) => console.warn("menu bar:", e))), 50);
 }
 
 let pending = Promise.resolve();
@@ -67,6 +101,7 @@ export function initMenu() {
   rebuild = () => void (pending = pending.then(build).catch((e) => console.warn("menu bar:", e)));
   rebuild();
   onBindingsChanged(rebuild);
+  window.addEventListener("focus", refreshMenu);
 }
 
 type Recent = { label: string; run: () => void };
