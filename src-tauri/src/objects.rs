@@ -235,8 +235,8 @@ fn split(name: &str) -> (&str, &str) {
 impl Conn {
     /// A view's SELECT (Postgres's materialized views too), without a trailing semicolon.
     pub async fn view_body(&mut self, view: &str) -> Result<String> {
-        let body = match self {
-            Conn::Pg(_) => {
+        let body = match self.dialect() {
+            Dialect::Pg => {
                 let (schema, name) = split(view);
                 self.fetch_with(
                     "select pg_get_viewdef(c.oid, true) from pg_class c join pg_namespace n on n.oid = c.relnamespace \
@@ -245,19 +245,19 @@ impl Conn {
                 )
                 .await?
             }
-            Conn::My(_) => {
+            Dialect::My => {
                 self.fetch_with(
                     "select view_definition from information_schema.views where table_schema = database() and table_name = ?",
                     &[Some(view)],
                 )
                 .await?
             }
-            Conn::Lite(_) => {
+            Dialect::Lite => {
                 self.fetch_with("select sql from sqlite_master where type = 'view' and name = $1", &[Some(view)]).await?
             }
         };
         let text = body.into_iter().next().and_then(|mut r| r.pop().flatten()).ok_or(Error::Invalid("no such view"))?;
-        let text = if matches!(self, Conn::Lite(_)) {
+        let text = if self.dialect() == Dialect::Lite {
             sqlite_view_body(&text).ok_or(Error::Invalid("can't find the SELECT in this view's definition"))?
         } else {
             &text
@@ -273,8 +273,8 @@ impl Conn {
     /// A function's or procedure's CREATE statement; on Postgres one for each overload of the name.
     pub async fn routine_definitions(&mut self, kind: ItemKind, name: &str) -> Result<Vec<String>> {
         let what = routine_word(kind)?;
-        let rows = match self {
-            Conn::Pg(_) => {
+        let rows = match self.dialect() {
+            Dialect::Pg => {
                 let (schema, proc) = split(name);
                 let prokind = if kind == ItemKind::Procedure { "p" } else { "f" };
                 self.fetch_with(
@@ -284,7 +284,7 @@ impl Conn {
                 )
                 .await?
             }
-            Conn::My(_) => {
+            Dialect::My => {
                 let sql = format!("SHOW CREATE {what} {}", self.ident(name));
                 // The statement is the third column; NULL without the privilege to read it.
                 self.query(&sql)
@@ -294,9 +294,9 @@ impl Conn {
                     .map(|mut r| vec![r.get_mut(2).and_then(Option::take)])
                     .collect()
             }
-            Conn::Lite(_) => return Err(NO_ROUTINES),
+            Dialect::Lite => return Err(NO_ROUTINES),
         };
-        let pg = matches!(self, Conn::Pg(_));
+        let pg = self.dialect() == Dialect::Pg;
         let defs: Vec<String> = rows
             .into_iter()
             .filter_map(|mut r| r.pop().flatten())
@@ -310,7 +310,7 @@ impl Conn {
 
     /// A Postgres sequence's settings and comment.
     pub async fn sequence(&mut self, seq: &str) -> Result<Sequence> {
-        if !matches!(self, Conn::Pg(_)) {
+        if self.dialect() != Dialect::Pg {
             return Err(Error::Invalid("sequences are edited on Postgres only"));
         }
         let (schema, name) = split(seq);

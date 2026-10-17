@@ -1,7 +1,7 @@
 //! The ER diagram's data: every table and view of a schema with its columns, and the foreign keys between them,
 //! read in one query per engine. Also writes the diagram's PNG export.
 
-use crate::db::Conn;
+use crate::db::{Conn, Dialect};
 use crate::error::{Error, Result};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -138,10 +138,10 @@ impl Conn {
     /// Every table and view of `schema` (Postgres; None is the current schema) or of the current database
     /// (MySQL, SQLite), with the foreign keys between them.
     pub async fn diagram(&mut self, schema: Option<&str>) -> Result<Diagram> {
-        let rows = match self {
-            Conn::Pg(_) => self.fetch_with(PG, &[schema]).await?,
-            Conn::My(_) => self.fetch_with(MY, &[]).await?,
-            Conn::Lite(_) => self.fetch_with(LITE, &[]).await?,
+        let rows = match self.dialect() {
+            Dialect::Pg => self.fetch_with(PG, &[schema]).await?,
+            Dialect::My => self.fetch_with(MY, &[]).await?,
+            Dialect::Lite => self.fetch_with(LITE, &[]).await?,
         };
         Ok(assemble(rows))
     }

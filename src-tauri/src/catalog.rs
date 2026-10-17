@@ -2,7 +2,7 @@
 //! sequences and user-defined types; plus "search in database" and a table's overview (rows, size).
 
 use crate::browse::{Browse, Combine, Filter, Op};
-use crate::db::Conn;
+use crate::db::{Conn, Dialect};
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -71,8 +71,8 @@ impl Conn {
     /// Everything but tables, sorted by name within each kind. Types that belong to an extension are left
     /// out; functions are kept, so an extension's (unaccent's, say) show as they do in other clients. `system` adds Postgres's catalog schemas.
     pub async fn items(&mut self, system: bool) -> Result<Vec<Item>> {
-        let sql = match self {
-            Conn::Pg(_) => {
+        let sql = match self.dialect() {
+            Dialect::Pg => {
                 let user = pg_user_schemas(system);
                 let not_extension = "not exists (select 1 from pg_depend d where d.objid = {oid} and d.deptype = 'e')";
                 format!(
@@ -91,14 +91,14 @@ impl Conn {
                     type_own = not_extension.replace("{oid}", "t.oid"),
                 )
             }
-            Conn::My(_) => "select 'view', table_name from information_schema.tables \
+            Dialect::My => "select 'view', table_name from information_schema.tables \
                  where table_schema = database() and table_type = 'VIEW' \
                  union all select 'sequence', table_name from information_schema.tables \
                  where table_schema = database() and table_type = 'SEQUENCE' \
                  union all select lower(routine_type), routine_name from information_schema.routines \
                  where routine_schema = database() order by 1, 2"
                 .into(),
-            Conn::Lite(_) => "select 'view', name from sqlite_master where type = 'view' order by 2".into(),
+            Dialect::Lite => "select 'view', name from sqlite_master where type = 'view' order by 2".into(),
         };
         let rows = self.fetch_with(&sql, &[]).await?;
         Ok(rows
@@ -135,7 +135,7 @@ impl Conn {
             wkt: false,
         };
         let s = self.select(&req).await?;
-        let count = if matches!(self, Conn::Pg(_)) { "count(*)::text" } else { "count(*)" };
+        let count = if self.dialect() == Dialect::Pg { "count(*)::text" } else { "count(*)" };
         let sql = format!("select {count} from ({} limit {SEARCH_CAP}) found", s.rows);
         let r = self.fetch_with(&sql, &s.bound()).await?;
         Ok(r.first().and_then(|row| row.first().cloned().flatten()).and_then(|n| n.parse().ok()).unwrap_or(0))
@@ -143,8 +143,8 @@ impl Conn {
 
     /// Rows, size on disk and creation time of a table or view, as far as the engine keeps them.
     pub async fn overview(&mut self, table: &str) -> Result<Overview> {
-        match self {
-            Conn::Pg(_) => {
+        match self.dialect() {
+            Dialect::Pg => {
                 let (schema, name) = table.split_once('.').unwrap_or(("public", table));
                 let r = self
                     .fetch_with(
@@ -159,7 +159,7 @@ impl Conn {
                 let rows = num(0).and_then(|n| u64::try_from(n).ok());
                 Ok(Overview { rows, estimated: true, bytes: num(1).and_then(|n| u64::try_from(n).ok()), created: None })
             }
-            Conn::My(_) => {
+            Dialect::My => {
                 let r = self
                     .fetch_with(
                         "select table_rows, data_length + index_length, create_time, table_type \
@@ -174,7 +174,7 @@ impl Conn {
                 let innodb = row.get(3).cloned().flatten().is_some_and(|t| t == "BASE TABLE");
                 Ok(Overview { rows: num(0), estimated: innodb, bytes: num(1), created })
             }
-            Conn::Lite(_) => {
+            Dialect::Lite => {
                 let count = format!("select count(*) from {}", self.table_ident(table));
                 let rows = self.fetch_with(&count, &[]).await?;
                 let rows = rows.first().and_then(|r| r.first().cloned().flatten()).and_then(|n| n.parse().ok());

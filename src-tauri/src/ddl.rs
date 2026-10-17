@@ -858,7 +858,7 @@ impl Conn {
     /// The statements for structure `changes` to `table`; `create` builds a new table instead.
     pub async fn alter_sql(&mut self, table: &str, create: bool, changes: &[Change]) -> Result<Vec<String>> {
         let current = if create { None } else { Some(self.structure(table).await?) };
-        if let (Conn::Lite(_), Some(cur)) = (&*self, &current)
+        if let (Dialect::Lite, Some(cur)) = (self.dialect(), &current)
             && rebuild::needed(cur, changes)
         {
             let sources = self.rebuild_sources(table).await?;
@@ -882,7 +882,7 @@ impl Conn {
 
     /// Whether this is a `CockroachDB` server speaking the Postgres protocol.
     async fn is_cockroach(&mut self) -> Result<bool> {
-        Ok(matches!(self, Conn::Pg(_)) && self.server_version().await?.starts_with("CockroachDB"))
+        Ok(self.dialect() == Dialect::Pg && self.server_version().await?.starts_with("CockroachDB"))
     }
 
     /// What SQLite's table rebuild reads: the table's CREATE statement, its indexes and triggers, and whether foreign
@@ -919,8 +919,8 @@ impl Conn {
     }
 
     pub(crate) async fn is_view(&mut self, table: &str) -> Result<bool> {
-        let rows = match self {
-            Conn::Pg(_) => {
+        let rows = match self.dialect() {
+            Dialect::Pg => {
                 let (schema, name) = table.split_once('.').unwrap_or(("public", table));
                 self.fetch_with(
                     "select table_type::text from information_schema.tables where table_schema = $1 and table_name = $2",
@@ -928,14 +928,14 @@ impl Conn {
                 )
                 .await?
             }
-            Conn::My(_) => {
+            Dialect::My => {
                 self.fetch_with(
                     "select table_type from information_schema.tables where table_schema = database() and table_name = ?",
                     &[Some(table)],
                 )
                 .await?
             }
-            Conn::Lite(_) => self.fetch_with("select type from sqlite_master where name = $1", &[Some(table)]).await?,
+            Dialect::Lite => self.fetch_with("select type from sqlite_master where name = $1", &[Some(table)]).await?,
         };
         Ok(rows
             .into_iter()
@@ -1182,13 +1182,13 @@ impl Conn {
     pub async fn ddl(&mut self, table: &str) -> Result<String> {
         let first =
             |rows: Vec<Vec<Option<String>>>, i: usize| rows.into_iter().next().and_then(|mut r| r.get_mut(i)?.take());
-        match self {
-            Conn::My(_) => {
+        match self.dialect() {
+            Dialect::My => {
                 let sql = format!("show create table {}", self.table_ident(table));
                 let rows = self.query(&sql).await?.rows;
                 first(rows, 1).map(|s| format!("{s};")).ok_or(Error::Invalid("no such table"))
             }
-            Conn::Lite(_) => {
+            Dialect::Lite => {
                 let rows = self
                     .fetch_with(
                         "select sql || ';' from sqlite_master where tbl_name = $1 and sql is not null \
@@ -1199,7 +1199,7 @@ impl Conn {
                 let all: Vec<String> = rows.into_iter().filter_map(|mut r| r.pop().flatten()).collect();
                 if all.is_empty() { Err(Error::Invalid("no such table")) } else { Ok(all.join("\n\n")) }
             }
-            Conn::Pg(_) => {
+            Dialect::Pg => {
                 if self.is_view(table).await? {
                     let (schema, name) = table.split_once('.').unwrap_or(("public", table));
                     let rows = self
@@ -1224,7 +1224,7 @@ impl Conn {
     pub async fn run_ddl(&mut self, statements: &[String]) -> Result<()> {
         // SQLite ignores PRAGMA foreign_keys inside a transaction: a rebuild's first and last ones run around it, and
         // the last (turning them back on) runs whatever happened in between.
-        let lite = matches!(self, Conn::Lite(_));
+        let lite = self.dialect() == Dialect::Lite;
         let fk = |s: &&String| lite && s.starts_with("PRAGMA foreign_keys");
         let (pre, post) =
             (statements.iter().take_while(|s| fk(s)).count(), statements.iter().rev().take_while(|s| fk(s)).count());
@@ -1246,7 +1246,7 @@ impl Conn {
 
     /// [`Conn::run_ddl`] without the foreign key pragmas around it.
     async fn run_in_transaction(&mut self, statements: &[String]) -> Result<()> {
-        if !matches!(self, Conn::My(_)) && statements.len() > 1 {
+        if self.dialect() != Dialect::My && statements.len() > 1 {
             self.query("begin").await?;
             for s in statements {
                 if let Err(e) = self.query(s).await {

@@ -1,6 +1,6 @@
 //! Table browsing: one page of rows with filters and sorting, built with quoted identifiers and bound values.
 
-use crate::db::{Column, Conn};
+use crate::db::{Column, Conn, Dialect};
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -115,15 +115,15 @@ impl Conn {
     /// The column as text, for pattern matching and for conditions applied to every column.
     fn text_expr(&self, column: &str) -> String {
         let c = self.ident(column);
-        match self {
-            Conn::Pg(_) => format!("{c}::text"),
-            Conn::My(_) => format!("cast({c} as char)"),
-            Conn::Lite(_) => format!("cast({c} as text)"),
+        match self.dialect() {
+            Dialect::Pg => format!("{c}::text"),
+            Dialect::My => format!("cast({c} as char)"),
+            Dialect::Lite => format!("cast({c} as text)"),
         }
     }
 
     fn like(&self) -> &'static str {
-        if matches!(self, Conn::Pg(_)) { "ilike" } else { "like" }
+        if self.dialect() == Dialect::Pg { "ilike" } else { "like" }
     }
 
     /// One filter on one column. `as_text` compares the column's text form, for "any column" filters where
@@ -229,16 +229,16 @@ impl Conn {
         let select: Vec<String> = columns
             .iter()
             .zip(&spatial)
-            .map(|(c, &spatial)| match self {
-                Conn::Pg(_) if spatial => format!("st_asewkt({0}) as {0}", self.ident(c)),
-                Conn::Pg(_) => format!("{} as {}", self.text_expr(c), self.ident(c)),
+            .map(|(c, &spatial)| match self.dialect() {
+                Dialect::Pg if spatial => format!("st_asewkt({0}) as {0}", self.ident(c)),
+                Dialect::Pg => format!("{} as {}", self.text_expr(c), self.ident(c)),
                 _ => self.ident(c),
             })
             .collect();
         let from = self.table_ident(&req.table);
         let identity = if req.identity { self.identity(&from).await } else { None };
         let select: Vec<String> = select.into_iter().chain(identity.map(String::from)).collect();
-        let count = if matches!(self, Conn::Pg(_)) { "count(*)::text" } else { "count(*)" };
+        let count = if self.dialect() == Dialect::Pg { "count(*)::text" } else { "count(*)" };
         Ok(Select {
             rows: format!("select {} from {from}{filter}{order}", select.join(", ")),
             count: format!("select {count} from {from}{filter}"),
@@ -259,10 +259,10 @@ impl Conn {
     /// The expression for a row's identity in `from`, if it has one: views and SQLite's WITHOUT ROWID tables
     /// don't, and asking is the simplest way to tell.
     async fn identity(&mut self, from: &str) -> Option<&'static str> {
-        let expr = match self {
-            Conn::Pg(_) => "ctid::text",
-            Conn::Lite(_) => "rowid",
-            Conn::My(_) => return None,
+        let expr = match self.dialect() {
+            Dialect::Pg => "ctid::text",
+            Dialect::Lite => "rowid",
+            Dialect::My => return None,
         };
         self.fetch_with(&format!("select {expr} from {from} limit 0"), &[]).await.ok().map(|_| expr)
     }
@@ -295,7 +295,7 @@ impl Conn {
 
     /// The catalog's row estimate for `table`, when it is one and above `over`. SQLite keeps none.
     async fn estimate(&mut self, table: &str, over: u64) -> Option<u64> {
-        if matches!(self, Conn::Lite(_)) {
+        if self.dialect() == Dialect::Lite {
             return None;
         }
         // No estimate (never analyzed, or the catalog can't say) just means counting.

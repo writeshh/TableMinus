@@ -3,7 +3,7 @@
 //! into place only once it is complete.
 
 use crate::browse::{Browse, Combine, MAX_PAGE};
-use crate::db::{Conn, RowSink, quote_ident};
+use crate::db::{Conn, Dialect, RowSink, quote_ident};
 use crate::error::{Error, Result};
 use crate::jobs::{Job, Progress};
 use serde::Deserialize;
@@ -185,7 +185,7 @@ async fn plan(conn: &mut Conn, source: &Source) -> Result<Plan> {
 
 async fn write_item(conn: &mut Conn, export: &Export, item: &Item, job: &Job, progress: Progress) -> Result<u64> {
     let plan = plan(conn, &item.source).await?;
-    let mysql = matches!(conn, Conn::My(_));
+    let mysql = conn.dialect() == Dialect::My;
     let target = match (&item.source, &plan.table) {
         (Source::Query { table, .. }, _) | (_, Some(table)) => conn.table_ident(table),
         (_, None) => String::new(),
@@ -251,20 +251,20 @@ fn temp_path(path: &Path) -> PathBuf {
 
 /// A CREATE TABLE statement for `table`, ending in a semicolon and a line break.
 async fn structure(conn: &mut Conn, table: &str) -> Result<String> {
-    match conn {
-        Conn::Lite(_) => {
+    match conn.dialect() {
+        Dialect::Lite => {
             let rows = conn.fetch_with("select sql from sqlite_master where name = $1", &[Some(table)]).await?;
             let sql = rows.into_iter().next().and_then(|mut r| r.swap_remove(0));
             Ok(format!("{};\n", sql.ok_or(Error::Invalid("no such table"))?))
         }
-        Conn::My(_) => {
+        Dialect::My => {
             let r = conn.query(&format!("show create table {}", conn.table_ident(table))).await?;
             let sql = r.rows.into_iter().next().and_then(|mut row| row.pop().flatten());
             Ok(format!("{};\n", sql.ok_or(Error::Invalid("no such table"))?))
         }
         // ponytail: Postgres has no SHOW CREATE TABLE, so this is rebuilt from the columns: types, NOT NULL,
         // defaults and the primary key, without other constraints or indexes. Backups (pg_dump) copy everything.
-        Conn::Pg(_) => {
+        Dialect::Pg => {
             let columns = conn.columns(table).await?;
             let mut lines: Vec<String> = columns
                 .iter()

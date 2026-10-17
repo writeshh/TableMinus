@@ -200,10 +200,10 @@ fn take(row: &mut [Option<String>], i: usize) -> Option<String> {
 impl Conn {
     /// The table's structure. `table` is `schema.table` for Postgres (`public` when there's no schema).
     pub async fn structure(&mut self, table: &str) -> Result<Structure> {
-        let s = match self {
-            Conn::Pg(_) => self.pg_structure(table).await?,
-            Conn::My(_) => self.my_structure(table).await?,
-            Conn::Lite(_) => self.lite_structure(table).await?,
+        let s = match self.dialect() {
+            Dialect::Pg => self.pg_structure(table).await?,
+            Dialect::My => self.my_structure(table).await?,
+            Dialect::Lite => self.lite_structure(table).await?,
         };
         if s.columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));

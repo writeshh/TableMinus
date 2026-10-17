@@ -2,6 +2,7 @@
 //! they do. Each job sends `job-progress` events as `[id, Progress]` and ends with one `job-done`; `cancel_job`
 //! stops it at the next row or statement.
 
+use crate::db::Dialect;
 use crate::error::{Error, Result};
 use crate::safety::Unlock;
 use crate::{Open, db, export, import, readonly, store};
@@ -90,7 +91,7 @@ impl Target {
         }
         let mut live = open.get(name).await?;
         // MySQL switches database in place (Postgres's URL already names it), so the job's connection follows.
-        let database = if matches!(live.conn, db::Conn::My(_)) {
+        let database = if live.conn.dialect() == Dialect::My {
             let r = live.conn.current_database().await;
             live.check(r)?
         } else {

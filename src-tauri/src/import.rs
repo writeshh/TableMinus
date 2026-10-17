@@ -1,7 +1,7 @@
 //! Import: CSV and JSON files into a table as batched INSERTs with bound values, in one transaction; `.sql` files
 //! statement by statement. Files are read as they go, never whole (JSON aside, which is capped).
 
-use crate::db::{Conn, Engine};
+use crate::db::{Conn, Dialect, Engine};
 use crate::error::{Error, Result};
 use crate::jobs::{Job, Progress};
 use serde::{Deserialize, Serialize};
@@ -239,7 +239,7 @@ struct Insert {
 
 impl Insert {
     async fn new(conn: &mut Conn, imp: &Import, columns: &[&str]) -> Result<Insert> {
-        let mysql = matches!(conn, Conn::My(_));
+        let mysql = conn.dialect() == Dialect::My;
         let quoted: Vec<String> = columns.iter().map(|c| conn.ident(c)).collect();
         let set = |value: &dyn Fn(&str) -> String| -> Vec<String> { quoted.iter().map(|q| value(q)).collect() };
         let (verb, tail) = match imp.conflict {
@@ -335,7 +335,7 @@ pub async fn run(conn: &mut Conn, imp: &Import, job: &Job) -> Result<u64> {
         }
     }
     let insert = Insert::new(conn, imp, &columns).await?;
-    conn.query(if matches!(conn, Conn::My(_)) { "start transaction" } else { "begin" }).await?;
+    conn.query(if conn.dialect() == Dialect::My { "start transaction" } else { "begin" }).await?;
     let result = match &imp.format {
         FileFormat::Csv(f) => import_csv(conn, imp, *f, &picked, &insert, job).await,
         FileFormat::Json => import_json(conn, imp, &picked, &insert, job).await,
