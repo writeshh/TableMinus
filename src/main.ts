@@ -44,6 +44,7 @@ import { initDiagram, openDiagram } from "./diagram";
 import { label } from "./keys";
 import * as launcher from "./connections";
 import { COLORS, GROUP_ICONS, tagColor, tagLabel } from "./connections";
+import "./tip"; // instant tooltips on the icon buttons
 import "./console"; // the console log panel and its command
 import { addFavorite, initFavorites, render as renderFavorites, showSaved } from "./favorites"; // also adds the History pane's Saved queries
 import { ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, searchRows, type QueryResult, type ResultTab, type Results } from "./results";
@@ -918,6 +919,8 @@ function renderWorkspaceButton() {
 
 let draggedTab: Workspace | null = null;
 
+const titleActions = el("span", { className: "title-actions" });
+
 /** Each tab shows its connection's tag colour, its database (or the connection, without one), a mark when its
  *  connection was lost and × to close; drag one to reorder. The order is also ⌃⌘[ / ⌃⌘]'s. While the launcher shows
  *  (⌘N, or +) it has a tab of its own, like a browser's new tab, so the open workspaces stay one click away. */
@@ -925,6 +928,13 @@ function renderDbTabs() {
   const strip = $("db-tabs");
   strip.hidden = !workspaces.length;
   if (strip.hidden) return;
+  // Modules add their header buttons at load, so the move waits for the first time the strip shows.
+  if (!titleActions.hasChildNodes()) {
+    titleActions.append(...$("where").querySelectorAll(":scope > .tool-icons:not(.in-header), :scope > button:not(#db-button)"));
+    // Last, after SQL. Looked up in the container: it is not in the page until the strip is filled, so $ can't find it.
+    const assistant = titleActions.querySelector("#assistant-button");
+    if (assistant) titleActions.append(assistant);
+  }
   const home = !$("home").hidden;
   const launcherTab = () => {
     const close = el("span", { className: "close", textContent: "×", title: "Back to the workspace" });
@@ -973,6 +983,7 @@ function renderDbTabs() {
     }),
     ...(home ? [launcherTab()] : []),
     add,
+    titleActions,
   );
   strip.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }

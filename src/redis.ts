@@ -45,7 +45,8 @@ sheet.replaceSync(`
 #workspace:not(.redis) :is(#redis-side, #redis-main) { display: none; }
 body.redis-ws #dbpicker :is(#db-new, #db-rename, #db-drop) { display: none; }
 #workspace.redis :is(#side-items, .side-tabs, #side-search, #side-history) { display: none !important; }
-#workspace.redis :is(#panes, #filters, #table-foot, #new-sql, #tools-button, .tool-icons) { display: none !important; }
+#workspace.redis :is(#panes, #filters, #table-foot) { display: none !important; }
+body:has(#workspace.redis) :is(#new-sql, #tools-button, #assistant-button, .tool-icons) { display: none !important; }
 #redis-side { display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
 #redis-side .redis-find { display: flex; gap: 4px; }
 #redis-side .redis-find input { flex: 1; min-width: 0; }
