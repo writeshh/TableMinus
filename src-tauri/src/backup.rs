@@ -2,7 +2,7 @@
 //! `psql`, `mysqldump`, `mysql`) as child processes; SQLite copies pages with its online backup API. Each job
 //! runs on its own thread, reports `backup-progress` events and ends with one `backup-done` event.
 
-use crate::db::{CONNECT_TIMEOUT, Conn, Engine};
+use crate::db::{CONNECT_TIMEOUT, Engine};
 use crate::error::{Error, Result};
 use crate::ssh::expand_home;
 use crate::store::Saved;
@@ -776,7 +776,8 @@ async fn tools_for(live: &mut crate::Live, chosen: Option<&Path>) -> Result<Tool
 pub async fn start_backup(app: AppHandle, name: String, request: BackupRequest) -> Result<u64> {
     let mut live = crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?;
     if live.saved.kind == Engine::Sqlite {
-        let crate::Live { conn: Conn::Lite(from), password, .. } = live else {
+        let crate::Live { conn, password, .. } = live;
+        let Some(from) = conn.into_sqlite() else {
             return Err(Error::Invalid("not a SQLite connection"));
         };
         return Ok(start(&app, move |stop, report| {
@@ -806,7 +807,8 @@ pub async fn start_restore(
     let (level, password) = (live.saved.safety, live.password.as_ref());
     crate::safety::check(level, false, confirmed, unlock.as_ref(), password).await?;
     if live.saved.kind == Engine::Sqlite {
-        let crate::Live { conn: Conn::Lite(mut to), password, .. } = live else {
+        let crate::Live { conn, password, .. } = live;
+        let Some(mut to) = conn.into_sqlite() else {
             return Err(Error::Invalid("not a SQLite connection"));
         };
         return Ok(start(&app, move |stop, report| {
@@ -851,6 +853,7 @@ pub fn cancel_backup(jobs: State<'_, Jobs>, id: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Conn;
     use crate::db::Options;
     use crate::tls::Tls;
 

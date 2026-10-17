@@ -1,10 +1,17 @@
-//! One connection type over the supported engines: open, run SQL (results as text cells), browse the catalog.
+//! One connection type over the supported SQL engines: open (through the engine's [`Driver`]), run SQL (results as
+//! text cells), browse the catalog.
 
+use crate::driver::mysql::Mysql;
+use crate::driver::postgres::{Postgres, cockroach_version};
+use crate::driver::sqlite::Sqlite;
+use crate::driver::{Driver, Results};
 use crate::error::{Error, Result};
-use crate::tls::{Tls, TlsMode};
-use secrecy::{ExposeSecret, SecretString};
+use crate::tls::Tls;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+pub use crate::driver::{RowSink, Stopper};
 
 /// How long opening a connection may take before giving up, so a dead host can't hang the app.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -88,71 +95,6 @@ pub struct QueryResult {
     pub truncated: bool,
 }
 
-/// The most results one call keeps; statements after that still run, but their results are dropped.
-pub const MAX_RESULTS: usize = 100;
-
-/// Gathers the results of one call, keeping at most `left` rows across them and [`MAX_RESULTS`] results.
-#[derive(Default)]
-struct Results {
-    done: Vec<QueryResult>,
-    current: Option<QueryResult>,
-    left: usize,
-}
-
-impl Results {
-    /// A statement's result starts.
-    fn begin(&mut self, columns: Vec<String>) {
-        self.current = Some(QueryResult { columns, ..QueryResult::default() });
-    }
-
-    /// Whether to keep the row that just arrived; when not, its result is marked cut short.
-    fn keep(&mut self) -> bool {
-        let full = self.done.len() >= MAX_RESULTS;
-        let Some(r) = self.current.as_mut().filter(|_| !full) else { return false };
-        if self.left == 0 {
-            r.truncated = true;
-            return false;
-        }
-        self.left -= 1;
-        true
-    }
-
-    fn push(&mut self, row: Vec<Option<String>>) {
-        if let Some(r) = &mut self.current {
-            r.rows.push(row);
-        }
-    }
-
-    /// A statement finished; one that returned no rows has no `begin`.
-    fn end(&mut self, affected: u64) {
-        let mut r = self.current.take().unwrap_or_default();
-        r.affected = affected;
-        if self.done.len() < MAX_RESULTS {
-            self.done.push(r);
-        }
-    }
-
-    fn finish(mut self) -> Vec<QueryResult> {
-        if self.current.is_some() {
-            self.end(0);
-        }
-        if self.done.is_empty() {
-            self.done.push(QueryResult::default()); // e.g. only a comment
-        }
-        self.done
-    }
-}
-
-/// A way to stop a running query from outside its connection.
-pub enum Stopper {
-    /// Sends Postgres's cancel request on a separate socket.
-    Pg(tokio_postgres::CancelToken),
-    /// The MySQL session id, for `KILL QUERY` from a second connection.
-    My(u32),
-    /// SQLite runs on the calling thread, so it is interrupted from another one.
-    Lite(rusqlite::InterruptHandle),
-}
-
 /// How an engine writes SQL, for code that builds statements without needing a live connection (DDL).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
@@ -193,275 +135,15 @@ impl Dialect {
     }
 }
 
-/// Runs blocking SQLite work without stalling the async worker it's on: the pool takes over the worker's other tasks
-/// meanwhile. `block_in_place` rather than `spawn_blocking`, which would need to own the borrowed connection. Every
-/// runtime here (the app's, the tests', the MCP bridge's) is multi-threaded, which it requires.
-fn blocking<T>(work: impl FnOnce() -> T) -> T {
-    tokio::task::block_in_place(work)
-}
-
 /// A quoted identifier for code that only knows whether it's MySQL; [`Dialect::ident`] does the quoting.
 pub(crate) fn quote_ident(mysql: bool, name: &str) -> String {
     if mysql { Dialect::My.ident(name) } else { Dialect::Pg.ident(name) }
 }
 
-/// Receives a query result as it arrives: the column names once, then each row.
-pub(crate) trait RowSink {
-    fn columns(&mut self, names: Vec<String>) -> Result<()>;
-    fn row(&mut self, row: Vec<Option<String>>) -> Result<()>;
-}
-
-/// Feeds a MySQL result to `sink` row by row.
-async fn my_stream<P: mysql_async::prelude::Protocol>(
-    mut res: mysql_async::QueryResult<'_, '_, P>,
-    sink: &mut dyn RowSink,
-) -> Result<()> {
-    sink.columns(res.columns_ref().iter().map(|c| c.name_str().into_owned()).collect())?;
-    while let Some(row) = res.next().await? {
-        sink.row(my_row(row))?;
-    }
-    Ok(())
-}
-
-// ponytail: an enum over three engines, not a Driver trait; extract a trait when a 4th engine needs it.
-pub enum Conn {
-    Pg(tokio_postgres::Client),
-    My(mysql_async::Conn),
-    Lite(rusqlite::Connection),
-}
-
-/// A Postgres parameter sent as text, which the server parses as the target column's type, exactly as it
-/// would a quoted literal. Lets one code path bind values for every column type.
-#[derive(Debug)]
-struct PgText<'a>(Option<&'a str>);
-
-impl tokio_postgres::types::ToSql for PgText<'_> {
-    fn to_sql(
-        &self,
-        _: &tokio_postgres::types::Type,
-        out: &mut bytes::BytesMut,
-    ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
-        use tokio_postgres::types::IsNull;
-        Ok(match self.0 {
-            Some(s) => {
-                out.extend_from_slice(s.as_bytes());
-                IsNull::No
-            }
-            None => IsNull::Yes,
-        })
-    }
-
-    fn accepts(_: &tokio_postgres::types::Type) -> bool {
-        true
-    }
-
-    fn encode_format(&self, _: &tokio_postgres::types::Type) -> tokio_postgres::types::Format {
-        tokio_postgres::types::Format::Text
-    }
-
-    tokio_postgres::types::to_sql_checked!();
-}
-
-/// A MySQL row as text cells, the way the text protocol would show them. Prepared statements return typed
-/// values, so dates and times are formatted from the column's type and fractional-second digits.
-/// The file a `LOAD DATA [LOW_PRIORITY | CONCURRENT] LOCAL INFILE '…'` statement names, when `sql` starts with one.
-/// The server, not the statement, says which file it wants, so this is the only file the client will send.
-fn local_infile(sql: &str) -> Option<String> {
-    fn keyword<'a>(s: &'a str, word: &str) -> Option<&'a str> {
-        let (head, rest) = (s.get(..word.len())?, s.get(word.len()..)?);
-        let ends = !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_');
-        (head.eq_ignore_ascii_case(word) && ends).then(|| rest.trim_start())
-    }
-    let s = keyword(keyword(sql.trim_start(), "load")?, "data")?;
-    let s = keyword(s, "low_priority").or_else(|| keyword(s, "concurrent")).unwrap_or(s);
-    let s = keyword(keyword(s, "local")?, "infile")?;
-    // A MySQL string literal: backslash escapes, and a doubled quote stands for one.
-    let mut chars = s.chars().peekable();
-    let quote = chars.next().filter(|q| matches!(q, '\'' | '"'))?;
-    let mut path = String::new();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => path.push(match chars.next()? {
-                'n' => '\n',
-                't' => '\t',
-                '0' => '\0',
-                other => other,
-            }),
-            q if q == quote && chars.peek() == Some(&quote) => {
-                chars.next();
-                path.push(quote);
-            }
-            q if q == quote => return Some(path),
-            other => path.push(other),
-        }
-    }
-    None
-}
-
-/// Streams `file` to the server in 64 KiB pieces, for one LOAD DATA LOCAL request.
-fn infile_data(
-    file: std::fs::File,
-) -> impl Future<Output = mysql_async::Result<mysql_async::InfileData>> + Send + Sync {
-    let file = tokio::fs::File::from_std(file);
-    async move {
-        use tokio::io::AsyncReadExt;
-        let chunks = futures_util::stream::unfold(Some(file), |file| async move {
-            let mut file = file?;
-            let mut buf = vec![0; 64 * 1024];
-            match file.read(&mut buf).await {
-                Ok(0) => None,
-                Ok(n) => {
-                    buf.truncate(n);
-                    Some((Ok(bytes::Bytes::from(buf)), Some(file)))
-                }
-                Err(e) => Some((Err(e), None)), // the error ends the stream
-            }
-        });
-        Ok(Box::pin(chunks) as mysql_async::InfileData)
-    }
-}
-
-fn my_row(row: mysql_async::Row) -> Vec<Option<String>> {
-    let columns = row.columns();
-    row.unwrap().into_iter().zip(columns.iter()).map(|(v, col)| my_cell(v, col)).collect()
-}
-
-fn my_cell(value: mysql_async::Value, col: &mysql_async::Column) -> Option<String> {
-    use mysql_async::Value as V;
-    use mysql_async::consts::ColumnType;
-    let frac = |micros: u32| match col.decimals() {
-        digits @ 1..=6 => format!(".{}", &format!("{micros:06}")[..usize::from(digits)]),
-        _ => String::new(),
-    };
-    let date_only = matches!(col.column_type(), ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE);
-    Some(match value {
-        V::NULL => return None,
-        V::Bytes(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        V::Int(n) => n.to_string(),
-        V::UInt(n) => n.to_string(),
-        V::Float(n) => n.to_string(),
-        V::Double(n) => n.to_string(),
-        V::Date(year, month, day, ..) if date_only => format!("{year:04}-{month:02}-{day:02}"),
-        V::Date(year, month, day, hour, minute, second, micros) => {
-            format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}{}", frac(micros))
-        }
-        V::Time(negative, days, hour, minute, second, micros) => {
-            let hours = days * 24 + u32::from(hour);
-            format!("{}{hours:02}:{minute:02}:{second:02}{}", if negative { "-" } else { "" }, frac(micros))
-        }
-    })
-}
-
-/// The server's name and version from `select version()` on `CockroachDB`, e.g. "`CockroachDB` 25.1.0" from
-/// "`CockroachDB` CCL v25.1.0 (aarch64-unknown-linux-gnu, …)"; None for any other server.
-fn cockroach_version(version: &str) -> Option<String> {
-    let rest = version.strip_prefix("CockroachDB ")?;
-    let v = rest.split_whitespace().find_map(|w| w.strip_prefix('v')).unwrap_or_default();
-    Some(format!("CockroachDB {v}"))
-}
-
-fn lite_cell(v: rusqlite::types::ValueRef) -> Option<String> {
-    use rusqlite::types::ValueRef;
-    match v {
-        ValueRef::Null => None,
-        ValueRef::Integer(i) => Some(i.to_string()),
-        ValueRef::Real(f) => Some(f.to_string()),
-        ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
-        ValueRef::Blob(b) => Some(format!("<{} bytes>", b.len())),
-    }
-}
-
-/// The config for dialling `url` through a local tunnel port. `host` stays the real name, so TLS is checked against
-/// it, while `hostaddr` sends the connection to 127.0.0.1.
-fn tunnelled_postgres_config(url: &str, tunnel_port: u16) -> Result<tokio_postgres::Config> {
-    let mut u = url::Url::parse(url)?;
-    // The URL's port is replaced, not added to: tokio-postgres fills in 5432 for a URL without one, so adding the
-    // tunnel's port with `Config::port` would leave two ports for one host, which it refuses.
-    let _ = u.set_port(Some(tunnel_port)); // Err only for URLs that can't have a port, which parse() then reports
-    let mut cfg: tokio_postgres::Config = u.as_str().parse()?;
-    cfg.hostaddr(std::net::Ipv4Addr::LOCALHOST.into());
-    Ok(cfg)
-}
-
-async fn open_postgres(
-    url: &str,
-    password: Option<&SecretString>,
-    tls: &Tls,
-    options: &Options,
-    tunnel_port: Option<u16>,
-) -> Result<tokio_postgres::Client> {
-    let mut cfg: tokio_postgres::Config = match tunnel_port {
-        Some(port) => tunnelled_postgres_config(url, port)?,
-        None => url.parse()?,
-    };
-    if let Some(password) = password {
-        cfg.password(password.expose_secret());
-    }
-    let (mode, connector) = tls.postgres()?;
-    cfg.ssl_mode(mode);
-    if options.direct_tls {
-        cfg.ssl_negotiation(tokio_postgres::config::SslNegotiation::Direct);
-    }
-    if options.no_channel_binding {
-        cfg.channel_binding(tokio_postgres::config::ChannelBinding::Disable);
-    }
-    let (client, connection) = cfg.connect(connector).await?;
-    tauri::async_runtime::spawn(connection); // drives the socket; ends when the client is dropped
-    Ok(client)
-}
-
-async fn open_mysql(
-    url: &str,
-    password: Option<&SecretString>,
-    tls: &Tls,
-    options: &Options,
-    tunnel_port: Option<u16>,
-) -> Result<mysql_async::Conn> {
-    let opts = mysql_async::Opts::from_url(url).map_err(mysql_async::Error::from)?;
-    let host = opts.ip_or_hostname().to_string();
-    let mut builder =
-        mysql_async::OptsBuilder::from_opts(opts).enable_cleartext_plugin(options.cleartext_auth).prefer_socket(false);
-    if let Some(password) = password {
-        builder = builder.pass(Some(password.expose_secret()));
-    }
-    if let Some(port) = tunnel_port {
-        builder = builder.ip_or_hostname("127.0.0.1").tcp_port(port);
-    } else if !options.socket.is_empty() {
-        builder = builder.socket(Some(options.socket.as_str()));
-    }
-    let on_socket = tunnel_port.is_none() && !options.socket.is_empty();
-    // The name TLS checks: an explicit SNI, else the real host when the address dialled is a tunnel's.
-    let verify_as =
-        if options.sni.is_empty() { tunnel_port.map(|_| host.as_str()) } else { Some(options.sni.as_str()) };
-    // A Unix socket never leaves the machine (MySQL counts it as a secure transport), and the driver's TLS handshake
-    // over one fails with "Packets out of sync", so the TLS setting doesn't apply there.
-    let ssl = if on_socket { None } else { tls.mysql(verify_as)? };
-    match mysql_async::Conn::new(builder.clone().ssl_opts(ssl)).await {
-        // Prefer: a server without TLS gets a plain connection, as libmysqlclient's PREFERRED does.
-        Err(mysql_async::Error::Driver(mysql_async::DriverError::NoClientSslFlagFromServer))
-            if tls.mode == TlsMode::Prefer =>
-        {
-            Ok(mysql_async::Conn::new(builder.ssl_opts(None)).await?)
-        }
-        other => Ok(other?),
-    }
-}
-
-/// Opens a SQLite file. With `key`, the file is an `SQLCipher` database: the key is a passphrase, or a raw key
-/// written `x'…'`.
-fn open_sqlite(path: &str, key: Option<&SecretString>) -> Result<rusqlite::Connection> {
-    let c = rusqlite::Connection::open(path)?;
-    if let Some(key) = key.filter(|k| !k.expose_secret().is_empty()) {
-        c.pragma_update(None, "key", key.expose_secret())?;
-        // SQLCipher only checks the key on first read; read now so a wrong one is reported here.
-        c.query_row("select count(*) from sqlite_master", [], |_| Ok(())).map_err(|e| match e {
-            rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::NotADatabase => {
-                Error::Invalid("wrong passphrase, or the file isn't an SQLCipher database")
-            }
-            e => e.into(),
-        })?;
-    }
-    Ok(c)
+/// An open connection: the engine's [`Driver`], and on top of it the catalog queries and statement building that
+/// differ by [`Dialect`].
+pub struct Conn {
+    driver: Box<dyn Driver>,
 }
 
 impl Conn {
@@ -477,42 +159,38 @@ impl Conn {
         tunnel_port: Option<u16>,
     ) -> Result<Conn> {
         let open = async {
-            Ok::<_, Error>(match engine {
-                Engine::Postgres => Conn::Pg(open_postgres(url, password, tls, options, tunnel_port).await?),
+            Ok::<Box<dyn Driver>, Error>(match engine {
+                Engine::Postgres => Box::new(Postgres::open(url, password, tls, options, tunnel_port).await?),
                 Engine::Mysql | Engine::Mariadb => {
-                    Conn::My(open_mysql(url, password, tls, options, tunnel_port).await?)
+                    Box::new(Mysql::open(url, password, tls, options, tunnel_port).await?)
                 }
-                // Opening can take a while: SQLCipher derives the key from the passphrase.
-                Engine::Sqlite => Conn::Lite(blocking(|| open_sqlite(url, password))?),
+                Engine::Sqlite => Box::new(Sqlite::open(url, password)?),
                 Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
             })
         };
-        let mut conn: Conn = tokio::time::timeout(CONNECT_TIMEOUT, open)
+        let driver = tokio::time::timeout(CONNECT_TIMEOUT, open)
             .await
             .map_err(|_| Error::ConnectTimeout(CONNECT_TIMEOUT.as_secs()))??;
+        let mut conn = Conn { driver };
         if !options.startup_sql.trim().is_empty() {
             conn.batch(&options.startup_sql).await.map_err(|e| Error::StartupSql(Box::new(e)))?;
         }
         Ok(conn)
     }
 
+    /// The SQLite connection, taken out of its `Conn`; None for other engines.
+    pub fn into_sqlite(self) -> Option<rusqlite::Connection> {
+        self.driver.into_any().downcast::<Sqlite>().ok().map(|s| s.0)
+    }
+
     /// Runs one or more statements, discarding any results.
     async fn batch(&mut self, sql: &str) -> Result<()> {
         crate::console::record(sql);
-        match self {
-            Conn::Pg(c) => c.batch_execute(sql).await?,
-            Conn::My(c) => mysql_async::prelude::Queryable::query_drop(c, sql).await?,
-            Conn::Lite(c) => blocking(|| c.execute_batch(sql))?,
-        }
-        Ok(())
+        self.driver.batch(sql).await
     }
 
     pub fn stopper(&self) -> Stopper {
-        match self {
-            Conn::Pg(c) => Stopper::Pg(c.cancel_token()),
-            Conn::My(c) => Stopper::My(c.id()),
-            Conn::Lite(c) => Stopper::Lite(c.get_interrupt_handle()),
-        }
+        self.driver.stopper()
     }
 
     /// Whether `err` came from SQLite being interrupted by its [`Stopper`].
@@ -522,49 +200,31 @@ impl Conn {
 
     /// A round trip that does nothing, to keep idle connections from being closed by the server or the network.
     pub async fn ping(&mut self) -> Result<()> {
-        match self {
-            Conn::Pg(c) => {
-                c.simple_query("").await?;
-            }
-            Conn::My(c) => mysql_async::prelude::Queryable::ping(c).await?,
-            Conn::Lite(_) => {}
-        }
-        Ok(())
+        self.driver.ping().await
     }
 
     /// The TLS cipher the session uses; None when it's unencrypted (or SQLite).
     pub async fn tls_cipher(&mut self) -> Result<Option<String>> {
-        let cipher = match self {
-            Conn::Pg(_) => self.scalar("select cipher from pg_stat_ssl where pid = pg_backend_pid()").await?,
-            Conn::My(_) => {
+        let cipher = match self.dialect() {
+            Dialect::Pg => self.scalar("select cipher from pg_stat_ssl where pid = pg_backend_pid()").await?,
+            Dialect::My => {
                 let r = self.query("show status like 'Ssl_cipher'").await?;
                 r.rows.into_iter().next().and_then(|mut row| row.pop().flatten())
             }
-            Conn::Lite(_) => None,
+            Dialect::Lite => None,
         };
         Ok(cipher.filter(|c| !c.is_empty()))
     }
 
     /// Whether `err` (from this connection) means the connection itself is gone, not just that a statement failed.
     pub fn lost_by(&self, err: &Error) -> bool {
-        match (self, err) {
-            (Conn::Pg(c), _) => c.is_closed(),
-            (Conn::My(_), Error::MySql(mysql_async::Error::Io(_))) => true,
-            (Conn::My(_), Error::MySql(mysql_async::Error::Driver(d))) => {
-                matches!(d, mysql_async::DriverError::ConnectionClosed)
-            }
-            _ => false,
-        }
+        self.driver.lost_by(err)
     }
 
     /// Statements that make the database itself refuse writes, then undo that: a read-only transaction (rolled
     /// back), or SQLite's `query_only`. They catch what the read-only parse can't see, such as a function that writes.
     pub fn read_only_bounds(&self) -> (&'static str, &'static str) {
-        match self {
-            Conn::Pg(_) => ("begin read only", "rollback"),
-            Conn::My(_) => ("start transaction read only", "rollback"),
-            Conn::Lite(_) => ("pragma query_only = on", "pragma query_only = off"),
-        }
+        self.driver.read_only_bounds()
     }
 
     /// Whether `err` is the database refusing a write inside [`Conn::read_only_bounds`]: Postgres's
@@ -590,98 +250,30 @@ impl Conn {
     }
 
     /// Runs one or more statements and returns every statement's result in order (at least one). At most
-    /// `max_rows` rows are kept across them all, and at most [`MAX_RESULTS`] results; `truncated` marks a result
+    /// `max_rows` rows are kept across them all, and at most [`crate::driver::MAX_RESULTS`] results; `truncated` marks a result
     /// that lost rows. Rows past the limit are read and dropped, so memory stays bounded and the connection stays
     /// in step.
     pub async fn query_results(&mut self, sql: &str, max_rows: Option<usize>) -> Result<Vec<QueryResult>> {
         crate::console::record(sql);
-        let mut out = Results { left: max_rows.unwrap_or(usize::MAX), ..Results::default() };
-        match self {
-            // The simple-query (text) protocol renders every Postgres type as text, so no per-type decoding.
-            Conn::Pg(c) => {
-                use futures_util::StreamExt;
-                use tokio_postgres::SimpleQueryMessage as M;
-                let stream = c.simple_query_raw(sql).await?;
-                futures_util::pin_mut!(stream);
-                while let Some(msg) = stream.next().await {
-                    match msg? {
-                        M::RowDescription(cols) => out.begin(cols.iter().map(|c| c.name().to_string()).collect()),
-                        M::Row(row) if out.keep() => {
-                            out.push((0..row.len()).map(|i| row.get(i).map(String::from)).collect());
-                        }
-                        M::CommandComplete(n) => out.end(n),
-                        _ => {}
-                    }
-                }
-            }
-            Conn::My(c) => {
-                use mysql_async::prelude::Queryable;
-                // With no handler the driver refuses LOCAL INFILE requests; this one answers once, with the file the
-                // statement names, whatever the server asked for.
-                if let Some(path) = local_infile(sql) {
-                    let file = std::fs::File::open(&path).map_err(|source| Error::File { path, source })?;
-                    c.set_infile_handler(infile_data(file));
-                }
-                let mut res = c.query_iter(sql).await?;
-                // One pass per result set; reading past a set's last row moves on to the next one.
-                loop {
-                    let columns: Vec<String> = res.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
-                    // Read now: for a statement without rows it's this one's count, and later it may be the next one's.
-                    let affected = if columns.is_empty() { res.affected_rows() } else { 0 };
-                    out.begin(columns);
-                    while let Some(row) = res.next().await? {
-                        if out.keep() {
-                            out.push(my_row(row));
-                        }
-                    }
-                    out.end(affected);
-                    if res.is_empty() {
-                        break;
-                    }
-                }
-            }
-            Conn::Lite(c) => blocking(|| -> Result<()> {
-                use rusqlite::fallible_iterator::FallibleIterator;
-                // SQLite prepares one statement at a time; Batch steps through the rest of the text.
-                let mut batch = rusqlite::Batch::new(c, sql);
-                while let Some(mut st) = batch.next()? {
-                    let columns: Vec<String> = st.column_names().into_iter().map(String::from).collect();
-                    if columns.is_empty() {
-                        out.begin(columns);
-                        out.end(st.execute([])? as u64);
-                        continue;
-                    }
-                    let n = columns.len();
-                    out.begin(columns);
-                    let mut rows = st.query([])?;
-                    while let Some(row) = rows.next()? {
-                        if !out.keep() {
-                            break; // SQLite steps lazily, so there's nothing more to read
-                        }
-                        out.push((0..n).map(|i| row.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<Vec<_>>>()?);
-                    }
-                    out.end(0);
-                }
-                Ok(())
-            })?,
-        }
+        let mut out = Results::new(max_rows);
+        self.driver.run(sql, &mut out).await?;
         Ok(out.finish())
     }
 
     /// Every table's columns in the current database, for autocomplete: (table, column) pairs in column order.
     /// Postgres tables are `schema.table`.
     pub async fn schema(&mut self) -> Result<Vec<(String, String)>> {
-        let sql = match self {
-            Conn::Pg(_) => {
+        let sql = match self.dialect() {
+            Dialect::Pg => {
                 "select table_schema || '.' || table_name, column_name from information_schema.columns \
                  where table_schema not in ('pg_catalog', 'information_schema', 'crdb_internal', 'pg_extension') \
                  order by table_schema, table_name, ordinal_position"
             }
-            Conn::My(_) => {
+            Dialect::My => {
                 "select table_name, column_name from information_schema.columns where table_schema = database() \
                  order by table_name, ordinal_position"
             }
-            Conn::Lite(_) => {
+            Dialect::Lite => {
                 "select m.name, p.name from sqlite_master m join pragma_table_info(m.name) p \
                  where m.type in ('table', 'view') order by m.name, p.cid"
             }
@@ -698,122 +290,27 @@ impl Conn {
 
     /// The placeholder for the `n`th (1-based) bound parameter.
     pub(crate) fn param(&self, n: usize) -> String {
-        match self {
-            Conn::My(_) => "?".into(),
-            _ => format!("${n}"),
-        }
+        self.driver.param(n)
     }
 
     /// Runs one statement with bound parameters and returns the rows it affected.
     pub(crate) async fn execute_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<u64> {
         crate::console::record(sql);
-        match self {
-            Conn::Pg(c) => {
-                let params: Vec<PgText> = params.iter().copied().map(PgText).collect();
-                let refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-                    params.iter().map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
-                Ok(c.execute(sql, &refs).await?)
-            }
-            Conn::My(c) => {
-                use mysql_async::prelude::Queryable;
-                c.exec_drop(sql, params.iter().copied().map(mysql_async::Value::from).collect::<Vec<_>>()).await?;
-                Ok(c.affected_rows())
-            }
-            Conn::Lite(c) => Ok(blocking(|| c.execute(sql, rusqlite::params_from_iter(params)))? as u64),
-        }
+        self.driver.execute_with(sql, params).await
     }
 
     /// Runs a catalog query with bound parameters. Every selected column must be text (cast `::text` on Postgres).
     pub(crate) async fn fetch_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<Vec<Option<String>>>> {
         crate::console::record(sql);
-        match self {
-            Conn::Pg(c) => {
-                let params: Vec<PgText> = params.iter().copied().map(PgText).collect();
-                let refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-                    params.iter().map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
-                c.query(sql, &refs)
-                    .await?
-                    .iter()
-                    .map(|row| (0..row.len()).map(|i| row.try_get(i)).collect::<std::result::Result<Vec<_>, _>>())
-                    .collect::<std::result::Result<_, _>>()
-                    .map_err(Error::from)
-            }
-            Conn::My(c) => {
-                use mysql_async::prelude::Queryable;
-                let params: Vec<_> = params.iter().copied().map(mysql_async::Value::from).collect();
-                let rows: Vec<mysql_async::Row> = c.exec(sql, params).await?;
-                Ok(rows.into_iter().map(my_row).collect())
-            }
-            Conn::Lite(c) => blocking(|| {
-                let mut st = c.prepare(sql)?;
-                let n = st.column_count();
-                let rows = st
-                    .query_map(rusqlite::params_from_iter(params), |r| {
-                        (0..n).map(|i| r.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<Vec<_>>>()
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            }),
-        }
+        self.driver.fetch_with(sql, params).await
     }
 
     /// Runs one query and hands its rows to `sink` as they arrive, so a large result never sits in memory. An
     /// error from the sink stops the query. With `params` on Postgres, every selected column must be text (as for
     /// [`Conn::fetch_with`]); without, any query works.
     pub(crate) async fn stream(&mut self, sql: &str, params: &[Option<&str>], sink: &mut dyn RowSink) -> Result<()> {
-        use futures_util::StreamExt;
         crate::console::record(sql);
-        match self {
-            Conn::Pg(c) if params.is_empty() => {
-                use tokio_postgres::SimpleQueryMessage as M;
-                let stream = c.simple_query_raw(sql).await?;
-                futures_util::pin_mut!(stream);
-                let mut described = false;
-                while let Some(msg) = stream.next().await {
-                    match msg? {
-                        M::RowDescription(_) if described => {
-                            return Err(Error::Invalid("export one statement at a time"));
-                        }
-                        M::RowDescription(cols) => {
-                            described = true;
-                            sink.columns(cols.iter().map(|c| c.name().to_string()).collect())?;
-                        }
-                        M::Row(row) => sink.row((0..row.len()).map(|i| row.get(i).map(String::from)).collect())?,
-                        _ => {}
-                    }
-                }
-            }
-            Conn::Pg(c) => {
-                let st = c.prepare(sql).await?;
-                sink.columns(st.columns().iter().map(|c| c.name().to_string()).collect())?;
-                let params: Vec<PgText> = params.iter().copied().map(PgText).collect();
-                let stream = c.query_raw(&st, params).await?;
-                futures_util::pin_mut!(stream);
-                while let Some(row) = stream.next().await {
-                    let row = row?;
-                    sink.row((0..row.len()).map(|i| row.try_get(i)).collect::<std::result::Result<_, _>>()?)?;
-                }
-            }
-            Conn::My(c) if params.is_empty() => {
-                // The text protocol: some statements (SHOW …) can't be prepared.
-                my_stream(mysql_async::prelude::Queryable::query_iter(c, sql).await?, sink).await?;
-            }
-            Conn::My(c) => {
-                let params: Vec<_> = params.iter().copied().map(mysql_async::Value::from).collect();
-                my_stream(mysql_async::prelude::Queryable::exec_iter(c, sql, params).await?, sink).await?;
-            }
-            Conn::Lite(c) => blocking(|| -> Result<()> {
-                let mut st = c.prepare(sql)?;
-                let n = st.column_count();
-                sink.columns(st.column_names().into_iter().map(String::from).collect())?;
-                let mut rows = st.query(rusqlite::params_from_iter(params))?;
-                while let Some(row) = rows.next()? {
-                    sink.row((0..n).map(|i| row.get_ref(i).map(lite_cell)).collect::<rusqlite::Result<_>>()?)?;
-                }
-                Ok(())
-            })?,
-        }
-        Ok(())
+        self.driver.stream(sql, params, sink).await
     }
 
     async fn scalar(&mut self, sql: &str) -> Result<Option<String>> {
@@ -822,35 +319,35 @@ impl Conn {
 
     /// Databases on the server; empty for SQLite (one file, one database).
     pub async fn databases(&mut self) -> Result<Vec<String>> {
-        let sql = match self {
-            Conn::Pg(_) => "select datname from pg_database where not datistemplate and datallowconn order by 1",
-            Conn::My(_) => "select schema_name from information_schema.schemata order by 1",
-            Conn::Lite(_) => return Ok(vec![]),
+        let sql = match self.dialect() {
+            Dialect::Pg => "select datname from pg_database where not datistemplate and datallowconn order by 1",
+            Dialect::My => "select schema_name from information_schema.schemata order by 1",
+            Dialect::Lite => return Ok(vec![]),
         };
         Ok(self.query(sql).await?.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
     }
 
     /// The selected database; None when a MySQL connection has none yet.
     pub async fn current_database(&mut self) -> Result<Option<String>> {
-        match self {
-            Conn::Pg(_) => self.scalar("select current_database()").await,
-            Conn::My(_) => self.scalar("select database()").await,
-            Conn::Lite(_) => Ok(None),
+        match self.dialect() {
+            Dialect::Pg => self.scalar("select current_database()").await,
+            Dialect::My => self.scalar("select database()").await,
+            Dialect::Lite => Ok(None),
         }
     }
 
     /// The server's name and version, e.g. "PostgreSQL 17.2", "`CockroachDB` 25.1.0" or "MariaDB 11.4.2".
     pub async fn server_version(&mut self) -> Result<String> {
-        if let Conn::Pg(_) = self {
+        if self.dialect() == Dialect::Pg {
             // CockroachDB's server_version is the Postgres version it imitates; only version() names it.
             if let Some(v) = cockroach_version(&self.scalar("select version()").await?.unwrap_or_default()) {
                 return Ok(v);
             }
         }
-        let (label, sql) = match self {
-            Conn::Pg(_) => ("PostgreSQL", "show server_version"),
-            Conn::My(_) => ("MySQL", "select version()"),
-            Conn::Lite(_) => ("SQLite", "select sqlite_version()"),
+        let (label, sql) = match self.dialect() {
+            Dialect::Pg => ("PostgreSQL", "show server_version"),
+            Dialect::My => ("MySQL", "select version()"),
+            Dialect::Lite => ("SQLite", "select sqlite_version()"),
         };
         let v = self.scalar(sql).await?.unwrap_or_default();
         // MariaDB reports e.g. "11.4.2-MariaDB"; name it after what the server says it is.
@@ -863,8 +360,8 @@ impl Conn {
 
     /// MySQL switches in place; Postgres cannot change database within a session, so the caller reconnects.
     pub async fn use_database(&mut self, db: &str) -> Result<()> {
-        match self {
-            Conn::My(_) => {
+        match self.dialect() {
+            Dialect::My => {
                 let sql = format!("use {}", self.ident(db));
                 self.query(&sql).await.map(|_| ())
             }
@@ -873,11 +370,7 @@ impl Conn {
     }
 
     pub(crate) fn dialect(&self) -> Dialect {
-        match self {
-            Conn::Pg(_) => Dialect::Pg,
-            Conn::My(_) => Dialect::My,
-            Conn::Lite(_) => Dialect::Lite,
-        }
+        self.driver.dialect()
     }
 
     /// A quoted identifier; see [`Dialect::ident`].
@@ -891,8 +384,8 @@ impl Conn {
 
     /// Columns of `table` (`schema.table` for Postgres) in definition order.
     pub async fn columns(&mut self, table: &str) -> Result<Vec<Column>> {
-        let (sql, params) = match self {
-            Conn::Pg(_) => {
+        let (sql, params) = match self.dialect() {
+            Dialect::Pg => {
                 let (schema, name) = table.split_once('.').unwrap_or(("public", table));
                 (
                     // information_schema leaves out materialized views, so pg_attribute adds theirs.
@@ -915,12 +408,12 @@ impl Conn {
                     vec![Some(schema), Some(name)],
                 )
             }
-            Conn::My(_) => (
+            Dialect::My => (
                 "select column_name, column_type, is_nullable, column_default, column_key from information_schema.columns \
                  where table_schema = database() and table_name = ? order by ordinal_position",
                 vec![Some(table)],
             ),
-            Conn::Lite(_) => (
+            Dialect::Lite => (
                 "select name, type, case when \"notnull\" then 'NO' else 'YES' end, dflt_value, \
                  case when pk > 0 then 'PRI' else '' end from pragma_table_info($1)",
                 vec![Some(table)],
@@ -947,18 +440,18 @@ impl Conn {
     /// Tables and views in the current database (`schema.table` for Postgres).
     /// `system` adds Postgres's `pg_catalog` and `information_schema` tables.
     pub async fn tables(&mut self, system: bool) -> Result<Vec<String>> {
-        let sql = match self {
-            Conn::Pg(_) if system => {
+        let sql = match self.dialect() {
+            Dialect::Pg if system => {
                 "select table_schema || '.' || table_name from information_schema.tables order by 1"
             }
-            Conn::Pg(_) => {
+            Dialect::Pg => {
                 "select table_schema || '.' || table_name from information_schema.tables \
                  where table_schema not in ('pg_catalog', 'information_schema', 'crdb_internal', 'pg_extension') order by 1"
             }
-            Conn::My(_) => {
+            Dialect::My => {
                 "select table_name from information_schema.tables where table_schema = database() order by 1"
             }
-            Conn::Lite(_) => "select name from sqlite_master where type in ('table', 'view') order by 1",
+            Dialect::Lite => "select name from sqlite_master where type in ('table', 'view') order by 1",
         };
         let r = self.query(sql).await?;
         Ok(r.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
@@ -967,25 +460,6 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
-    use tokio_postgres::config::Host;
-
-    #[test]
-    fn cockroach_version_should_name_cockroachdb_and_leave_postgres_alone() {
-        let crdb = "CockroachDB CCL v25.1.0 (aarch64-unknown-linux-gnu, built 2025/02/17 13:21:41, go1.22.8 X:nocoverageredesign)";
-        assert_eq!(super::cockroach_version(crdb).as_deref(), Some("CockroachDB 25.1.0"));
-        assert_eq!(super::cockroach_version("PostgreSQL 16.15 on aarch64-unknown-linux-musl"), None);
-    }
-
-    #[test]
-    fn tunnelled_postgres_config_should_have_one_port_whether_or_not_the_url_names_one() {
-        for url in ["postgresql://u@db.internal/app", "postgresql://u@db.internal:6543/app"] {
-            let cfg = super::tunnelled_postgres_config(url, 40_001).unwrap();
-            assert_eq!(cfg.get_ports(), [40_001], "{url}");
-            assert_eq!(cfg.get_hostaddrs(), [std::net::Ipv4Addr::LOCALHOST]);
-            assert!(matches!(cfg.get_hosts(), [Host::Tcp(h)] if h == "db.internal"), "{url}: TLS checks the real name");
-        }
-    }
-
     /// Quoting can't be broken out of: whatever the name or value, the SQL parser reads back exactly it.
     mod quoting {
         use crate::db::Dialect;
@@ -1112,23 +586,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn local_infile_should_find_the_file_a_load_data_local_statement_names() {
-        use super::local_infile;
-        assert_eq!(local_infile("LOAD DATA LOCAL INFILE '/tmp/a.csv' INTO TABLE t").as_deref(), Some("/tmp/a.csv"));
-        assert_eq!(local_infile("  load data concurrent local infile \"x\" into table t").as_deref(), Some("x"));
-        assert_eq!(local_infile(r"load data local infile 'it''s\\a\'b' into table t").as_deref(), Some(r"it's\a'b"));
-    }
-
-    #[test]
-    fn local_infile_should_ignore_other_statements() {
-        use super::local_infile;
-        assert_eq!(local_infile("load data infile '/srv/a.csv' into table t"), None, "server-side file");
-        assert_eq!(local_infile("select 'load data local infile'"), None);
-        assert_eq!(local_infile("load data local infile '/tmp/unterminated"), None);
-        assert_eq!(local_infile("load database local infile 'x'"), None);
-    }
-
     use super::{Conn, Engine};
     use crate::tls::Tls;
 
@@ -1241,8 +698,8 @@ mod tests {
     fn query_results_should_keep_at_most_max_results() {
         tauri::async_runtime::block_on(async {
             let mut c = open(Engine::Sqlite, ":memory:").await;
-            let sql = "select 1;".repeat(super::MAX_RESULTS + 5);
-            assert_eq!(c.query_results(&sql, None).await.unwrap().len(), super::MAX_RESULTS);
+            let sql = "select 1;".repeat(crate::driver::MAX_RESULTS + 5);
+            assert_eq!(c.query_results(&sql, None).await.unwrap().len(), crate::driver::MAX_RESULTS);
         });
     }
 

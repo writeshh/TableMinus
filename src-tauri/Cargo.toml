@@ -25,6 +25,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 # preserve_order: an agent's config file keeps its keys in their order when the MCP setup adds to it.
 serde_json = { version = "1", features = ["preserve_order"] }
+# Drivers (driver.rs) are trait objects with async methods; already in the tree through tokio-postgres and rmcp.
+async-trait = "0.1"
 tokio-postgres = "0.7.18"
 postgres-protocol = "0.6.12"
 postgres-native-tls = "0.5.3"

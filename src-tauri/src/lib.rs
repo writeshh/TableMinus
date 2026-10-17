@@ -10,6 +10,7 @@ mod db;
 mod ddl;
 mod diagram;
 mod discover;
+mod driver;
 mod error;
 mod export;
 mod import;

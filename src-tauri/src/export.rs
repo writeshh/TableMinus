@@ -545,8 +545,7 @@ mod tests {
             let script = std::fs::read_to_string(&path).unwrap();
             assert!(script.starts_with("drop table if exists \"people\";\nCREATE TABLE people"), "{script}");
             c.query("insert into people values (9, 'gone', null)").await.unwrap();
-            let Conn::Lite(lite) = &c else { unreachable!() };
-            lite.execute_batch(&script).unwrap();
+            c.query(&script).await.unwrap();
             let r = c.query("select id, name, note from people order by id").await.unwrap();
             assert_eq!(r.rows.len(), 3, "the dropped table's extra row is gone");
             assert_eq!(r.rows[1], vec![Some("2".into()), Some("O'Hara".into()), None]);
