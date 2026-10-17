@@ -429,10 +429,13 @@ async fn open_mysql(
     } else if !options.socket.is_empty() {
         builder = builder.socket(Some(options.socket.as_str()));
     }
+    let on_socket = tunnel_port.is_none() && !options.socket.is_empty();
     // The name TLS checks: an explicit SNI, else the real host when the address dialled is a tunnel's.
     let verify_as =
         if options.sni.is_empty() { tunnel_port.map(|_| host.as_str()) } else { Some(options.sni.as_str()) };
-    let ssl = tls.mysql(verify_as)?;
+    // A Unix socket never leaves the machine (MySQL counts it as a secure transport), and the driver's TLS handshake
+    // over one fails with "Packets out of sync", so the TLS setting doesn't apply there.
+    let ssl = if on_socket { None } else { tls.mysql(verify_as)? };
     match mysql_async::Conn::new(builder.clone().ssl_opts(ssl)).await {
         // Prefer: a server without TLS gets a plain connection, as libmysqlclient's PREFERRED does.
         Err(mysql_async::Error::Driver(mysql_async::DriverError::NoClientSslFlagFromServer))

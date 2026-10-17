@@ -262,9 +262,10 @@ async fn found_on(port: u16, container: Option<String>) -> Option<Found> {
     Some(Found { conn: named(conn, port, container.as_deref()), detail })
 }
 
-/// The port a saved connection reaches on this computer, when it does; SQLite files and tunnelled servers don't.
+/// The port a saved connection reaches on this computer, when it does; SQLite files, sockets and tunnelled servers
+/// don't.
 fn local_port(c: &Saved) -> Option<u16> {
-    if c.ssh.is_some() {
+    if c.ssh.is_some() || !c.options.socket.is_empty() {
         return None;
     }
     let url = Url::parse(&c.url).ok()?;
@@ -279,8 +280,11 @@ fn local_port(c: &Saved) -> Option<u16> {
     })
 }
 
-/// Whether `existing` already has a connection to the same kind of server on the same local port.
+/// Whether `existing` already has a connection to the same kind of server on the same local port, or the same socket.
 fn already_saved(existing: &[Saved], found: &Saved) -> bool {
+    if !found.options.socket.is_empty() {
+        return existing.iter().any(|c| c.options.socket == found.options.socket);
+    }
     let same_kind = |a: Engine, b: Engine| {
         a == b || matches!((a, b), (Engine::Mysql, Engine::Mariadb) | (Engine::Mariadb, Engine::Mysql))
     };
@@ -289,8 +293,98 @@ fn already_saved(existing: &[Saved], found: &Saved) -> bool {
         .any(|c| same_kind(c.kind, found.kind) && local_port(c).is_some() && local_port(c) == local_port(found))
 }
 
-/// Looks for database servers on this computer that aren't saved yet: the usual ports and the ports Docker publishes.
-/// Doesn't save anything.
+/// Where MySQL and MariaDB put their socket: Homebrew, the distributions' packages, and a bare `mysqld`.
+const MYSQL_SOCKETS: [&str; 6] = [
+    "/tmp/mysql.sock",
+    "/var/run/mysqld/mysqld.sock",
+    "/run/mysqld/mysqld.sock",
+    "/var/lib/mysql/mysql.sock",
+    "/opt/homebrew/var/mysql/mysql.sock",
+    "/usr/local/var/mysql/mysql.sock",
+];
+const MAX_SOCKETS: usize = 20;
+
+/// The MySQL sockets that exist: the usual places, and `DBngin`'s `/tmp/mysql_<port>.sock`.
+#[cfg(unix)]
+fn mysql_sockets() -> Vec<String> {
+    use std::os::unix::fs::FileTypeExt;
+    let is_socket = |p: &str| std::fs::metadata(p).is_ok_and(|m| m.file_type().is_socket());
+    let mut found: Vec<String> = MYSQL_SOCKETS.iter().copied().filter(|p| is_socket(p)).map(String::from).collect();
+    if let Ok(dir) = std::fs::read_dir("/tmp") {
+        for entry in dir.flatten().take(10_000) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = format!("/tmp/{name}");
+            if name.starts_with("mysql_")
+                && std::path::Path::new(&name).extension().is_some_and(|e| e.eq_ignore_ascii_case("sock"))
+                && !found.contains(&path)
+                && is_socket(&path)
+            {
+                found.push(path);
+            }
+        }
+    }
+    found.truncate(MAX_SOCKETS);
+    found
+}
+
+#[cfg(not(unix))]
+fn mysql_sockets() -> Vec<String> {
+    vec![]
+}
+
+/// Whether a MySQL server answers on the socket (`Some(true)`: MariaDB), by its greeting.
+#[cfg(unix)]
+async fn socket_greeting(path: &str) -> Option<bool> {
+    let mut stream = tokio::time::timeout(PROBE_TIMEOUT, tokio::net::UnixStream::connect(path)).await.ok()?.ok()?;
+    let mut buf = [0u8; 128];
+    let n = tokio::time::timeout(PROBE_TIMEOUT, stream.read(&mut buf)).await.ok()?.ok()?;
+    mysql_greeting(&buf[..n])
+}
+
+#[cfg(not(unix))]
+async fn socket_greeting(_path: &str) -> Option<bool> {
+    None
+}
+
+/// A MySQL server on a socket, tried as `root` with no password, and the TCP port it also listens on (`Some(0)`
+/// when it has none; `None` when it wouldn't let `root` in, so it can't say).
+async fn found_on_socket(path: String) -> Option<(Found, Option<u16>)> {
+    let kind = if socket_greeting(&path).await? { Engine::Mariadb } else { Engine::Mysql };
+    let mut conn = new_saved(kind, "mysql://root@localhost".into());
+    conn.options.socket.clone_from(&path);
+    let (conn, detail, port) = match crate::open_db(&conn, None, None).await {
+        Ok((mut db, _tunnel)) => {
+            let version = db.server_version().await.unwrap_or_default();
+            let port =
+                db.query("select @@port").await.ok().and_then(|r| r.rows.first()?.first()?.as_ref()?.parse().ok());
+            if version.starts_with("MariaDB") {
+                conn.kind = Engine::Mariadb;
+            }
+            (conn, format!("{version}, signed in as root"), port)
+        }
+        Err(e) => {
+            conn.needs_credentials = true;
+            (conn, e.to_string(), None)
+        }
+    };
+    let name = format!("{} · {path}", label(conn.kind, conn.flavor));
+    Some((Found { conn: Saved { name, ..conn }, detail }, port))
+}
+
+/// Whether a server found on a socket is one the port probes found already. The server says which TCP port it also
+/// listens on; one that wouldn't say is taken for a duplicate when any MySQL was found on a port, since the sockets
+/// of a server that only listens on its socket are the ones worth adding.
+fn socket_duplicates_a_port(found: &[Found], port: Option<u16>) -> bool {
+    let mysql = |f: &&Found| matches!(f.conn.kind, Engine::Mysql | Engine::Mariadb);
+    match port {
+        Some(0) => false,
+        Some(p) => found.iter().filter(mysql).any(|f| local_port(&f.conn) == Some(p)),
+        None => found.iter().any(|f| mysql(&f)),
+    }
+}
+
+/// Looks for database servers on this computer that aren't saved yet: the usual ports, the ports Docker publishes,
+/// and MySQL's sockets. Doesn't save anything.
 #[tauri::command]
 pub async fn discover_local(app: AppHandle, open: State<'_, crate::Open>) -> Result<Vec<Found>> {
     open.unlocked()?;
@@ -307,13 +401,26 @@ pub async fn discover_local(app: AppHandle, open: State<'_, crate::Open>) -> Res
     let mut found = vec![];
     while let Some(done) = tasks.join_next().await {
         // A probe that panicked found nothing; the rest still count.
-        if let Ok(Some(f)) = done
-            && !already_saved(&existing, &f.conn)
-        {
+        if let Ok(Some(f)) = done {
             found.push(f);
         }
     }
-    found.sort_by_key(|f| local_port(&f.conn));
+    // Judged against everything the ports found, saved already or not, so a saved server's socket isn't offered.
+    let mut sockets = JoinSet::new();
+    for path in mysql_sockets() {
+        sockets.spawn(found_on_socket(path));
+    }
+    let mut on_sockets = vec![];
+    while let Some(done) = sockets.join_next().await {
+        if let Ok(Some((f, port))) = done
+            && !socket_duplicates_a_port(&found, port)
+        {
+            on_sockets.push(f);
+        }
+    }
+    found.extend(on_sockets);
+    found.retain(|f| !already_saved(&existing, &f.conn));
+    found.sort_by_key(|f| (local_port(&f.conn).is_none(), local_port(&f.conn)));
     Ok(found)
 }
 
@@ -334,8 +441,8 @@ pub async fn save_discovered(app: AppHandle, found: Vec<Saved>) -> Result<usize>
 #[cfg(test)]
 mod tests {
     use super::{
-        SSL_REQUEST, Wire, already_saved, local_port, mysql_greeting, new_saved, parse_docker, postgres_users, probe,
-        redis_reply,
+        Found, SSL_REQUEST, Wire, already_saved, local_port, mysql_greeting, new_saved, parse_docker, postgres_users,
+        probe, redis_reply,
     };
     use crate::db::Engine;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -467,6 +574,63 @@ mod tests {
             "a remote host isn't this one"
         );
         assert!(!already_saved(&existing, &at(Engine::Mysql, "mysql://root@127.0.0.1:3306/")));
+    }
+
+    #[test]
+    fn already_saved_should_match_a_socket_by_its_path_only() {
+        let mut saved = new_saved(Engine::Mysql, "mysql://root@localhost".into());
+        saved.options.socket = "/tmp/mysql.sock".into();
+        let mut found = saved.clone();
+        assert!(already_saved(&[saved.clone()], &found));
+        found.options.socket = "/tmp/mysql_3307.sock".into();
+        assert!(!already_saved(&[saved], &found));
+        let on_port = new_saved(Engine::Mysql, "mysql://root@127.0.0.1:3306".into());
+        assert!(!already_saved(&[on_port], &found), "a port isn't a socket");
+    }
+
+    #[test]
+    fn a_socket_should_be_dropped_when_its_server_was_found_on_a_port() {
+        let found = |port: u16| Found {
+            conn: new_saved(Engine::Mysql, format!("mysql://root@127.0.0.1:{port}")),
+            detail: String::new(),
+        };
+        let ports = [found(3306)];
+        assert!(super::socket_duplicates_a_port(&ports, Some(3306)), "it listens on 3306 too");
+        assert!(!super::socket_duplicates_a_port(&ports, Some(3307)), "another server");
+        assert!(!super::socket_duplicates_a_port(&ports, Some(0)), "a socket-only server is new");
+        assert!(super::socket_duplicates_a_port(&ports, None), "can't say, and a MySQL has been found");
+        assert!(!super::socket_duplicates_a_port(&[], None), "nothing else found: it may be the only one");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_greeting_should_read_a_mysql_greeting_from_a_socket() {
+        let path = std::env::temp_dir().join(format!("tableminus-{}-greeting.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path); // a leftover from an earlier run, or nothing
+        let greeting = tauri::async_runtime::block_on(async {
+            let listener = tokio::net::UnixListener::bind(&path).unwrap();
+            tauri::async_runtime::spawn(async move {
+                if let Ok((mut s, _)) = listener.accept().await {
+                    let _ = s.write_all(&greeting("10.11.6-MariaDB")).await; // the probe may have hung up already
+                }
+            });
+            super::socket_greeting(path.to_str().unwrap()).await
+        });
+        let _ = std::fs::remove_file(&path); // best effort tidy-up
+        assert_eq!(greeting, Some(true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "needs a local MySQL with a socket at /tmp/mysql_3306.sock (DBngin) or /tmp/mysql.sock"]
+    fn local_mysql_socket_should_be_found_and_tried_as_root() {
+        let path = super::mysql_sockets().into_iter().next().expect("no MySQL socket found");
+        let (found, port) = tauri::async_runtime::block_on(super::found_on_socket(path)).unwrap();
+        println!(
+            "{} · needs credentials: {} · {} · server port {port:?}",
+            found.conn.name, found.conn.needs_credentials, found.detail
+        );
+        assert!(!found.conn.needs_credentials);
     }
 
     #[test]
