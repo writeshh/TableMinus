@@ -19,7 +19,7 @@ type PgRole = {
 };
 type MyUser = {
   user: string; host: string; plugin: string; max_queries: number; max_updates: number; max_connections: number;
-  max_user_connections: number; privileges: Grant[];
+  max_user_connections: number; locked: boolean; password_expired: boolean; password_lifetime: number | null; privileges: Grant[];
 };
 type Account = PgRole | MyUser;
 type Accounts = { roles: PgRole[]; users: MyUser[]; objects: Obj[]; plugins: string[]; mariadb: boolean };
@@ -164,7 +164,8 @@ export function openUsers(host: UsersHost) {
   function newAccount() {
     before = null;
     edit(my
-      ? { user: "", host: "%", plugin: "", max_queries: 0, max_updates: 0, max_connections: 0, max_user_connections: 0, privileges: [] }
+      ? { user: "", host: "%", plugin: "", max_queries: 0, max_updates: 0, max_connections: 0, max_user_connections: 0,
+        locked: false, password_expired: false, password_lifetime: null, privileges: [] }
       : { name: "", login: true, superuser: false, create_db: false, create_role: false, replication: false, bypass_rls: false,
           inherit: true, connection_limit: -1, valid_until: null, member_of: [], privileges: [] });
     (editor.querySelector("input") as HTMLInputElement | null)?.focus();
@@ -227,6 +228,42 @@ export function openUsers(host: UsersHost) {
     plugin.value = u.plugin;
     plugin.onchange = () => ((u.plugin = plugin.value), syncButtons());
     const limits = MY_LIMITS.map(([key, label]) => field(label, text(u, key, { type: "number", min: "0" })));
+    return [...accountFields(u, plugin, limits), ...(data.mariadb ? [] : lifecycleFields(u))];
+  }
+
+  /** MySQL's account lock and password policy (MariaDB keeps them elsewhere, so they aren't offered there). */
+  function lifecycleFields(u: MyUser): Node[] {
+    const wasExpired = !!(before as MyUser | null)?.password_expired;
+    const locked = el("input", { type: "checkbox", checked: u.locked });
+    locked.onchange = () => ((u.locked = locked.checked), syncButtons());
+    const mode = el("select", {}, el("option", { value: "default", textContent: "Server default" }),
+      el("option", { value: "never", textContent: "Never expires" }), el("option", { value: "days", textContent: "Expires every…" }));
+    mode.style.minWidth = "11em";
+    const days = el("input", { type: "number", min: "1", value: String(u.password_lifetime || 90) });
+    const showMode = () => {
+      mode.value = u.password_lifetime === null ? "default" : u.password_lifetime === 0 ? "never" : "days";
+      days.hidden = mode.value !== "days";
+    };
+    const setLifetime = () => {
+      u.password_lifetime = mode.value === "default" ? null : mode.value === "never" ? 0 : Math.max(1, Math.floor(Number(days.value)) || 1);
+      showMode();
+      syncButtons();
+    };
+    mode.onchange = setLifetime;
+    days.oninput = setLifetime;
+    showMode();
+    const expired = el("input", { type: "checkbox", checked: u.password_expired, disabled: wasExpired });
+    expired.onchange = () => ((u.password_expired = expired.checked), syncButtons());
+    return [
+      el("h4", { textContent: "Sign-in" }),
+      el("label", { className: "check" }, locked, " Account locked"),
+      el("div", { className: "user-fields" }, field("Password lifetime", el("div", { className: "opt-row" }, mode, days), "Days; 'Server default' follows default_password_lifetime.")),
+      el("label", { className: "check" }, expired, " Ask for a new password at the next sign-in"),
+      ...(wasExpired ? [el("p", { className: "hint", textContent: "The password has expired; setting a new one clears that." })] : []),
+    ];
+  }
+
+  function accountFields(u: MyUser, plugin: HTMLSelectElement, limits: Node[]): Node[] {
     return [
       el("div", { className: "user-fields" },
         field("User", text(u, "user")),

@@ -222,6 +222,15 @@ pub struct MyUser {
     pub max_updates: u32,
     pub max_connections: u32,
     pub max_user_connections: u32,
+    /// `ACCOUNT LOCK`: the account can't sign in. MySQL only; MariaDB keeps it elsewhere, so it's left alone there.
+    #[serde(default)]
+    pub locked: bool,
+    /// The password has expired, so a new one is asked for at the next sign-in. Setting a password clears it. MySQL only.
+    #[serde(default)]
+    pub password_expired: bool,
+    /// Days until the password expires: `None` follows the server's policy, `Some(0)` never. MySQL only.
+    #[serde(default)]
+    pub password_lifetime: Option<u32>,
     /// Filled in by [`user_privileges`]; the user list leaves it empty.
     #[serde(default)]
     pub privileges: Vec<Grant>,
@@ -358,11 +367,20 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
             let mariadb = conn.server_version().await?.starts_with("MariaDB");
             // MariaDB lists its roles among the users; they aren't accounts to sign in with.
             let roles = if mariadb { " where is_role <> 'Y'" } else { "" };
-            let sql = format!(
-                "select user, host, plugin, max_questions, max_updates, max_connections, max_user_connections \
-                 from mysql.user{roles} order by user, host limit {MAX_ROWS}"
-            );
-            let users = conn.fetch_with(&sql, &[]).await?.into_iter().map(|mut r| MyUser {
+            let query =
+                |columns: &str| format!("select {columns} from mysql.user{roles} order by user, host limit {MAX_ROWS}");
+            let base = "user, host, plugin, max_questions, max_updates, max_connections, max_user_connections";
+            let rows = if mariadb {
+                conn.fetch_with(&query(base), &[]).await?
+            } else {
+                let with_lifecycle = query(&format!("{base}, account_locked, password_expired, password_lifetime"));
+                match conn.fetch_with(&with_lifecycle, &[]).await {
+                    Ok(rows) => rows,
+                    // A server from before MySQL 5.7.6 has no such columns; it shows them as unset.
+                    Err(_) => conn.fetch_with(&query(base), &[]).await?,
+                }
+            };
+            let users = rows.into_iter().map(|mut r| MyUser {
                 user: text(&mut r, 0),
                 host: text(&mut r, 1),
                 plugin: text(&mut r, 2),
@@ -370,6 +388,9 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
                 max_updates: number(&mut r, 4),
                 max_connections: number(&mut r, 5),
                 max_user_connections: number(&mut r, 6),
+                locked: text(&mut r, 7) == "Y",
+                password_expired: text(&mut r, 8) == "Y",
+                password_lifetime: Some(text(&mut r, 9)).filter(|v| !v.is_empty()).and_then(|v| v.parse().ok()),
                 privileges: vec![],
             });
             let users = users.collect();
@@ -593,17 +614,43 @@ fn my_sql(
             .collect(),
     };
     let limits = if limits.is_empty() { String::new() } else { format!(" WITH {}", limits.join(" ")) };
+    // MySQL's password lifetime and account lock, after the limits as its grammar has them; MariaDB's are left alone.
+    let (lifetime, lock) = match (mariadb, before) {
+        (true, _) => (None, None),
+        (false, b) => (
+            b.is_none_or(|b| b.password_lifetime != a.password_lifetime)
+                .then_some(a.password_lifetime)
+                .filter(|l| b.is_some() || l.is_some()),
+            b.map_or(a.locked, |b| b.locked != a.locked).then_some(a.locked),
+        ),
+    };
+    let policy = match lifetime {
+        None => String::new(),
+        Some(None) => " PASSWORD EXPIRE DEFAULT".into(),
+        Some(Some(0)) => " PASSWORD EXPIRE NEVER".into(),
+        Some(Some(days)) => format!(" PASSWORD EXPIRE INTERVAL {days} DAY"),
+    };
+    let lock = match lock {
+        None => "",
+        Some(true) => " ACCOUNT LOCK",
+        Some(false) => " ACCOUNT UNLOCK",
+    };
+    let expire_now = !mariadb && a.password_expired && before.is_none_or(|b| !b.password_expired);
     let mut out = vec![];
     match before {
-        None => out.push(format!("CREATE USER {account}{auth}{limits}")),
+        None => out.push(format!("CREATE USER {account}{auth}{limits}{policy}{lock}")),
         Some(b) => {
             if b.user != a.user || b.host != a.host {
                 out.push(format!("RENAME USER {} TO {account}", my_account(b)));
             }
-            if !auth.is_empty() || !limits.is_empty() {
-                out.push(format!("ALTER USER {account}{auth}{limits}"));
+            if !auth.is_empty() || !limits.is_empty() || !policy.is_empty() || !lock.is_empty() {
+                out.push(format!("ALTER USER {account}{auth}{limits}{policy}{lock}"));
             }
         }
+    }
+    if expire_now {
+        // After any new password, which would otherwise undo it.
+        out.push(format!("ALTER USER {account} PASSWORD EXPIRE"));
     }
     out.extend(privilege_sql(d, &account, before.map_or(&[][..], |b| &b.privileges), &a.privileges)?);
     Ok(out)
@@ -747,6 +794,9 @@ mod tests {
             max_updates: 0,
             max_connections: 0,
             max_user_connections: 0,
+            locked: false,
+            password_expired: false,
+            password_lifetime: None,
             privileges: vec![],
         }
     }
@@ -853,6 +903,49 @@ mod tests {
                 "GRANT SELECT ON `shop`.`orders` TO 'o''neil'@'10.0.%' WITH GRANT OPTION",
             ]
         );
+    }
+
+    #[test]
+    fn my_create_should_lock_and_set_the_password_lifetime_after_the_limits() {
+        let mut u = user("u", "%");
+        u.max_queries = 5;
+        u.locked = true;
+        u.password_lifetime = Some(90);
+        u.password_expired = true;
+        assert_eq!(
+            my_sql(false, None, Some(&u), Some("'pw'")).unwrap(),
+            [
+                "CREATE USER 'u'@'%' IDENTIFIED BY 'pw' WITH MAX_QUERIES_PER_HOUR 5 \
+                 PASSWORD EXPIRE INTERVAL 90 DAY ACCOUNT LOCK",
+                "ALTER USER 'u'@'%' PASSWORD EXPIRE",
+            ]
+        );
+    }
+
+    #[test]
+    fn my_edit_should_change_only_the_lifecycle_settings_that_changed() {
+        let before = user("u", "%");
+        let mut after = before.clone();
+        after.password_lifetime = Some(0);
+        assert_eq!(
+            my_sql(false, Some(&before), Some(&after), None).unwrap(),
+            ["ALTER USER 'u'@'%' PASSWORD EXPIRE NEVER"]
+        );
+        let locked = MyUser { locked: true, password_lifetime: Some(30), ..user("u", "%") };
+        let unlocked = MyUser { locked: false, password_lifetime: None, ..locked.clone() };
+        assert_eq!(
+            my_sql(false, Some(&locked), Some(&unlocked), None).unwrap(),
+            ["ALTER USER 'u'@'%' PASSWORD EXPIRE DEFAULT ACCOUNT UNLOCK"]
+        );
+        assert_eq!(my_sql(false, Some(&locked), Some(&locked), None).unwrap(), Vec::<String>::new(), "nothing changed");
+    }
+
+    #[test]
+    fn my_edit_should_not_expire_a_password_that_already_is_or_touch_mariadb_lifecycles() {
+        let expired = MyUser { password_expired: true, ..user("u", "%") };
+        assert_eq!(my_sql(false, Some(&expired), Some(&expired), None).unwrap(), Vec::<String>::new());
+        let wants_all = MyUser { locked: true, password_expired: true, password_lifetime: Some(7), ..user("u", "%") };
+        assert_eq!(my_sql(true, None, Some(&wants_all), None).unwrap(), ["CREATE USER 'u'@'%'"]);
     }
 
     #[test]
@@ -1036,7 +1129,17 @@ mod tests {
             run(&mut c, Engine::Mysql, &Edit::My { before: Some(read), after: Some(edited.clone()) }, None).await;
             let again = read_user(&mut c, &name).await.unwrap();
             assert_eq!(again, edited);
-            run(&mut c, Engine::Mysql, &Edit::My { before: Some(again), after: None }, None).await;
+
+            let locked = MyUser { locked: true, password_lifetime: Some(30), ..again };
+            run(&mut c, Engine::Mysql, &Edit::My { before: Some(edited), after: Some(locked.clone()) }, None).await;
+            let read = read_user(&mut c, &name).await.unwrap();
+            assert_eq!(read, locked, "locked, with a 30 day lifetime");
+
+            let expired = MyUser { locked: false, password_lifetime: None, password_expired: true, ..read };
+            run(&mut c, Engine::Mysql, &Edit::My { before: Some(locked), after: Some(expired.clone()) }, None).await;
+            let read = read_user(&mut c, &name).await.unwrap();
+            assert_eq!(read, expired, "unlocked, the server's policy again, password expired");
+            run(&mut c, Engine::Mysql, &Edit::My { before: Some(read), after: None }, None).await;
             assert!(read_user(&mut c, &name).await.is_none());
         });
     }
