@@ -892,13 +892,23 @@ impl Conn {
             Conn::Pg(_) => {
                 let (schema, name) = table.split_once('.').unwrap_or(("public", table));
                 (
-                    "select c.column_name::text, (c.udt_name || coalesce('(' || c.character_maximum_length || ')', ''))::text, \
-                     c.is_nullable::text, c.column_default::text, case when exists (select 1 from information_schema.table_constraints t \
+                    // information_schema leaves out materialized views, so pg_attribute adds theirs.
+                    "select name, data_type, nullable, dflt, pk from (\
+                     select c.column_name::text as name, (c.udt_name || coalesce('(' || c.character_maximum_length || ')', ''))::text as data_type, \
+                     c.is_nullable::text as nullable, c.column_default::text as dflt, case when exists (select 1 from information_schema.table_constraints t \
                      join information_schema.key_column_usage k on k.constraint_name = t.constraint_name \
                      and k.table_schema = t.table_schema and k.table_name = t.table_name \
                      where t.constraint_type = 'PRIMARY KEY' and t.table_schema = c.table_schema \
-                     and t.table_name = c.table_name and k.column_name = c.column_name) then 'PRI' else '' end \
-                     from information_schema.columns c where c.table_schema = $1 and c.table_name = $2 order by c.ordinal_position",
+                     and t.table_name = c.table_name and k.column_name = c.column_name) then 'PRI' else '' end as pk, \
+                     c.ordinal_position::int as pos \
+                     from information_schema.columns c where c.table_schema = $1 and c.table_name = $2 \
+                     union all \
+                     select a.attname::text, (t.typname || case when a.atttypmod > 4 and t.typname in ('varchar', 'bpchar') \
+                     then '(' || (a.atttypmod - 4) || ')' else '' end)::text, case when a.attnotnull then 'NO' else 'YES' end, \
+                     null::text, '', a.attnum::int \
+                     from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace \
+                     join pg_type t on t.oid = a.atttypid \
+                     where c.relkind = 'm' and n.nspname = $1 and c.relname = $2 and a.attnum > 0 and not a.attisdropped) x order by pos",
                     vec![Some(schema), Some(name)],
                 )
             }
@@ -1171,6 +1181,27 @@ mod tests {
             assert_eq!((r[1].columns.len(), r[1].affected), (0, 2), "the insert's count");
             assert_eq!((r[2].columns.as_slice(), r[2].rows.len()), (&["a".to_string()][..], 2));
             assert_eq!(r[3].rows[0][0].as_deref(), Some("x"));
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local Postgres; creates and drops a scratch schema"]
+    fn local_postgres_columns_should_list_a_materialized_views_columns() {
+        tauri::async_runtime::block_on(async {
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+            let mut c = open(Engine::Postgres, &url).await;
+            c.batch(
+                "drop schema if exists tm_mv cascade; create schema tm_mv; \
+                 create materialized view tm_mv.m as select 1 as id, 'x'::varchar(5) as label",
+            )
+            .await
+            .unwrap();
+            let cols = c.columns("tm_mv.m").await;
+            c.batch("drop schema tm_mv cascade").await.unwrap();
+            let cols = cols.unwrap();
+            let seen: Vec<_> = cols.iter().map(|c| (c.name.as_str(), c.data_type.as_str())).collect();
+            assert_eq!(seen, [("id", "int4"), ("label", "varchar(5)")]);
         });
     }
 
