@@ -29,11 +29,14 @@ const TYPES: Record<string, [string, string]> = {
 };
 
 /** Each Redis workspace's keys, scan position, pattern, chosen key and console. */
-type State = { pattern: string; cursor: string; keys: Entry[]; loading: boolean; key: Key | null; value: Value | null; problem: string; log: { line: string; out: string; error: boolean }[]; history: string[] };
+type State = { limit: number; pattern: string; cursor: string; keys: Entry[]; loading: boolean; key: Key | null; value: Value | null; problem: string; log: { line: string; out: string; error: boolean }[]; history: string[] };
+/** Items of a key's value shown at first, and added by each Show more (redis.rs reads at most MAX_SHOWN). */
+const SHOWN = 1000;
+const MAX_SHOWN = 50_000;
 const states = new Map<string, State>();
 const stateOf = (name: string): State => {
   let s = states.get(name);
-  if (!s) states.set(name, (s = { pattern: "", cursor: "0", keys: [], loading: false, key: null, value: null, problem: "", log: [], history: [] }));
+  if (!s) states.set(name, (s = { limit: SHOWN, pattern: "", cursor: "0", keys: [], loading: false, key: null, value: null, problem: "", log: [], history: [] }));
   return s;
 };
 const sameKey = (a: Key | null, b: Key | null) => !!a && !!b && a.text === b.text && (a.hex ?? null) === (b.hex ?? null);
@@ -210,15 +213,17 @@ reload.onclick = () => void loadMore(true);
 
 // ---------- A key's value ----------
 
-async function openKey(key: Key) {
+async function openKey(key: Key, limit?: number) {
   const name = session();
   const s = stateOf(name);
+  // The same key again (Reload, an edit) keeps how much of it was open; another key starts at the first page.
+  s.limit = limit ?? (sameKey(s.key, key) ? s.limit : SHOWN);
   s.key = key;
   s.value = null;
   renderKeys();
   renderValue("Loading…");
   try {
-    s.value = await ctx.call<Value>("redis_value", { name, key });
+    s.value = await ctx.call<Value>("redis_value", { name, key, limit: s.limit });
   } catch (e) {
     s.problem = String(e);
   }
@@ -294,7 +299,11 @@ function renderValue(note = "") {
   if (note) body.push(el("p", { className: note.startsWith("Loading") ? "hint" : "status error", textContent: note }));
   if (v?.ttl_ms === -2) body.push(el("p", { className: "hint", textContent: "This key is gone: it expired or was deleted." }));
   else if (v) {
-    if (v.items.length < v.size && v.type !== "string") body.push(el("p", { className: "hint", textContent: `Showing the first ${v.items.length.toLocaleString()} of ${v.size.toLocaleString()}. The console reaches the rest.` }));
+    if (v.items.length < v.size && v.type !== "string") {
+      const more = s.limit < MAX_SHOWN;
+      body.push(el("p", { className: "hint", textContent: `Showing the first ${v.items.length.toLocaleString()} of ${v.size.toLocaleString()}.${more ? "" : " The console reaches the rest."}` }));
+      if (more) body.push(button(`Show ${Math.min(SHOWN, MAX_SHOWN - s.limit).toLocaleString()} more`, () => void openKey(key, Math.min(s.limit + SHOWN, MAX_SHOWN)), "ghost"));
+    }
     const after = async (ok: boolean) => ok && (await refreshKey());
     switch (v.type) {
       case "string": {

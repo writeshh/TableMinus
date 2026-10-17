@@ -29,6 +29,8 @@ const MAX_DEPTH: usize = 16;
 const MAX_LINE: usize = 64 * 1024;
 /// Members, fields or elements a value view shows.
 const SHOWN: usize = 1000;
+/// The most items the value view reads at once; "Show more" grows the view towards it.
+const MAX_SHOWN: usize = 50_000;
 /// A string longer than this shows its start only.
 const SHOWN_STRING: usize = 16 * 1024 * 1024;
 const MAX_SCAN: u32 = 5000;
@@ -703,7 +705,7 @@ pub async fn redis_scan(
     .await
 }
 
-/// A key's value as the value view shows it: at most [`SHOWN`] items, each text.
+/// A key's value as the value view shows it: at most [`SHOWN`] items (more when asked, up to [`MAX_SHOWN`]), each text.
 #[derive(Debug, Serialize, PartialEq)]
 pub struct Value {
     #[serde(rename = "type")]
@@ -717,12 +719,12 @@ pub struct Value {
     items: Vec<Vec<String>>,
 }
 
-async fn read_value(c: &mut Client, key: &[u8]) -> Result<Value> {
+async fn read_value(c: &mut Client, key: &[u8], limit: usize) -> Result<Value> {
     let head = c.pipeline(&[vec![b"TYPE".to_vec(), key.to_vec()], vec![b"PTTL".to_vec(), key.to_vec()]]).await?;
     let mut head = head.into_iter();
     let kind = head.next().map(Reply::text).unwrap_or_default();
     let ttl_ms = head.next().map_or(-2, |r| r.int());
-    let shown_n = (SHOWN - 1).to_string();
+    let shown_n = (limit - 1).to_string();
     let (size, items): (u64, Vec<Vec<String>>) = match kind.as_str() {
         "string" => {
             let len = c.call(&[b"STRLEN", key]).await?.ok()?.int();
@@ -755,20 +757,20 @@ async fn read_value(c: &mut Client, key: &[u8]) -> Result<Value> {
                 let mut parts = reply.items().into_iter();
                 cursor = parts.next().and_then(Reply::bytes).unwrap_or_else(|| b"0".to_vec());
                 flat.extend(parts.next().map(Reply::items).unwrap_or_default());
-                if cursor == b"0" || flat.len() >= SHOWN * if pairs { 2 } else { 1 } {
+                if cursor == b"0" || flat.len() >= limit * if pairs { 2 } else { 1 } {
                     break;
                 }
             }
             let items: Vec<Vec<String>> = if pairs {
-                flat.chunks(2).take(SHOWN).map(|p| p.iter().cloned().map(Reply::text).collect()).collect()
+                flat.chunks(2).take(limit).map(|p| p.iter().cloned().map(Reply::text).collect()).collect()
             } else {
-                flat.into_iter().take(SHOWN).map(|m| vec![m.text()]).collect()
+                flat.into_iter().take(limit).map(|m| vec![m.text()]).collect()
             };
             (u64::try_from(len).unwrap_or_default(), items)
         }
         "stream" => {
             let len = c.call(&[b"XLEN", key]).await?.ok()?.int();
-            let n = SHOWN.to_string();
+            let n = limit.to_string();
             let entries = c.call(&[b"XRANGE", key, b"-", b"+", b"COUNT", n.as_bytes()]).await?.ok()?.items();
             let items = entries
                 .into_iter()
@@ -793,11 +795,13 @@ pub async fn redis_value(
     sessions: State<'_, Sessions>,
     name: String,
     key: Key,
+    limit: Option<usize>,
 ) -> Result<Value> {
     open.unlocked()?;
     let key = key.bytes()?;
+    let limit = limit.unwrap_or(SHOWN).clamp(SHOWN, MAX_SHOWN);
     let mut s = sessions.get(&name).await?;
-    with(&prefs, &mut s, |c| Box::pin(async move { read_value(c, &key).await })).await
+    with(&prefs, &mut s, |c| Box::pin(async move { read_value(c, &key, limit).await })).await
 }
 
 /// A change made from the value view. Each is one command (two for removing a list element by position).
@@ -1038,7 +1042,7 @@ pub async fn redis_connection_info(
 
 #[cfg(test)]
 mod tests {
-    use super::{Client, Edit, Key, Reply, blocks, is_read_only, parse_url, read_value, split_line};
+    use super::{Client, Edit, Key, Reply, SHOWN, blocks, is_read_only, parse_url, read_value, split_line};
 
     fn args(line: &str) -> Vec<Vec<u8>> {
         split_line(line).unwrap()
@@ -1123,15 +1127,15 @@ mod tests {
             c.call(&[b"HSET", b"h", b"f", b"v"]).await.unwrap();
             c.call(&[b"XADD", b"x", b"1-1", b"f", b"v"]).await.unwrap();
             c.call(&[b"EXPIRE", b"s", b"100"]).await.unwrap();
-            let s = read_value(&mut c, b"s").await.unwrap();
+            let s = read_value(&mut c, b"s", SHOWN).await.unwrap();
             assert_eq!((s.kind.as_str(), s.size, s.items.clone()), ("string", 5, vec![vec!["hello".to_string()]]));
             assert!(s.ttl_ms > 90_000);
-            assert_eq!(read_value(&mut c, b"l").await.unwrap().items, [["0", "a"], ["1", "b"]]);
-            assert_eq!(read_value(&mut c, b"set").await.unwrap().items, [["m"]]);
-            assert_eq!(read_value(&mut c, b"z").await.unwrap().items, [["m", "1.5"]]);
-            assert_eq!(read_value(&mut c, b"h").await.unwrap().items, [["f", "v"]]);
-            assert_eq!(read_value(&mut c, b"x").await.unwrap().items, [["1-1", "f", "v"]]);
-            assert_eq!(read_value(&mut c, b"gone").await.unwrap().ttl_ms, -2);
+            assert_eq!(read_value(&mut c, b"l", SHOWN).await.unwrap().items, [["0", "a"], ["1", "b"]]);
+            assert_eq!(read_value(&mut c, b"set", SHOWN).await.unwrap().items, [["m"]]);
+            assert_eq!(read_value(&mut c, b"z", SHOWN).await.unwrap().items, [["m", "1.5"]]);
+            assert_eq!(read_value(&mut c, b"h", SHOWN).await.unwrap().items, [["f", "v"]]);
+            assert_eq!(read_value(&mut c, b"x", SHOWN).await.unwrap().items, [["1-1", "f", "v"]]);
+            assert_eq!(read_value(&mut c, b"gone", SHOWN).await.unwrap().ttl_ms, -2);
         });
     }
 
@@ -1143,7 +1147,7 @@ mod tests {
             c.call(&[b"RPUSH", b"l", b"a", b"b", b"c"]).await.unwrap();
             let remove = Edit::ListRemove { key: Key::of(b"l".to_vec()), index: 1 }.commands().unwrap();
             c.pipeline(&remove).await.unwrap();
-            assert_eq!(read_value(&mut c, b"l").await.unwrap().items, [["0", "a"], ["1", "c"]]);
+            assert_eq!(read_value(&mut c, b"l", SHOWN).await.unwrap().items, [["0", "a"], ["1", "c"]]);
             let wrong = c.call(&[b"HGET", b"l", b"f"]).await.unwrap();
             assert!(matches!(wrong, Reply::Error(e) if e.starts_with("WRONGTYPE")));
             c.call(&[b"SET", b"other", b"x"]).await.unwrap();
@@ -1151,7 +1155,30 @@ mod tests {
             assert_eq!(c.pipeline(&rename).await.unwrap(), [Reply::Int(0)], "RENAMENX leaves an existing key alone");
             let big = vec![b'x'; 3 * 1024 * 1024];
             c.call(&[b"SET", b"big", &big]).await.unwrap();
-            assert_eq!(read_value(&mut c, b"big").await.unwrap().size, 3 * 1024 * 1024);
+            assert_eq!(read_value(&mut c, b"big", SHOWN).await.unwrap().size, 3 * 1024 * 1024);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local Redis on 6379; empties database 12"]
+    fn local_redis_values_should_show_more_items_when_asked() {
+        tauri::async_runtime::block_on(async {
+            let mut c = local(12).await;
+            let mut commands = Vec::new();
+            for i in 0..2500 {
+                let n = i.to_string().into_bytes();
+                commands.push(vec![b"RPUSH".to_vec(), b"l".to_vec(), n.clone()]);
+                commands.push(vec![b"HSET".to_vec(), b"h".to_vec(), n.clone(), n.clone()]);
+                commands.push(vec![b"SADD".to_vec(), b"set".to_vec(), n.clone()]);
+                commands.push(vec![b"ZADD".to_vec(), b"z".to_vec(), n.clone(), n]);
+            }
+            c.pipeline(&commands).await.unwrap();
+            for key in [&b"l"[..], b"h", b"set", b"z"] {
+                let first = read_value(&mut c, key, SHOWN).await.unwrap();
+                assert_eq!((first.items.len(), first.size), (SHOWN, 2500), "{}", String::from_utf8_lossy(key));
+                let all = read_value(&mut c, key, 3000).await.unwrap();
+                assert_eq!(all.items.len(), 2500, "{}", String::from_utf8_lossy(key));
+            }
         });
     }
 
