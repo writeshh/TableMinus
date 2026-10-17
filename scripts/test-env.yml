@@ -31,6 +31,14 @@ services:
     networks: [back]
     healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ptestpass"], interval: 3s, retries: 40 }
 
+  # Reachable directly (127.0.0.1:26257, user root, no password, sslmode=disable) as well as through sshd.
+  cockroach:
+    image: cockroachdb/cockroach:v25.1.0
+    command: start-single-node --insecure
+    ports: ["127.0.0.1:26257:26257"]
+    networks: [front, back]
+    healthcheck: { test: ["CMD", "curl", "-sf", "http://localhost:8080/health?ready=1"], interval: 2s, retries: 40 }
+
 networks:
   front: {}
   back: { internal: true }

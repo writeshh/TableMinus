@@ -352,6 +352,14 @@ fn my_cell(value: mysql_async::Value, col: &mysql_async::Column) -> Option<Strin
     })
 }
 
+/// The server's name and version from `select version()` on `CockroachDB`, e.g. "`CockroachDB` 25.1.0" from
+/// "`CockroachDB` CCL v25.1.0 (aarch64-unknown-linux-gnu, …)"; None for any other server.
+fn cockroach_version(version: &str) -> Option<String> {
+    let rest = version.strip_prefix("CockroachDB ")?;
+    let v = rest.split_whitespace().find_map(|w| w.strip_prefix('v')).unwrap_or_default();
+    Some(format!("CockroachDB {v}"))
+}
+
 fn lite_cell(v: rusqlite::types::ValueRef) -> Option<String> {
     use rusqlite::types::ValueRef;
     match v {
@@ -663,7 +671,7 @@ impl Conn {
         let sql = match self {
             Conn::Pg(_) => {
                 "select table_schema || '.' || table_name, column_name from information_schema.columns \
-                 where table_schema not in ('pg_catalog', 'information_schema') \
+                 where table_schema not in ('pg_catalog', 'information_schema', 'crdb_internal', 'pg_extension') \
                  order by table_schema, table_name, ordinal_position"
             }
             Conn::My(_) => {
@@ -828,8 +836,14 @@ impl Conn {
         }
     }
 
-    /// The server's name and version, e.g. "PostgreSQL 17.2" or "MariaDB 11.4.2".
+    /// The server's name and version, e.g. "PostgreSQL 17.2", "`CockroachDB` 25.1.0" or "MariaDB 11.4.2".
     pub async fn server_version(&mut self) -> Result<String> {
+        if let Conn::Pg(_) = self {
+            // CockroachDB's server_version is the Postgres version it imitates; only version() names it.
+            if let Some(v) = cockroach_version(&self.scalar("select version()").await?.unwrap_or_default()) {
+                return Ok(v);
+            }
+        }
         let (label, sql) = match self {
             Conn::Pg(_) => ("PostgreSQL", "show server_version"),
             Conn::My(_) => ("MySQL", "select version()"),
@@ -926,7 +940,7 @@ impl Conn {
             }
             Conn::Pg(_) => {
                 "select table_schema || '.' || table_name from information_schema.tables \
-                 where table_schema not in ('pg_catalog', 'information_schema') order by 1"
+                 where table_schema not in ('pg_catalog', 'information_schema', 'crdb_internal', 'pg_extension') order by 1"
             }
             Conn::My(_) => {
                 "select table_name from information_schema.tables where table_schema = database() order by 1"
@@ -941,6 +955,13 @@ impl Conn {
 #[cfg(test)]
 mod tests {
     use tokio_postgres::config::Host;
+
+    #[test]
+    fn cockroach_version_should_name_cockroachdb_and_leave_postgres_alone() {
+        let crdb = "CockroachDB CCL v25.1.0 (aarch64-unknown-linux-gnu, built 2025/02/17 13:21:41, go1.22.8 X:nocoverageredesign)";
+        assert_eq!(super::cockroach_version(crdb).as_deref(), Some("CockroachDB 25.1.0"));
+        assert_eq!(super::cockroach_version("PostgreSQL 16.15 on aarch64-unknown-linux-musl"), None);
+    }
 
     #[test]
     fn tunnelled_postgres_config_should_have_one_port_whether_or_not_the_url_names_one() {
@@ -1157,7 +1178,11 @@ mod tests {
     #[ignore = "needs a local Postgres"]
     fn local_postgres_query_results_should_return_every_statements_result() {
         tauri::async_runtime::block_on(async {
-            let mut c = open(Engine::Postgres, "postgres://postgres@127.0.0.1:5432?sslmode=prefer").await;
+            let mut c = open(
+                Engine::Postgres,
+                &std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into()),
+            )
+            .await;
             let sql = "create temporary table tm_multi(a int); insert into tm_multi values (1), (2), (3); \
                        select a from tm_multi order by a; select 'x' as b";
             let r = c.query_results(sql, Some(2)).await.unwrap();

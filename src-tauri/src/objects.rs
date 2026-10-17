@@ -78,6 +78,15 @@ pub fn view_sql(d: Dialect, view: &str, matview: bool, body: &str, create: bool)
 /// Saves a function or procedure from its whole CREATE statement. Postgres's is CREATE OR REPLACE. MySQL can't
 /// replace a routine, so it's dropped first; MySQL commits each statement, so the UI passes the original along to
 /// `run_ddl` to be put back if the new one fails.
+/// A Postgres routine's definition as one that replaces the routine. Postgres writes `CREATE OR REPLACE` already;
+/// `CockroachDB` writes plain `CREATE`, which fails on save because the routine exists.
+fn or_replace(def: &str) -> String {
+    match def.strip_prefix("CREATE ") {
+        Some(rest) if !rest.starts_with("OR REPLACE ") => format!("CREATE OR REPLACE {rest}"),
+        _ => def.into(),
+    }
+}
+
 pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, create: bool) -> Result<Vec<String>> {
     let what = routine_word(kind)?;
     let def = statement(definition, "the definition is empty")?;
@@ -287,8 +296,12 @@ impl Conn {
             }
             Conn::Lite(_) => return Err(NO_ROUTINES),
         };
-        let defs: Vec<String> =
-            rows.into_iter().filter_map(|mut r| r.pop().flatten()).map(|d| d.trim().into()).collect();
+        let pg = matches!(self, Conn::Pg(_));
+        let defs: Vec<String> = rows
+            .into_iter()
+            .filter_map(|mut r| r.pop().flatten())
+            .map(|d| if pg { or_replace(d.trim()) } else { d.trim().into() })
+            .collect();
         if defs.is_empty() {
             return Err(Error::Invalid("no such routine, or the server doesn't show its definition to this user"));
         }
@@ -518,8 +531,15 @@ pub async fn save_sequence_sql(
 #[cfg(test)]
 mod tests {
     use super::{
-        Script, Sequence, dml_script, routine_sql, routine_template, sequence_sql, sqlite_view_body, view_sql,
+        Script, Sequence, dml_script, or_replace, routine_sql, routine_template, sequence_sql, sqlite_view_body,
+        view_sql,
     };
+
+    #[test]
+    fn or_replace_should_make_a_plain_create_replace_and_leave_the_rest() {
+        assert_eq!(or_replace("CREATE FUNCTION public.f(x INT8)"), "CREATE OR REPLACE FUNCTION public.f(x INT8)");
+        assert_eq!(or_replace("CREATE OR REPLACE PROCEDURE p()"), "CREATE OR REPLACE PROCEDURE p()");
+    }
     use crate::catalog::ItemKind;
     use crate::db::{Column, Conn, Dialect, Engine, Options};
     use crate::tls::Tls;
@@ -665,9 +685,10 @@ mod tests {
     #[ignore = "needs a local Postgres; creates and drops a scratch schema"]
     fn local_postgres_objects_round_trip() {
         tauri::async_runtime::block_on(async {
-            let url = "postgres://postgres@127.0.0.1:5432/postgres";
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
             let mut c =
-                Conn::open(Engine::Postgres, url, None, &Tls::default(), &Options::default(), None).await.unwrap();
+                Conn::open(Engine::Postgres, &url, None, &Tls::default(), &Options::default(), None).await.unwrap();
             let sch = format!("tm_objects_{}", std::process::id());
             c.query(&format!(
                 "create schema {sch}; create table {sch}.t(a int); create view {sch}.v as select a from {sch}.t; \

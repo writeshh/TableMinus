@@ -60,6 +60,10 @@ pub struct Saved {
     /// The launcher group's name; empty when ungrouped.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub group: String,
+    /// A Postgres-compatible server the connection is labelled as on the launcher. It connects and behaves as
+    /// `kind` does; what the server can't do is found from its version once connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flavor: Option<Flavor>,
 }
 
 /// Where a connection's database password (or SQLite passphrase) is kept.
@@ -78,6 +82,12 @@ impl PasswordMode {
     fn is_keychain(&self) -> bool {
         *self == PasswordMode::Keychain
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Flavor {
+    Cockroach,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -518,6 +528,7 @@ mod tests {
             password_mode: crate::store::PasswordMode::Keychain,
             color: None,
             group: String::new(),
+            flavor: None,
         }
     }
 

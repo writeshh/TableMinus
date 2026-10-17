@@ -62,9 +62,9 @@ pub struct Overview {
     pub created: Option<String>,
 }
 
-/// Leaves out Postgres's own schemas unless the connection shows system schemas.
+/// Leaves out Postgres's own schemas (and `CockroachDB`'s `crdb_internal`) unless the connection shows system schemas.
 fn pg_user_schemas(system: bool) -> &'static str {
-    if system { "true" } else { "n.nspname !~ '^pg_' and n.nspname <> 'information_schema'" }
+    if system { "true" } else { "n.nspname !~ '^pg_' and n.nspname not in ('information_schema', 'crdb_internal')" }
 }
 
 impl Conn {

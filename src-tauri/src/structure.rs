@@ -314,7 +314,7 @@ impl Conn {
     /// 64 instead of. The function call is restated only without arguments (they're kept as bytes), and only for a
     /// row-level trigger without WHEN or a column list.
     async fn pg_triggers(&mut self, oid: &[Option<&str>]) -> Result<Vec<TriggerInfo>> {
-        Ok(self
+        let rows = self
             .fetch_with(
                 "select tgname::text, pg_get_triggerdef(oid, true), \
                  case when tgtype::int & 1 = 0 or tgqual is not null or tgattr::text <> '' then null \
@@ -325,10 +325,15 @@ impl Conn {
                  from pg_trigger where tgrelid = $1::oid and not tgisinternal order by tgname",
                 oid,
             )
-            .await?
-            .into_iter()
-            .map(trigger)
-            .collect())
+            .await;
+        let rows = match rows {
+            // CockroachDB has no pg_get_triggerdef (its pg_trigger is empty too), so it lists no triggers.
+            Err(Error::Postgres(e)) if e.code() == Some(&tokio_postgres::error::SqlState::UNDEFINED_FUNCTION) => {
+                return Ok(Vec::new());
+            }
+            rows => rows?,
+        };
+        Ok(rows.into_iter().map(trigger).collect())
     }
 
     async fn my_structure(&mut self, table: &str) -> Result<Structure> {

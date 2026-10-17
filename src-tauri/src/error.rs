@@ -229,8 +229,9 @@ mod tests {
     #[ignore = "needs a local Postgres"]
     fn a_postgres_server_error_should_show_the_servers_message() {
         tauri::async_runtime::block_on(async {
-            let url = "postgres://postgres@127.0.0.1:5432/postgres";
-            let (client, conn) = tokio_postgres::connect(url, tokio_postgres::NoTls).await.unwrap();
+            let url =
+                std::env::var("DBM_PG_URL").unwrap_or_else(|_| "postgres://postgres@127.0.0.1:5432/postgres".into());
+            let (client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.unwrap();
             tauri::async_runtime::spawn(conn);
             let e = client.simple_query("select 1/0").await.unwrap_err();
             assert_eq!(Error::Postgres(e).to_string(), "ERROR: division by zero");

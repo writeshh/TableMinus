@@ -68,9 +68,14 @@ const OPTIONS_DEFAULT: Options = {
 type Saved = {
   name: string; kind: string; url: string; tag: string; safety: Safety; ssh?: Ssh; tls?: Tls; options?: Options;
   password_mode?: "keychain" | "ask" | "no_password"; color?: string | null; group?: string;
+  /** A Postgres-compatible server it is shown as; it connects as `kind`. */
+  flavor?: "cockroach";
 };
 type Engine = {
+  /** The picker entry: the kind, or the flavor for a Postgres-compatible server. */
+  id: string;
   kind: string;
+  flavor?: "cockroach";
   label: string;
   mono: string;
   color: string;
@@ -86,17 +91,21 @@ const TLS_MODES: [string, string][] = [
 ];
 const TLS_DEFAULT: Tls = { mode: "prefer", ca: "", cert: "", key: "" };
 const ENGINES: Engine[] = [
-  { kind: "postgres", label: "PostgreSQL", mono: "Pg", color: "var(--blue)",
+  { id: "postgres", kind: "postgres", label: "PostgreSQL", mono: "Pg", color: "var(--blue)",
     defaults: { host: "127.0.0.1", port: "5432", user: "postgres", database: "" } },
-  { kind: "mysql", label: "MySQL", mono: "Ms", color: "var(--orange)",
+  { id: "cockroach", kind: "postgres", flavor: "cockroach", label: "CockroachDB", mono: "Cr", color: "var(--ok)",
+    defaults: { host: "127.0.0.1", port: "26257", user: "root", database: "" } },
+  { id: "mysql", kind: "mysql", label: "MySQL", mono: "Ms", color: "var(--orange)",
     defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
-  { kind: "mariadb", label: "MariaDB", mono: "Ma", color: "var(--pink)",
+  { id: "mariadb", kind: "mariadb", label: "MariaDB", mono: "Ma", color: "var(--pink)",
     defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
-  { kind: "sqlite", label: "SQLite", mono: "Sl", color: "var(--yellow)" },
-  { kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
+  { id: "sqlite", kind: "sqlite", label: "SQLite", mono: "Sl", color: "var(--yellow)" },
+  { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
-const engine = (kind: string) => ENGINES.find((e) => e.kind === kind) ?? ENGINES[0];
+const engine = (id: string) => ENGINES.find((e) => e.id === id) ?? ENGINES[0];
+/** The picker entry a saved connection belongs to. */
+const engineId = (c: { kind: string; flavor?: string }) => c.flavor ?? c.kind;
 
 const form = $<HTMLFormElement>("form");
 const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement & HTMLSelectElement;
@@ -130,8 +139,8 @@ function setStatus(id: string, text: string, kind: "" | "busy" | "error" | "done
 }
 const status = (text: string, kind: "" | "busy" | "error" | "done" = "") => setStatus("status", text, kind);
 
-function avatar(kind: string) {
-  const e = engine(kind);
+function avatar(id: string) {
+  const e = engine(id);
   const a = el("span", { className: "avatar", textContent: e.mono, title: e.label });
   a.style.background = e.color;
   return a;
@@ -186,7 +195,7 @@ function renderConns() {
   const q = $<HTMLInputElement>("search").value.toLowerCase();
   const shown = saved.filter((c) => [c.name, c.kind, c.tag, c.group ?? "", hostOf(c)].join(" ").toLowerCase().includes(q));
   const by = settings.launcherSort;
-  const key = (c: Saved) => (by === "kind" ? engine(c.kind).label : by === "tag" ? c.tag || "\uffff" : "");
+  const key = (c: Saved) => (by === "kind" ? engine(engineId(c)).label : by === "tag" ? c.tag || "\uffff" : "");
   shown.sort((a, b) => key(a).localeCompare(key(b)) || a.name.localeCompare(b.name));
   $("no-conns").hidden = saved.length > 0;
   const sections: HTMLElement[] = [];
@@ -235,12 +244,12 @@ function groupMenu(g: launcher.Group): MenuItem[] {
 function connRow(c: Saved) {
   const edit = el("button", { className: "icon", textContent: "Edit", title: `Edit ${c.name}` });
   const del = el("button", { className: "icon", textContent: "Delete", title: `Delete ${c.name}` });
-  edit.onclick = (e) => (e.stopPropagation(), openEditor(c.kind, c));
+  edit.onclick = (e) => (e.stopPropagation(), openEditor(engineId(c), c));
   del.onclick = (e) => (e.stopPropagation(), deleteConn(c));
   const li = el(
     "li",
     { tabIndex: 0 },
-    avatar(c.kind),
+    avatar(engineId(c)),
     el("div", { className: "who" }, el("div", { className: "name" }, el("span", { textContent: c.name }), tagPill(c.tag)), el("div", { className: "host", textContent: hostOf(c) })),
     el("div", { className: "actions" }, edit, del),
   );
@@ -266,7 +275,7 @@ function connMenu(c: Saved): MenuItem[] {
   if (c.group) groupItems.push(["Remove from Group", () => moveTo(c, "")]);
   return [
     ["Connect", () => connect(c)],
-    ["Edit…", () => openEditor(c.kind, c)],
+    ["Edit…", () => openEditor(engineId(c), c)],
     ["Duplicate", () => withVault(() => invoke<string>("duplicate_connection", { name: c.name })).then((n) => homeNote(`Duplicated as “${n}”.`), (e) => homeNote(String(e), true))],
     ["Copy as URL", () => navigator.clipboard.writeText(launcher.connectionUrl(c)).then(() => homeNote("Copied the URL (without the password).")).catch((e) => homeNote(String(e), true))],
     ["Export…", () => launcher.exportConnections({ kind: "connection", name: c.name }, `“${c.name}”`, homeNote)],
@@ -362,7 +371,7 @@ function confirmDialog(text: string, okLabel: string): Promise<boolean> {
 
 // ---------- Step 1: engine picker ----------
 
-let picked = ENGINES[0].kind;
+let picked = ENGINES[0].id;
 
 function openPicker() {
   $<HTMLInputElement>("engine-search").value = "";
@@ -373,14 +382,14 @@ function openPicker() {
 
 function renderEngines() {
   const q = $<HTMLInputElement>("engine-search").value.toLowerCase();
-  const shown = ENGINES.filter((e) => e.label.toLowerCase().includes(q) || e.kind.includes(q));
-  if (!shown.some((e) => e.kind === picked) && shown.length) picked = shown[0].kind;
+  const shown = ENGINES.filter((e) => e.label.toLowerCase().includes(q) || e.id.includes(q));
+  if (!shown.some((e) => e.id === picked) && shown.length) picked = shown[0].id;
   $("engines").replaceChildren(
     ...shown.map((e) => {
-      const b = el("button", { className: "engine", type: "button" }, avatar(e.kind), el("span", { textContent: e.label }));
+      const b = el("button", { className: "engine", type: "button" }, avatar(e.id), el("span", { textContent: e.label }));
       b.setAttribute("role", "option");
-      b.setAttribute("aria-selected", String(e.kind === picked));
-      b.onclick = () => ((picked = e.kind), renderEngines());
+      b.setAttribute("aria-selected", String(e.id === picked));
+      b.onclick = () => ((picked = e.id), renderEngines());
       b.ondblclick = () => nextFromPicker();
       return b;
     }),
@@ -396,12 +405,16 @@ function nextFromPicker() {
 
 let editing: Saved | null = null;
 let editingKind = "postgres";
+let editingFlavor: Engine["flavor"];
 
-/** The form for a new connection, or for editing `existing`; `fresh` fills it from `existing` as a new one. */
-function openEditor(kind: string, existing?: Saved, fresh = false, password = "") {
-  const e = engine(kind);
+/** The form for a new connection, or for editing `existing`; `fresh` fills it from `existing` as a new one. `id` is
+ *  the picker entry (`engineId`). */
+function openEditor(id: string, existing?: Saved, fresh = false, password = "") {
+  const e = engine(id);
+  const kind = e.kind;
   editing = fresh ? null : existing ?? null;
   editingKind = kind;
+  editingFlavor = e.flavor;
   form.reset();
   $("editor-title").textContent = `${e.label} connection`;
   form.querySelector<HTMLElement>(".net")!.hidden = kind === "sqlite";
@@ -542,7 +555,7 @@ function formSsh(): Ssh | undefined {
 }
 
 function formToSaved(): Saved {
-  const e = engine(editingKind);
+  const e = engine(editingFlavor ?? editingKind);
   let url: string;
   if (editingKind === "sqlite") {
     url = field("path").value.trim();
@@ -565,6 +578,7 @@ function formToSaved(): Saved {
   if (mode !== "keychain") conn.password_mode = mode;
   if (field("color").value) conn.color = field("color").value;
   if (field("group").value) conn.group = field("group").value;
+  if (editingFlavor) conn.flavor = editingFlavor;
   const ssh = formSsh();
   if (ssh) conn.ssh = ssh; // omitted, not null: the backend refuses unknown or malformed fields
   const tls = formTls();
@@ -813,14 +827,14 @@ function applyInfo(i: Info) {
 /** The workspace header, the database button and the sidebar filter for the active connection. */
 function showHeader() {
   const c = active!;
-  $("where-conn").replaceChildren(avatar(c.kind), colorDot(c), el("span", { textContent: c.name }), el("span", { className: "host", textContent: hostOf(c) }));
+  $("where-conn").replaceChildren(avatar(engineId(c)), colorDot(c), el("span", { textContent: c.name }), el("span", { className: "host", textContent: hostOf(c) }));
   document.body.dataset.env = c.tag; // production gets a red edge
   const btn = $("db-button");
   btn.hidden = !info?.can_switch;
   btn.textContent = info?.database ? `${dbLabel(info.database)} ▾` : "Choose database ▾";
   btn.title = `Open a database (${keyLabel("open-database")})`;
   $<HTMLInputElement>("filter").hidden = !tables.length;
-  $("users-button").hidden = c.kind === "sqlite"; // one file, no users
+  $("users-button").hidden = !managesUsers(c);
   renderWorkspaceButton();
 }
 
@@ -2003,15 +2017,15 @@ type MenuItem = [string, () => void] | "-";
 
 /** Backup, restore and the process list, on a launcher row's right-click and the workspace's Tools button. */
 function toolsMenu(c: Saved, database?: string | null): MenuItem[] {
-  const items: MenuItem[] = [["Backup…", () => openBackup(c, database)], ["Restore…", () => openRestore(c, database, confirmDialog)]];
-  if (c.kind !== "sqlite") items.push("-", ["Processes", () => openProcesses(c, confirmDialog)]);
+  const items: MenuItem[] = dumps(c) ? [["Backup…", () => openBackup(c, database)], ["Restore…", () => openRestore(c, database, confirmDialog)]] : [];
+  if (c.kind !== "sqlite") items.push(...(items.length ? ["-" as const] : []), ["Processes", () => openProcesses(c, confirmDialog)]);
   return items;
 }
 $("tools-button").onclick = () => {
   const r = $("tools-button").getBoundingClientRect(); // under the button, also when opened from the keyboard
   if (!active) return;
   const items: MenuItem[] = toolsMenu(active, info?.database);
-  if (active.kind !== "sqlite") items.push(["Users…", showUsers]); // needs the workspace's connection, so not on launcher rows
+  if (managesUsers(active)) items.push(["Users…", showUsers]); // needs the workspace's connection, so not on launcher rows
   items.push("-", ["Metrics Board", () => openBoard(boardCtx())], ["Run Custom Script…", showScript]);
   contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), items);
 };
@@ -3512,13 +3526,16 @@ function anythingItems(): AnythingItem[] {
 }
 
 const hasTools = () => inWorkspace() && !!active;
+// CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
+const dumps = (c: Saved) => c.flavor !== "cockroach";
+const managesUsers = (c: Saved) => c.kind !== "sqlite" && c.flavor !== "cockroach";
 addCommands([
-  { id: "backup", label: "Backup…", menu: "Tools", when: hasTools, run: () => openBackup(active!, info?.database) },
-  { id: "restore", label: "Restore…", menu: "Tools", when: hasTools, run: () => openRestore(active!, info?.database, confirmDialog) },
+  { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
+  { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },
   { id: "diagram", label: "Show Diagram", menu: "Tools", when: hasTools, run: () => showDiagram() },
   { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && active!.kind !== "sqlite",
     sep: true, run: () => openProcesses(active!, confirmDialog) },
-  { id: "users", label: "Users…", menu: "Tools", when: () => hasTools() && active!.kind !== "sqlite", run: () => showUsers() },
+  { id: "users", label: "Users…", menu: "Tools", when: () => hasTools() && managesUsers(active!), run: () => showUsers() },
   { id: "metrics-board", label: "Metrics Board", menu: "Tools", sep: true, when: hasTools, run: () => openBoard(boardCtx()) },
   { id: "custom-script", label: "Run Custom Script…", menu: "Tools", when: hasTools, run: showScript },
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },

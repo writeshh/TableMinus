@@ -14,6 +14,7 @@ case "${1:-}" in
     echo "SSH: 127.0.0.1:2222, user tunnel, password tunnelpass or key $KEYS/id_ed25519"
     echo "Postgres: host postgres, port 5432, user postgres, password testpass, database app"
     echo "MySQL: host mysql, port 3306, user root, password testpass, database app"
+    echo "CockroachDB: 127.0.0.1:26257 (or host cockroach through SSH), user root, no password, sslmode=disable"
     ;;
   down) compose down -v ;;
   *) echo "usage: $0 up|down" >&2; exit 2 ;;

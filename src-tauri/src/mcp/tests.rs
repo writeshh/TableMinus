@@ -38,6 +38,7 @@ fn saved(name: &str, url: &str) -> store::Saved {
         password_mode: crate::store::PasswordMode::Keychain,
         color: None,
         group: String::new(),
+        flavor: None,
     }
 }
 

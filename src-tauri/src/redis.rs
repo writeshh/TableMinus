@@ -1166,6 +1166,7 @@ mod tests {
                 password_mode: crate::store::PasswordMode::NoPassword,
                 color: None,
                 group: String::new(),
+                flavor: None,
             };
             let mut s = super::open_session(saved.clone(), None, None, None).await.unwrap();
             assert_eq!(s.db, 13);
