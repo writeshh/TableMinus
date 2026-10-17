@@ -68,8 +68,8 @@ fn pg_user_schemas(system: bool) -> &'static str {
 }
 
 impl Conn {
-    /// Everything but tables, sorted by name within each kind. Functions and types that belong to an extension
-    /// are left out (pgcrypto alone adds dozens). `system` adds Postgres's catalog schemas.
+    /// Everything but tables, sorted by name within each kind. Types that belong to an extension are left
+    /// out; functions are kept, so an extension's (unaccent's, say) show as they do in other clients. `system` adds Postgres's catalog schemas.
     pub async fn items(&mut self, system: bool) -> Result<Vec<Item>> {
         let sql = match self {
             Conn::Pg(_) => {
@@ -83,12 +83,11 @@ impl Conn {
                        where c.relkind in ('v', 'm', 'S') and {user} \
                      union all select case p.prokind when 'p' then 'procedure' else 'function' end, n.nspname || '.' || p.proname \
                        from pg_proc p join pg_namespace n on n.oid = p.pronamespace \
-                       where p.prokind in ('f', 'p') and {user} and {proc_own} \
+                       where p.prokind in ('f', 'p') and {user} \
                      union all select 'type', n.nspname || '.' || t.typname from pg_type t join pg_namespace n on n.oid = t.typnamespace \
                        where (t.typtype in ('e', 'd', 'r', 'm') or (t.typtype = 'c' and exists \
                          (select 1 from pg_class c where c.oid = t.typrelid and c.relkind = 'c'))) and {user} and {type_own}\
                      ) i order by 1, 2",
-                    proc_own = not_extension.replace("{oid}", "p.oid"),
                     type_own = not_extension.replace("{oid}", "t.oid"),
                 )
             }
@@ -311,7 +310,15 @@ mod tests {
         )
         .await?;
         let items = c.items(false).await?;
-        let got: Vec<(ItemKind, &str)> = items.iter().map(|i| (i.kind, i.name.as_str())).collect();
+        assert!(
+            items.iter().any(|i| i.kind == ItemKind::Function && i.name == "public.similarity"),
+            "pg_trgm's functions are listed"
+        );
+        let got: Vec<(ItemKind, &str)> = items
+            .iter()
+            .filter(|i| !(i.kind == ItemKind::Function && i.name.starts_with("public.")))
+            .map(|i| (i.kind, i.name.as_str()))
+            .collect();
         assert_eq!(
             got,
             [
@@ -325,7 +332,7 @@ mod tests {
                 (ItemKind::Type, "shop.pair"),
                 (ItemKind::View, "shop.v_people"),
             ],
-            "pg_trgm's functions and types stay out"
+            "pg_trgm's types stay out"
         );
         assert_eq!(c.search_count("shop.people", SearchMode::Contains, "b").await?, 1);
         let o = c.overview("shop.people").await?;
