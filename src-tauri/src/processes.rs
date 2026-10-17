@@ -1,8 +1,9 @@
-//! The process list: what a Postgres or MySQL/MariaDB server is running, with cancel and kill. It has its own
+//! The process list: what a Postgres (or `CockroachDB`) or MySQL/MariaDB server is running, with cancel and kill. It has its own
 //! connection, so it still answers while the workspace's connection is busy with the query to be stopped.
 
 use crate::db::{Engine, QueryResult};
 use crate::error::{Error, Result};
+use crate::store::Flavor;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use tauri::{AppHandle, Manager, State, async_runtime::Mutex};
@@ -16,6 +17,11 @@ const POSTGRES: &str = "select pid as \"PID\", usename as \"User\", datname as \
     application_name as \"Application\", state as \"State\", date_trunc('second', now() - query_start) as \"Running\", \
     wait_event as \"Waiting on\", query as \"Query\" from pg_stat_activity \
     where pid <> pg_backend_pid() and backend_type = 'client backend' order by query_start nulls last";
+/// `CockroachDB`'s sessions, as hex ids, minus this one. Its `pg_stat_activity` is empty.
+const COCKROACH: &str = "select session_id as \"Session\", user_name as \"User\", client_address as \"Client\", \
+    application_name as \"Application\", status as \"State\", date_trunc('second', now() - active_query_start) as \"Running\", \
+    coalesce(nullif(active_queries, ''), last_active_query) as \"Query\" from crdb_internal.cluster_sessions \
+    where session_id <> (select * from [show session_id]) order by active_query_start nulls last";
 /// `SHOW FULL PROCESSLIST`, minus this connection.
 const MYSQL: &str = "select id as `Id`, user as `User`, host as `Host`, db as `Database`, command as `Command`, \
     time as `Time`, state as `State`, info as `Info` from information_schema.processlist \
@@ -29,6 +35,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Entry::Vacant(e) => e.insert(crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?),
     };
     let sql = match live.saved.kind {
+        Engine::Postgres if live.saved.flavor == Some(Flavor::Cockroach) => COCKROACH,
         Engine::Postgres => POSTGRES,
         Engine::Mysql | Engine::Mariadb => MYSQL,
         Engine::Sqlite => return Err(Error::Invalid("SQLite has no process list")),
@@ -47,16 +54,28 @@ pub async fn kill_process(
     open: State<'_, crate::Open>,
     sessions: State<'_, Sessions>,
     name: String,
-    id: u64,
+    id: String,
     connection: bool,
 ) -> Result<()> {
     open.unlocked()?;
     let mut sessions = sessions.0.lock().await;
     let live = sessions.get_mut(&name).ok_or(Error::NotConnected)?;
+    let number = || id.parse::<u64>().map_err(|_| Error::Invalid("a process id is a number"));
     match live.saved.kind {
+        Engine::Postgres if live.saved.flavor == Some(Flavor::Cockroach) => {
+            if id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(Error::Invalid("a CockroachDB session id is hexadecimal"));
+            }
+            let sql = if connection {
+                "cancel session $1"
+            } else {
+                "cancel queries select query_id from crdb_internal.cluster_queries where session_id = $1"
+            };
+            live.conn.fetch_with(sql, &[Some(&id)]).await?;
+        }
         Engine::Postgres => {
             let f = if connection { "pg_terminate_backend" } else { "pg_cancel_backend" };
-            let id = id.to_string();
+            let id = number()?.to_string();
             let rows = live.conn.fetch_with(&format!("select {f}($1::int)::text"), &[Some(&id)]).await?;
             if rows.first().and_then(|r| r.first()).and_then(Option::as_deref) != Some("true") {
                 return Err(Error::Invalid("the process has ended, or this user may not stop it"));
@@ -64,6 +83,7 @@ pub async fn kill_process(
         }
         Engine::Mysql | Engine::Mariadb => {
             // KILL takes no parameters; `id` is a number, so formatting it in can't inject anything.
+            let id = number()?;
             let sql = if connection { format!("kill {id}") } else { format!("kill query {id}") };
             live.conn.query(&sql).await?;
         }
@@ -82,7 +102,7 @@ pub async fn close_processes(sessions: State<'_, Sessions>, name: String) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::MYSQL;
+    use super::{COCKROACH, MYSQL};
     use crate::db::{Conn, Engine, Options};
     use crate::tls::Tls;
 
@@ -103,6 +123,25 @@ mod tests {
             assert!(ids.contains(&other_id) && !ids.contains(&my_id), "{ids:?}");
             me.query(&format!("kill {other_id}")).await.unwrap();
             assert!(other.query("select 1").await.is_err(), "the killed session is gone");
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local CockroachDB on 26257 (scripts/test-env.sh up)"]
+    fn cockroach_process_list_should_show_other_sessions_and_cancel_one() {
+        tauri::async_runtime::block_on(async {
+            let url = "postgres://root@127.0.0.1:26257/defaultdb";
+            let (tls, options) = (Tls::default(), Options::default());
+            let open = || Conn::open(Engine::Postgres, url, None, &tls, &options, None);
+            let (mut me, mut other) = (open().await.unwrap(), open().await.unwrap());
+            let other_id = other.query("show session_id").await.unwrap().rows[0][0].clone().unwrap();
+            let my_id = me.query("show session_id").await.unwrap().rows[0][0].clone().unwrap();
+            let r = me.query(COCKROACH).await.unwrap();
+            assert_eq!(r.columns[0], "Session");
+            let ids: Vec<_> = r.rows.iter().map(|row| row[0].clone().unwrap()).collect();
+            assert!(ids.contains(&other_id) && !ids.contains(&my_id), "{ids:?}");
+            me.fetch_with("cancel session $1", &[Some(&other_id)]).await.unwrap();
+            assert!(other.query("select 1").await.is_err(), "the cancelled session is gone");
         });
     }
 }

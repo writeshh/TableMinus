@@ -14,6 +14,7 @@
       <array>
         <string>postgresql</string>
         <string>postgres</string>
+        <string>cockroachdb</string>
         <string>mysql</string>
         <string>mariadb</string>
         <string>redis</string>

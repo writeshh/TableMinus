@@ -173,14 +173,15 @@ export function manageTags(changed: () => Promise<void>) {
 
 // ---------- Connection URLs ----------
 
-type UrlConn = { kind: string; url: string; name: string; password: string; tls?: string };
+type UrlConn = { kind: string; url: string; name: string; password: string; tls?: string; flavor?: "cockroach" };
 
 // libpq's sslmode values are TLS_MODES' own; MySQL's ssl-mode spells them its way.
 const MYSQL_SSL: Record<string, string> = { disabled: "disable", preferred: "prefer", required: "require", verify_ca: "verify-ca", verify_identity: "verify-full" };
-const SCHEMES: Record<string, string> = { postgres: "postgres", postgresql: "postgres", mysql: "mysql", mariadb: "mariadb", redis: "redis", rediss: "redis" };
+const SCHEMES: Record<string, string> = { postgres: "postgres", postgresql: "postgres", mysql: "mysql", mariadb: "mariadb", redis: "redis", rediss: "redis", cockroachdb: "postgres", cockroach: "postgres" };
+const COCKROACH_SCHEMES = ["cockroachdb:", "cockroach:"];
 
-/** A connection from a URL (postgresql://, postgres://, mysql://, mariadb://, redis://, rediss://), or a SQLite path or
- *  sqlite:// URL. */
+/** A connection from a URL (postgresql://, postgres://, cockroachdb://, mysql://, mariadb://, redis://, rediss://), or a
+ *  SQLite path or sqlite:// URL. */
 export function parseConnectionUrl(text: string): UrlConn {
   text = text.trim();
   if (/^(\/|~)/.test(text) || /^sqlite:/i.test(text) || /\.(sqlite3?|db3?)$/i.test(text) && !text.includes("://")) {
@@ -195,16 +196,18 @@ export function parseConnectionUrl(text: string): UrlConn {
     throw "That isn't a connection URL, e.g. postgresql://user@localhost:5432/db.";
   }
   const kind = SCHEMES[u.protocol.slice(0, -1).toLowerCase()];
-  if (!kind) throw `TableMinus can't open ${u.protocol}// URLs; it opens postgresql://, mysql://, mariadb://, redis:// and SQLite files.`;
+  if (!kind) throw `TableMinus can't open ${u.protocol}// URLs; it opens postgresql://, cockroachdb://, mysql://, mariadb://, redis:// and SQLite files.`;
   if (!u.hostname) throw "The URL has no host.";
   const db = decodeURIComponent(u.pathname.replace(/^\//, ""));
   const ssl = u.searchParams.get("sslmode") ?? u.searchParams.get("ssl-mode") ?? u.searchParams.get("ssl_mode");
   // rediss:// is Redis over TLS from the first byte.
   const tls = u.protocol === "rediss:" ? "require" : ssl ? (kind === "postgres" ? ssl.toLowerCase() : MYSQL_SSL[ssl.toLowerCase()]) : undefined;
   const scheme = kind === "postgres" ? "postgres" : kind === "redis" ? "redis" : "mysql"; // the backend's URL schemes
-  const port = u.port ? `:${u.port}` : "";
+  const flavor = COCKROACH_SCHEMES.includes(u.protocol) ? "cockroach" : undefined;
+  const port = u.port ? `:${u.port}` : flavor ? ":26257" : ""; // CockroachDB's own default, not Postgres's
   return {
     kind,
+    flavor,
     url: `${scheme}://${u.username || kind !== "redis" ? `${u.username}@` : ""}${u.hostname}${port}${db ? "/" + encodeURIComponent(db) : ""}`,
     name: db ? `${u.hostname}/${db}` : u.hostname,
     password: decodeURIComponent(u.password),

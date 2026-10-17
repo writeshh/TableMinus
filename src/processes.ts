@@ -33,7 +33,7 @@ export function openProcesses(c: Conn, confirm: Confirm) {
     const what = connection ? `Kill process ${id} and close its connection?` : `Cancel the query running in process ${id}?`;
     if (!(await confirm(what, connection ? "Kill" : "Cancel query"))) return;
     try {
-      await invoke("kill_process", { name: c.name, id: Number(id), connection });
+      await invoke("kill_process", { name: c.name, id, connection });
       setStatus(connection ? `Killed ${id}` : `Cancelled the query in ${id}`, "done");
       load();
     } catch (e) {

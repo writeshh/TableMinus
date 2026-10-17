@@ -116,7 +116,7 @@ pub struct ColumnDef {
 }
 
 /// One staged structure edit.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Change {
     AddColumn {
@@ -415,6 +415,15 @@ fn primary_key_sql(d: Dialect, t: &str, current: &Structure, columns: &[String])
             .chain(add.map(|a| format!("ALTER TABLE {t} {a}")))
             .collect(),
     })
+}
+
+/// `CockroachDB` changes a primary key with one statement of its own: it refuses `DROP CONSTRAINT` on the key, and a
+/// table can't be left without one.
+fn cockroach_primary_key_sql(d: Dialect, t: &str, columns: &[String]) -> Result<String> {
+    if columns.is_empty() {
+        return Err(Error::Invalid("CockroachDB tables always have a primary key; choose other columns instead"));
+    }
+    Ok(format!("ALTER TABLE {t} ALTER PRIMARY KEY USING COLUMNS ({})", idents(d, columns)))
 }
 
 /// A MySQL table option's value (an engine or a collation). It can't be a bound parameter, so it must be a plain name.
@@ -855,7 +864,25 @@ impl Conn {
             let sources = self.rebuild_sources(table).await?;
             return rebuild::rebuild_sql(table, cur, changes, &sources);
         }
+        let is_key = |c: &&Change| matches!(c, Change::SetPrimaryKey { .. });
+        if current.is_some() && changes.iter().any(|c| is_key(&c)) && self.is_cockroach().await? {
+            // The key goes last: it may be on a column added in the same edit.
+            let rest: Vec<Change> = changes.iter().filter(|c| !is_key(c)).cloned().collect();
+            let mut out = alter_sql(self.dialect(), table, current.as_ref(), &rest)?;
+            let t = self.dialect().table_ident(table);
+            for change in changes {
+                if let Change::SetPrimaryKey { columns } = change {
+                    out.push(cockroach_primary_key_sql(self.dialect(), &t, columns)?);
+                }
+            }
+            return Ok(out);
+        }
         alter_sql(self.dialect(), table, current.as_ref(), changes)
+    }
+
+    /// Whether this is a `CockroachDB` server speaking the Postgres protocol.
+    async fn is_cockroach(&mut self) -> Result<bool> {
+        Ok(matches!(self, Conn::Pg(_)) && self.server_version().await?.starts_with("CockroachDB"))
     }
 
     /// What SQLite's table rebuild reads: the table's CREATE statement, its indexes and triggers, and whether foreign
@@ -2208,6 +2235,42 @@ mod tests {
         let left = c.databases().await?;
         assert!(!left.iter().any(|d| d == a || d == b), "{left:?}");
         Ok(())
+    }
+
+    #[test]
+    fn cockroach_primary_key_should_use_alter_primary_key_and_refuse_to_drop_it() {
+        let columns = |c: &[&str]| c.iter().map(|c| (*c).to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            super::cockroach_primary_key_sql(Dialect::Pg, r#""s"."t""#, &columns(&["a", "b c"])).unwrap(),
+            r#"ALTER TABLE "s"."t" ALTER PRIMARY KEY USING COLUMNS ("a", "b c")"#
+        );
+        assert!(super::cockroach_primary_key_sql(Dialect::Pg, "t", &[]).is_err());
+    }
+
+    #[test]
+    #[ignore = "needs a local CockroachDB on 26257 (scripts/test-env.sh up); creates and drops a scratch table"]
+    fn local_cockroach_should_change_a_primary_key_with_alter_primary_key() {
+        tauri::async_runtime::block_on(async {
+            let url = "postgres://root@127.0.0.1:26257/defaultdb";
+            let mut c =
+                Conn::open(Engine::Postgres, url, None, &Tls::default(), &Options::default(), None).await.unwrap();
+            c.query("drop table if exists tm_pk; create table tm_pk(id int primary key, b int not null)")
+                .await
+                .unwrap();
+            let outcome = async {
+                let change = [Change::SetPrimaryKey { columns: vec!["id".into(), "b".into()] }];
+                let sql = c.alter_sql("tm_pk", false, &change).await?;
+                assert_eq!(sql, [r#"ALTER TABLE "tm_pk" ALTER PRIMARY KEY USING COLUMNS ("id", "b")"#]);
+                c.run_ddl(&sql).await?;
+                let keys: Vec<_> =
+                    c.structure("tm_pk").await?.columns.iter().filter(|c| c.primary).map(|c| c.name.clone()).collect();
+                assert_eq!(keys, ["id", "b"]);
+                Ok::<_, crate::error::Error>(())
+            }
+            .await;
+            c.query("drop table tm_pk").await.unwrap();
+            outcome.unwrap();
+        });
     }
 
     /// Checks, a new primary key, an index method, triggers and table options, in a scratch database dropped after.

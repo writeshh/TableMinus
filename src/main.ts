@@ -370,8 +370,9 @@ async function importFromUrl(text?: string) {
 
 function openFromUrl(u: ReturnType<typeof launcher.parseConnectionUrl>) {
   const c: Saved = { name: u.name, kind: u.kind, url: u.url, tag: "", safety: settings.safeLevel };
+  if (u.flavor) c.flavor = u.flavor;
   if (u.tls) c.tls = { ...TLS_DEFAULT, mode: u.tls };
-  openEditor(u.kind, c, true, u.password);
+  openEditor(u.flavor ?? u.kind, c, true, u.password);
 }
 
 function confirmDialog(text: string, okLabel: string): Promise<boolean> {
