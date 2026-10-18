@@ -65,7 +65,11 @@ const SETTINGS = `
 </div>
 <p class="hint note ai-http" id="ai-key-state"></p>
 <p class="hint note ai-http">The key is kept in the system keychain and never shown again. Plain http:// works only for a server on this computer.</p>
-<div class="row ai-http"><span class="k">Proxy</span><input id="ai-proxy" spellcheck="false" placeholder="Optional: http://proxy.example.com:8080" /></div>
+<div class="row ai-http"><span class="k">Proxy</span><input id="ai-proxy" spellcheck="false" placeholder="Optional: http://proxy.example.com:8080, or http://user@proxy…" /></div>
+<div class="row ai-http"><span class="k">Proxy password</span>
+  <span class="ai-key"><input id="ai-proxy-password" type="password" autocomplete="off" spellcheck="false" placeholder="For a proxy address with a user name" /><button id="ai-proxy-save">Save</button><button id="ai-proxy-remove" class="ghost">Remove</button></span>
+</div>
+<p class="hint note ai-http" id="ai-proxy-state"></p>
 `;
 
 const STYLE = `
@@ -161,6 +165,7 @@ async function showSettings() {
   if (p.provider === "agent") return renderPane();
   try {
     state.textContent = (await invoke<boolean>("ai_has_key", { provider: p.provider })) ? "A key is saved." : "No key saved.";
+    $("ai-proxy-state").textContent = (await invoke<boolean>("ai_has_proxy_password")) ? "A proxy password is saved." : "";
   } catch (e) {
     state.textContent = String(e);
   }
@@ -213,6 +218,22 @@ $("ai-key-save").onclick = () => {
   if (key) void setKey(key);
 };
 $("ai-key-remove").onclick = () => void setKey("");
+
+async function setProxyPassword(password: string) {
+  const state = $("ai-proxy-state");
+  try {
+    await withVault(() => invoke("ai_set_proxy_password", { password }));
+    field("ai-proxy-password").value = "";
+    state.textContent = password ? "The proxy password is saved." : "The proxy password is removed.";
+  } catch (e) {
+    state.textContent = String(e);
+  }
+}
+$("ai-proxy-save").onclick = () => {
+  const password = field("ai-proxy-password").value;
+  if (password) void setProxyPassword(password);
+};
+$("ai-proxy-remove").onclick = () => void setProxyPassword("");
 
 // ---------- The pane ----------
 

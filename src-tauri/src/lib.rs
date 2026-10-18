@@ -937,6 +937,8 @@ pub fn run() -> tauri::Result<()> {
             ai::ai_chat,
             ai::ai_has_key,
             ai::ai_set_key,
+            ai::ai_set_proxy_password,
+            ai::ai_has_proxy_password,
             ai_run,
             secrets::vault_status,
             secrets::vault_unlock,

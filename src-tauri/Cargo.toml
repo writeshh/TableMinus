@@ -33,6 +33,8 @@ postgres-native-tls = "0.5.3"
 native-tls = "0.2.18"
 # Already in the tree through postgres-native-tls; the AI assistant's HTTPS client uses it directly.
 tokio-native-tls = "0.3.1"
+# Already in the tree; Basic credentials for the AI proxy.
+base64 = "0.22"
 mysql_async = { version = "0.37.1", default-features = false, features = ["default-rustls-ring"] }
 url = "2.5.8"
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher", "backup"] }

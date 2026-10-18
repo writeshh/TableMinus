@@ -225,7 +225,11 @@ fn endpoint(provider: Provider, base: &str) -> Result<Url> {
     Ok(url)
 }
 
-/// The proxy to use, if any. Only plain `http://` proxies, which tunnel HTTPS with CONNECT, and none with a password.
+/// The keychain account (under [`Secret::Ai`]) of the proxy's password.
+const PROXY_ACCOUNT: &str = "proxy";
+
+/// The proxy to use, if any. Only plain `http://` proxies, which tunnel HTTPS with CONNECT. A user name may be in the
+/// address; its password never is (it's in the keychain).
 fn proxy_url(proxy: &str) -> Result<Option<Url>> {
     let proxy = proxy.trim();
     if proxy.is_empty() {
@@ -235,20 +239,39 @@ fn proxy_url(proxy: &str) -> Result<Option<Url>> {
     if u.scheme() != "http" || u.host_str().is_none() {
         return Err(Error::Invalid("the proxy must be an http:// address, such as http://proxy.example.com:8080"));
     }
-    if !u.username().is_empty() || u.password().is_some() {
-        return Err(Error::Invalid("proxies that want a user name or password aren't supported yet"));
+    if u.password().is_some() {
+        return Err(Error::Invalid(
+            "put only the user name in the proxy address (http://user@proxy:8080); save its password below it",
+        ));
     }
     Ok(Some(u))
 }
 
+/// The proxy and its `Proxy-Authorization` value, when its address names a user.
+struct Proxy {
+    url: Url,
+    auth: Option<SecretString>,
+}
+
+/// `Basic` credentials for `user` (percent-decoded from the address) and `password`.
+fn basic_auth(user: &str, password: &SecretString) -> SecretString {
+    use base64::Engine;
+    let user = url::form_urlencoded::parse(format!("u={user}").as_bytes()).next().map(|(_, v)| v.into_owned());
+    let pair = format!("{}:{}", user.unwrap_or_default(), password.expose_secret());
+    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(pair)).into()
+}
+
 /// Opens a tunnel to `host:port` through the HTTP proxy at `proxy` (CONNECT), ready for TLS.
-async fn tunnel(proxy: &Url, host: &str, port: u16) -> Result<tokio::net::TcpStream> {
+async fn tunnel(proxy: &Proxy, host: &str, port: u16) -> Result<tokio::net::TcpStream> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Proxy { url: proxy, auth } = proxy;
     let at =
         proxy.host_str().ok_or(Error::Invalid("the proxy has no host"))?.trim_start_matches('[').trim_end_matches(']');
     let mut stream = tokio::net::TcpStream::connect((at, proxy.port_or_known_default().unwrap_or(80))).await?;
     let target = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
-    stream.write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").as_bytes()).await?;
+    let credentials =
+        auth.as_ref().map(|a| format!("Proxy-Authorization: {}\r\n", a.expose_secret())).unwrap_or_default();
+    stream.write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n{credentials}\r\n").as_bytes()).await?;
     // The proxy's answer is a status line and headers; anything longer isn't one.
     let mut answer = Vec::new();
     let mut byte = [0u8; 1];
@@ -259,7 +282,17 @@ async fn tunnel(proxy: &Url, host: &str, port: u16) -> Result<tokio::net::TcpStr
         answer.push(byte[0]);
     }
     let status = String::from_utf8_lossy(&answer).lines().next().unwrap_or_default().to_string();
-    if status.split_whitespace().nth(1) != Some("200") {
+    let code = status.split_whitespace().nth(1);
+    if code == Some("407") {
+        return Err(Error::Ai(if auth.is_some() {
+            "the proxy refused its user name and password".into()
+        } else {
+            "the proxy wants a user name and password: put the user in its address (http://user@proxy:8080) and \
+             save the password in Settings › AI"
+                .into()
+        }));
+    }
+    if code != Some("200") {
         return Err(Error::Ai(format!("the proxy refused the tunnel: {status}")));
     }
     Ok(stream)
@@ -286,7 +319,7 @@ where
 /// POSTs `body` to `url` with `headers`, over TLS for https.
 async fn post(
     url: &Url,
-    proxy: Option<&Url>,
+    proxy: Option<&Proxy>,
     headers: Vec<(header::HeaderName, header::HeaderValue)>,
     body: Vec<u8>,
 ) -> Result<(u16, Bytes)> {
@@ -341,7 +374,7 @@ fn error_message(status: u16, body: &[u8]) -> Error {
 }
 
 /// Sends the conversation and returns the model's answer.
-pub async fn chat(chat: &Chat, key: Option<&SecretString>) -> Result<Reply> {
+pub async fn chat(chat: &Chat, key: Option<&SecretString>, proxy_password: Option<&SecretString>) -> Result<Reply> {
     if chat.turns.len() > MAX_TURNS {
         return Err(Error::Invalid("the conversation is too long; start a new chat"));
     }
@@ -361,7 +394,11 @@ pub async fn chat(chat: &Chat, key: Option<&SecretString>) -> Result<Reply> {
         return Err(Error::Invalid("choose a model in Settings › AI"));
     }
     let url = endpoint(chat.provider, &chat.base_url)?;
-    let proxy = proxy_url(&chat.proxy)?;
+    let proxy = proxy_url(&chat.proxy)?.map(|url| {
+        let auth = (!url.username().is_empty())
+            .then(|| basic_auth(url.username(), proxy_password.unwrap_or(&SecretString::from(String::new()))));
+        Proxy { url, auth }
+    });
     let mut headers = Vec::new();
     let secret = |value: String| {
         let mut v = header::HeaderValue::from_str(&value)
@@ -406,10 +443,28 @@ pub async fn chat(chat: &Chat, key: Option<&SecretString>) -> Result<Reply> {
 #[tauri::command]
 pub async fn ai_chat(request: Chat) -> Result<Reply> {
     let account = request.provider.account();
-    let key = tauri::async_runtime::spawn_blocking(move || store::stored(Secret::Ai, account))
+    let (key, proxy_password) = tauri::async_runtime::spawn_blocking(move || {
+        Ok::<_, Error>((store::stored(Secret::Ai, account)?, store::stored(Secret::Ai, PROXY_ACCOUNT)?))
+    })
+    .await
+    .map_err(|_| Error::Invalid("reading the API key stopped unexpectedly"))??;
+    chat(&request, key.as_ref(), proxy_password.as_ref()).await
+}
+
+/// Keeps the AI proxy's password in the keychain; an empty one removes it.
+#[tauri::command]
+pub async fn ai_set_proxy_password(password: SecretString) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || store::update(Secret::Ai, PROXY_ACCOUNT, Some(&password)))
         .await
-        .map_err(|_| Error::Invalid("reading the API key stopped unexpectedly"))??;
-    chat(&request, key.as_ref()).await
+        .map_err(|_| Error::Invalid("saving the proxy password stopped unexpectedly"))?
+}
+
+/// Whether the AI proxy has a password in the keychain.
+#[tauri::command]
+pub async fn ai_has_proxy_password() -> Result<bool> {
+    tauri::async_runtime::spawn_blocking(move || Ok(store::stored(Secret::Ai, PROXY_ACCOUNT)?.is_some()))
+        .await
+        .map_err(|_| Error::Invalid("reading the proxy password stopped unexpectedly"))?
 }
 
 /// Whether the provider has a key in the keychain. The key itself never goes back to the UI.
@@ -431,10 +486,10 @@ pub async fn ai_set_key(provider: Provider, key: SecretString) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Call, Chat, Provider, Reply, Turn, anthropic_body, anthropic_reply, endpoint, openai_body, openai_reply,
-        proxy_url, tunnel,
+        Call, Chat, Provider, Proxy, Reply, Turn, anthropic_body, anthropic_reply, basic_auth, endpoint, openai_body,
+        openai_reply, proxy_url, tunnel,
     };
-    use secrecy::SecretString;
+    use secrecy::{ExposeSecret, SecretString};
     use serde_json::{Value, json};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -572,7 +627,7 @@ mod tests {
                 fake_server(200, r#"{"choices":[{"message":{"role":"assistant","content":"Three people."}}]}"#).await;
             let chat = conversation(Provider::OpenAi, &format!("http://127.0.0.1:{port}/v1"));
             let key = SecretString::from("sk-test");
-            let reply = super::chat(&chat, Some(&key)).await.unwrap();
+            let reply = super::chat(&chat, Some(&key), None).await.unwrap();
             assert_eq!(reply, Reply { text: "Three people.".into(), call: None });
             let request = seen.await.unwrap();
             assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"), "{request}");
@@ -588,7 +643,7 @@ mod tests {
                     .await;
             let chat = conversation(Provider::Anthropic, &format!("http://localhost:{port}"));
             let key = SecretString::from("k");
-            let e = super::chat(&chat, Some(&key)).await.unwrap_err().to_string();
+            let e = super::chat(&chat, Some(&key), None).await.unwrap_err().to_string();
             assert!(e.contains("401") && e.contains("bad key"), "{e}");
         });
     }
@@ -597,17 +652,28 @@ mod tests {
     fn chat_should_want_a_key_for_anthropic() {
         tauri::async_runtime::block_on(async {
             let chat = conversation(Provider::Anthropic, "https://api.anthropic.com");
-            assert!(super::chat(&chat, None).await.is_err());
+            assert!(super::chat(&chat, None, None).await.is_err());
         });
     }
 
     #[test]
-    fn proxy_url_should_take_only_plain_http_without_credentials() {
+    fn proxy_url_should_take_only_plain_http_and_no_password() {
         assert!(proxy_url("").unwrap().is_none());
         assert!(proxy_url("http://proxy:8080").unwrap().is_some());
+        assert!(proxy_url("http://alice@proxy:8080").unwrap().is_some());
         assert!(proxy_url("https://proxy:8080").is_err());
         assert!(proxy_url("socks5://proxy:1080").is_err());
         assert!(proxy_url("http://u:p@proxy:8080").is_err());
+    }
+
+    #[test]
+    fn basic_auth_should_decode_the_user_from_the_address() {
+        let auth = basic_auth("al%40ice", &SecretString::from("pa:ss".to_string()));
+        assert_eq!(auth.expose_secret(), "Basic YWxAaWNlOnBhOnNz"); // "al@ice:pa:ss"
+    }
+
+    fn open_proxy(port: u16) -> Proxy {
+        Proxy { url: proxy_url(&format!("http://127.0.0.1:{port}")).unwrap().unwrap(), auth: None }
     }
 
     /// A one-shot proxy: reads the CONNECT request up to its blank line, answers `status`, hands back what it read.
@@ -632,19 +698,38 @@ mod tests {
     fn tunnel_should_connect_through_the_proxy() {
         tauri::async_runtime::block_on(async {
             let (port, seen) = fake_proxy("HTTP/1.1 200 Connection established").await;
-            let proxy = proxy_url(&format!("http://127.0.0.1:{port}")).unwrap().unwrap();
+            tunnel(&open_proxy(port), "api.example.com", 443).await.unwrap();
+            let seen = seen.await.unwrap();
+            assert!(seen.starts_with("CONNECT api.example.com:443 HTTP/1.1\r\n"));
+            assert!(!seen.contains("Proxy-Authorization"));
+        });
+    }
+
+    #[test]
+    fn tunnel_should_send_the_proxy_credentials() {
+        tauri::async_runtime::block_on(async {
+            let (port, seen) = fake_proxy("HTTP/1.1 200 Connection established").await;
+            let proxy = Proxy { auth: Some(SecretString::from("Basic eDp5".to_string())), ..open_proxy(port) };
             tunnel(&proxy, "api.example.com", 443).await.unwrap();
-            assert!(seen.await.unwrap().starts_with("CONNECT api.example.com:443 HTTP/1.1\r\n"));
+            assert!(seen.await.unwrap().contains("\r\nProxy-Authorization: Basic eDp5\r\n"));
         });
     }
 
     #[test]
     fn tunnel_should_report_a_refusal() {
         tauri::async_runtime::block_on(async {
+            let (port, _seen) = fake_proxy("HTTP/1.1 403 Forbidden").await;
+            let e = tunnel(&open_proxy(port), "api.example.com", 443).await.unwrap_err().to_string();
+            assert!(e.contains("403"), "{e}");
+        });
+    }
+
+    #[test]
+    fn tunnel_should_ask_for_credentials_when_the_proxy_wants_them() {
+        tauri::async_runtime::block_on(async {
             let (port, _seen) = fake_proxy("HTTP/1.1 407 Proxy Authentication Required").await;
-            let proxy = proxy_url(&format!("http://127.0.0.1:{port}")).unwrap().unwrap();
-            let e = tunnel(&proxy, "api.example.com", 443).await.unwrap_err().to_string();
-            assert!(e.contains("407"), "{e}");
+            let e = tunnel(&open_proxy(port), "api.example.com", 443).await.unwrap_err().to_string();
+            assert!(e.contains("wants a user name and password"), "{e}");
         });
     }
 }
