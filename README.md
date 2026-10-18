@@ -18,7 +18,7 @@ npm run bundle           # check, audit, MCP bridge, then .app/.dmg on macOS (.d
 
 `npm run bundle -- --skip-checks` skips the checks; `-- --target <triple>` cross-builds. Bundles land in `src-tauri/target/release/bundle/` (`target/<triple>/release/bundle/` when cross-building), with the `tableminus-mcp` bridge next to the app's executable.
 
-Rust comes from `rustup`. On Linux, Tauri also needs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `librsvg2-dev`, and `libdbus-1-dev` for the keychain.
+Rust comes from `rustup`, Node from anywhere, at 22.12 or later (Vite's bundler needs it). On Linux, Tauri also needs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `librsvg2-dev`, and `libdbus-1-dev` for the keychain.
 
 ## Release
 
