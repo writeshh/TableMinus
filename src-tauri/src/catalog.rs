@@ -99,8 +99,11 @@ impl Conn {
                  where routine_schema = database() order by 1, 2"
                 .into(),
             Dialect::Lite => "select 'view', name from sqlite_master where type = 'view' order by 2".into(),
+            // Dictionaries are tables there (engine Dictionary), so they list and browse with the tables. User-defined
+            // functions belong to the server, not a database.
             Dialect::Click => "select 'view', name from system.tables where database = currentDatabase() \
-                 and engine in ('View', 'MaterializedView', 'LiveView', 'WindowView') order by name"
+                 and engine in ('View', 'MaterializedView', 'LiveView', 'WindowView') \
+                 union all select 'function', name from system.functions where origin = 'SQLUserDefined' order by 1, 2"
                 .into(),
             // Views only: SQL Server's routines and sequences have no editors here either.
             Dialect::Mssql => "select 'view', case when s.name = 'dbo' then v.name else s.name + '.' + v.name end \

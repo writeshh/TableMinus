@@ -1,7 +1,8 @@
 //! `ClickHouse` over its HTTP interface. Each statement is one request, answered in `TabSeparatedWithNamesAndTypes`:
 //! a line of names, a line of types, then a line per row with every value as text (`\N` for NULL). A request is a
-//! connection of its own, so there is no session: the database goes with each request, and cancelling a query is
-//! closing its connection (`cancel_http_readonly_queries_on_client_close`).
+//! connection of its own, tied to the others by an HTTP session (`session_id`), so `SET` and temporary tables last
+//! from one statement to the next. The database goes with each request, and cancelling a query is closing its
+//! connection (`cancel_http_readonly_queries_on_client_close`).
 
 use super::{Driver, Results, RowSink, Stopper, only_comments};
 use crate::db::{Dialect, Options};
@@ -25,8 +26,8 @@ const MAX_ERROR: usize = 64 * 1024;
 const MAX_LINE: usize = 256 * 1024 * 1024;
 /// The most a bound value may hold to go as a form field: the server refuses a field over 128 KiB.
 const FIELD_LIMIT: usize = 100_000;
-/// The statements that turn server-enforced read-only on and off: the driver keeps no session, so it sends
-/// `readonly=1` with every request while it is on.
+/// The statements that turn server-enforced read-only on and off. They aren't sent: `SET readonly = 1` would stay in
+/// the session and refuse the `SET` that ends it, so the driver sends `readonly=1` with every request while it is on.
 const READONLY_ON: &str = "set readonly = 1";
 const READONLY_OFF: &str = "set readonly = 0";
 
@@ -40,6 +41,8 @@ pub struct ClickHouse {
     /// The `Authorization` header value.
     auth: header::HeaderValue,
     database: String,
+    /// The HTTP session every statement runs in.
+    session: String,
     readonly: bool,
     cancel: Arc<Notify>,
     /// The id of the request in flight, so a cancel can ask the server to stop it as well as hang up.
@@ -212,6 +215,7 @@ impl ClickHouse {
             tls: connector,
             auth,
             database: decode(u.path().trim_start_matches('/')),
+            session: random_hex()?,
             readonly: false,
             cancel: Arc::new(Notify::new()),
             running: Mutex::new(None),
@@ -221,11 +225,23 @@ impl ClickHouse {
         Ok(c)
     }
 
-    /// The URL's query: the answer's format, the database, read-only when it's on, and the bound parameters.
-    fn query_string(&self, query_id: &str, query_size: Option<usize>, in_url: &[(usize, Option<&str>)]) -> String {
+    /// The URL's query: the answer's format, the session, the database, read-only when it's on, and the bound
+    /// parameters.
+    fn query_string(
+        &self,
+        query_id: &str,
+        in_session: bool,
+        query_size: Option<usize>,
+        in_url: &[(usize, Option<&str>)],
+    ) -> String {
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query.append_pair("default_format", "TabSeparatedWithNamesAndTypes");
         query.append_pair("query_id", query_id);
+        if in_session {
+            query.append_pair("session_id", &self.session);
+            // The longest the server allows by default; keep-alive pings keep it from timing out sooner.
+            query.append_pair("session_timeout", "3600");
+        }
         query.append_pair("cancel_http_readonly_queries_on_client_close", "1");
         if !self.database.is_empty() {
             query.append_pair("database", &self.database);
@@ -243,11 +259,25 @@ impl ClickHouse {
         query.finish()
     }
 
-    /// Sends one statement and returns the start of its answer. An error status is read in full and returned.
+    /// Sends one statement in the session and returns the start of its answer. A query the driver hung up on (a
+    /// row limit, a cancel) holds the session until the server notices, so a locked session is tried again for a
+    /// few seconds.
     async fn request(&self, sql: &str, params: &[Option<&str>]) -> Result<Answer> {
-        let mut id = [0u8; 16];
-        getrandom::fill(&mut id).map_err(|e| Error::ClickHouse(e.to_string()))?;
-        let query_id = id.iter().fold(String::new(), |s, b| s + &format!("{b:02x}"));
+        let mut tries = 0;
+        loop {
+            match self.send(sql, params, true).await {
+                Err(Error::ClickHouse(m)) if m.contains("SESSION_IS_LOCKED") && tries < 50 => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                r => return r,
+            }
+        }
+    }
+
+    /// Sends one statement and returns the start of its answer. An error status is read in full and returned.
+    async fn send(&self, sql: &str, params: &[Option<&str>], in_session: bool) -> Result<Answer> {
+        let query_id = random_hex()?;
         *lock(&self.running) = Some(query_id.clone());
         // Bound values go in the body, as form fields next to the statement, so a value as big as a cell can be sent;
         // in the URL they'd be held to its length limit.
@@ -286,7 +316,7 @@ impl ClickHouse {
             body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
             (format!("multipart/form-data; boundary={boundary}"), Bytes::from(body))
         };
-        let request = Request::post(format!("/?{}", self.query_string(&query_id, query_size, in_url)))
+        let request = Request::post(format!("/?{}", self.query_string(&query_id, in_session, query_size, in_url)))
             .header(header::HOST, format!("{}:{}", self.host, self.port))
             .header(header::AUTHORIZATION, self.auth.clone())
             .header(header::CONTENT_TYPE, content_type)
@@ -368,6 +398,13 @@ where
     sender.send_request(request).await.map_err(failed)
 }
 
+/// 16 random bytes in hex: a query or session id.
+fn random_hex() -> Result<String> {
+    let mut id = [0u8; 16];
+    getrandom::fill(&mut id).map_err(|e| Error::ClickHouse(e.to_string()))?;
+    Ok(id.iter().fold(String::new(), |s, b| s + &format!("{b:02x}")))
+}
+
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -412,7 +449,8 @@ impl ClickHouse {
     /// next looks at the socket, and this doesn't wait for that. Best effort; the request is already dropped.
     async fn kill_running(&self) {
         let Some(id) = lock(&self.running).take() else { return };
-        let _ = self.request("KILL QUERY WHERE query_id = {p1:String} ASYNC", &[Some(&id)]).await;
+        // Outside the session, which the query being killed holds.
+        let _ = self.send("KILL QUERY WHERE query_id = {p1:String} ASYNC", &[Some(&id)], false).await;
     }
 }
 
@@ -520,7 +558,7 @@ impl Driver for ClickHouse {
         Stopper::Notify(self.cancel.clone())
     }
 
-    // The driver keeps no session, so these aren't sent: it sends `readonly=1` with each request while on, and the
+    // These aren't sent (see READONLY_ON): the driver sends `readonly=1` with each request while on, and the
     // server then refuses every write.
     fn read_only_bounds(&self) -> (&'static str, &'static str) {
         (READONLY_ON, READONLY_OFF)
@@ -664,6 +702,53 @@ mod tests {
         create view adults as select id, age from pets where age > 2; \
         insert into owners values (1, 'ann'), (2, 'bob'); \
         insert into pets (id, owner, age, tags) values (1, 1, 3, ['a']), (2, 2, 1, [])";
+
+    #[test]
+    #[ignore = "needs a local ClickHouse (scripts/test-env.sh up); creates and drops a scratch database"]
+    fn local_clickhouse_session_should_keep_settings_and_temporary_tables_between_calls() {
+        tauri::async_runtime::block_on(async {
+            let mut c = local("tm_session").await;
+            c.query("SET max_threads = 3").await.unwrap();
+            c.query("create temporary table scratch (n UInt8)").await.unwrap();
+            c.query("insert into scratch values (7)").await.unwrap();
+            let r = c.query("select getSetting('max_threads'), (select n from scratch)").await.unwrap();
+            assert_eq!(r.rows[0], [Some("3".into()), Some("7".into())]);
+            // A row limit hangs up mid-answer; the next statement waits for the session rather than failing.
+            let cut = c.query_limited("select number from system.numbers limit 5000000", Some(10)).await.unwrap();
+            assert!(cut.truncated);
+            assert_eq!(c.query("select 'after'").await.unwrap().rows[0][0].as_deref(), Some("after"));
+            drop_database(c, "tm_session").await;
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local ClickHouse (scripts/test-env.sh up); creates and drops function tm_twice"]
+    fn local_clickhouse_functions_should_list_open_replace_and_drop() {
+        use crate::catalog::ItemKind;
+        tauri::async_runtime::block_on(async {
+            let mut c = local("tm_functions").await;
+            c.query("drop function if exists tm_twice").await.unwrap();
+            let create = crate::objects::routine_template(c.dialect(), ItemKind::Function, "tm_twice").unwrap();
+            c.run_ddl(
+                &crate::objects::routine_sql(c.dialect(), ItemKind::Function, "tm_twice", &create, true).unwrap(),
+            )
+            .await
+            .unwrap();
+            assert!(c.items(false).await.unwrap().iter().any(|i| i.kind == ItemKind::Function && i.name == "tm_twice"));
+            let def = c.routine_definitions(ItemKind::Function, "tm_twice").await.unwrap().remove(0);
+            let changed = def.replace("x + 1", "x * 2");
+            c.run_ddl(
+                &crate::objects::routine_sql(c.dialect(), ItemKind::Function, "tm_twice", &changed, false).unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(c.query("select tm_twice(21)").await.unwrap().rows[0][0].as_deref(), Some("42"));
+            let drop = c.drop_item_sql(ItemKind::Function, "tm_twice", false).await.unwrap();
+            c.run_ddl(&drop).await.unwrap();
+            assert!(!c.items(false).await.unwrap().iter().any(|i| i.name == "tm_twice"));
+            drop_database(c, "tm_functions").await;
+        });
+    }
 
     #[test]
     #[ignore = "needs a local ClickHouse (scripts/test-env.sh up); creates and drops a scratch database"]

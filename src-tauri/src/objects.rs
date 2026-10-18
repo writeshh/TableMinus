@@ -96,6 +96,8 @@ pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, cre
         Dialect::Pg => Ok(vec![def]),
         Dialect::My if create => Ok(vec![def]),
         Dialect::My => Ok(vec![format!("DROP {what} IF EXISTS {}", d.ident(name)), def]),
+        // ClickHouse keeps the plain CREATE FUNCTION it was made with; saving replaces it.
+        Dialect::Click if kind == ItemKind::Function => Ok(vec![if create { def } else { or_replace(&def) }]),
         Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => Err(NO_ROUTINES),
     }
 }
@@ -112,6 +114,7 @@ pub fn routine_template(d: Dialect, kind: ItemKind, name: &str) -> Result<String
         }
         (Dialect::My, ItemKind::Function) => format!("CREATE FUNCTION {t}()\nRETURNS int\nDETERMINISTIC\nRETURN 1"),
         (Dialect::My, ItemKind::Procedure) => format!("CREATE PROCEDURE {t}()\nBEGIN\n  SELECT 1;\nEND"),
+        (Dialect::Click, ItemKind::Function) => format!("CREATE FUNCTION {t} AS (x) -> x + 1"),
         (Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click, _) => return Err(NO_ROUTINES),
         _ => return Err(Error::Invalid("not a function or procedure")),
     })
@@ -318,6 +321,13 @@ impl Conn {
                     .map(|mut r| vec![r.get_mut(2).and_then(Option::take)])
                     .collect()
             }
+            Dialect::Click if kind == ItemKind::Function => {
+                self.fetch_with(
+                    "select create_query from system.functions where origin = 'SQLUserDefined' and name = {p1:String}",
+                    &[Some(name)],
+                )
+                .await?
+            }
             Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
         };
         let pg = self.dialect() == Dialect::Pg;
@@ -394,6 +404,7 @@ impl Conn {
                             .collect()
                     }
                     Dialect::My => vec![format!("DROP {what} {t}")],
+                    Dialect::Click if kind == ItemKind::Function => vec![format!("DROP FUNCTION {t}")],
                     Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
                 }
             }
