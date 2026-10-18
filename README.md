@@ -2,7 +2,7 @@
 
 Personal database client for macOS and Linux: Tauri 2, a Rust core, a plain TypeScript UI.
 
-- Engines: PostgreSQL (`tokio-postgres`, TLS via the OS), MySQL/MariaDB (`mysql_async`), SQLite (`rusqlite`, bundled).
+- Engines: PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite (and SQLCipher), DuckDB, SQL Server, ClickHouse, libSQL/Turso, Cloudflare D1, Oracle, Redis, MongoDB, DynamoDB, Elasticsearch and Cassandra. Their depth varies; [TODO.md](TODO.md) §24 says what each does.
 - Connections live in `connections.json` in the app config folder; passwords live in the OS keychain (macOS Keychain, Linux Secret Service), never in the file.
 - Safe mode: any query that `sqlparser` can't prove read-only asks for confirmation before it runs.
 
@@ -32,15 +32,6 @@ Rust comes from `rustup`, Node from anywhere, at 22.12 or later (Vite's bundler 
 4. Make a GitHub release tagged `v<version>` with the `.dmg`, the update file, its `.sig` and `latest.json`. The app
    checks `releases/latest/download/latest.json`; beta versions go to a release tagged `beta`.
 
-## Layout
+## Layout and documentation
 
-| File | Role |
-| --- | --- |
-| `src-tauri/src/db.rs` | one `Conn` enum over the three engines: open, query (text cells), catalog, inline edits |
-| `src-tauri/src/error.rs` | the error type every command returns |
-| `src-tauri/src/readonly.rs` | safe-mode read-only check |
-| `src-tauri/src/store.rs` | saved connections + keychain passwords |
-| `src-tauri/src/lib.rs` | Tauri commands |
-| `src/main.ts`, `index.html` | sidebar, SQL box, results table |
-
-Roadmap: [TODO.md](TODO.md). Coding rules: [CLAUDE.md](CLAUDE.md).
+How the code fits together is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); start with [docs/README.md](docs/README.md) for everything else (requirements, decisions, current state, tasks). Roadmap and feature status: [TODO.md](TODO.md). Coding rules: [docs/CONVENTIONS.md](docs/CONVENTIONS.md). AI agents start at [AGENTS.md](AGENTS.md).
