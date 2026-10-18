@@ -184,10 +184,13 @@ const COCKROACH_SCHEMES = ["cockroachdb:", "cockroach:"];
  *  SQLite path or sqlite:// URL. */
 export function parseConnectionUrl(text: string): UrlConn {
   text = text.trim();
-  if (/^(\/|~)/.test(text) || /^sqlite:/i.test(text) || /\.(sqlite3?|db3?)$/i.test(text) && !text.includes("://")) {
-    const path = /^sqlite:/i.test(text) ? decodeURIComponent(text.replace(/^sqlite:(\/\/)?/i, "")) : text;
+  if (/^(\/|~)/.test(text) || /^(sqlite|duckdb):/i.test(text) || /\.(sqlite3?|db3?|duckdb|ddb)$/i.test(text) && !text.includes("://")) {
+    const scheme = /^(sqlite|duckdb):/i.exec(text)?.[1].toLowerCase();
+    const path = scheme ? decodeURIComponent(text.replace(/^(sqlite|duckdb):(\/\/)?/i, "")) : text;
     if (!path) throw "The URL has no file path.";
-    return { kind: "sqlite", url: path, name: path.split(/[\\/]/).pop() || path, password: "" };
+    // A bare path is DuckDB's when it ends in .duckdb or .ddb, else SQLite's.
+    const kind = scheme ?? (/\.(duckdb|ddb)$/i.test(path) ? "duckdb" : "sqlite");
+    return { kind, url: path, name: path.split(/[\\/]/).pop() || path, password: "" };
   }
   let u: URL;
   try {
@@ -196,7 +199,7 @@ export function parseConnectionUrl(text: string): UrlConn {
     throw "That isn't a connection URL, e.g. postgresql://user@localhost:5432/db.";
   }
   const kind = SCHEMES[u.protocol.slice(0, -1).toLowerCase()];
-  if (!kind) throw `TableMinus can't open ${u.protocol}// URLs; it opens postgresql://, cockroachdb://, mysql://, mariadb://, redis:// and SQLite files.`;
+  if (!kind) throw `TableMinus can't open ${u.protocol}// URLs; it opens postgresql://, cockroachdb://, mysql://, mariadb://, redis://, and SQLite and DuckDB files.`;
   if (!u.hostname) throw "The URL has no host.";
   const db = decodeURIComponent(u.pathname.replace(/^\//, ""));
   const ssl = u.searchParams.get("sslmode") ?? u.searchParams.get("ssl-mode") ?? u.searchParams.get("ssl_mode");
@@ -217,7 +220,7 @@ export function parseConnectionUrl(text: string): UrlConn {
 
 /** The URL to share a connection by; it never holds the password (the saved URL doesn't). */
 export function connectionUrl(c: { kind: string; url: string; tls?: { mode: string } }) {
-  if (c.kind === "sqlite") return `sqlite://${c.url}`;
+  if (c.kind === "sqlite" || c.kind === "duckdb") return `${c.kind}://${c.url}`;
   const u = new URL(c.url);
   if (c.kind === "mariadb") return c.url.replace(/^mysql:/, "mariadb:");
   if (c.kind === "postgres" && c.tls && c.tls.mode !== "prefer") u.searchParams.set("sslmode", c.tls.mode);

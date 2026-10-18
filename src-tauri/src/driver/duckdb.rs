@@ -327,6 +327,48 @@ mod tests {
     }
 
     #[test]
+    fn a_file_database_should_keep_its_tables_across_a_reopen_and_refuse_a_bad_path() {
+        let dir = std::env::temp_dir().join(format!("tableminus-{}-duck", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir); // a leftover from an earlier run, or nothing
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("kept.duckdb");
+        let path = path.to_str().unwrap();
+        tauri::async_runtime::block_on(async {
+            let (tls, options) = (Tls::default(), Options::default());
+            let open = || Conn::open(Engine::Duckdb, path, None, &tls, &options, None);
+            let mut c = open().await.unwrap();
+            c.query("create table t(a integer); insert into t values (7)").await.unwrap();
+            drop(c);
+            let mut again = open().await.unwrap();
+            assert_eq!(again.query("select a from t").await.unwrap().rows, [[Some("7".into())]]);
+            drop(again);
+            let missing = dir.join("no").join("such").join("dir.duckdb");
+            let bad =
+                Conn::open(Engine::Duckdb, missing.to_str().unwrap(), None, &Tls::default(), &Options::default(), None)
+                    .await;
+            assert!(bad.is_err());
+        });
+        let _ = std::fs::remove_dir_all(&dir); // best effort tidy-up
+    }
+
+    #[test]
+    fn a_stopper_should_interrupt_a_long_query_and_leave_the_connection_usable() {
+        tauri::async_runtime::block_on(async {
+            let mut c = memory().await;
+            let stopper = c.stopper();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                if let crate::driver::Stopper::Duck(handle) = stopper {
+                    handle.interrupt();
+                }
+            });
+            let err = c.query("select count(*) from range(100000000000) a, range(100000) b").await.unwrap_err();
+            assert!(err.to_string().to_uppercase().contains("INTERRUPT"), "{err}");
+            assert_eq!(c.query("select 1").await.unwrap().rows, [[Some("1".into())]]);
+        });
+    }
+
+    #[test]
     fn query_limited_should_cap_rows_and_say_so() {
         tauri::async_runtime::block_on(async {
             let mut c = memory().await;

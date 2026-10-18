@@ -72,10 +72,12 @@ const TYPES: Record<string, string[]> = {
   mysql: ["int", "bigint", "tinyint(1)", "smallint", "varchar(255)", "text", "longtext", "decimal(10,2)", "float", "double", "date",
     "datetime", "timestamp", "time", "json", "blob"],
   sqlite: ["INTEGER", "TEXT", "REAL", "NUMERIC", "BLOB"],
+  duckdb: ["INTEGER", "BIGINT", "SMALLINT", "VARCHAR", "BOOLEAN", "DECIMAL(18,3)", "DOUBLE", "REAL", "DATE", "TIMESTAMP",
+    "TIMESTAMPTZ", "TIME", "INTERVAL", "UUID", "JSON", "BLOB"],
 };
 const kind = () => (host.conn()?.kind === "mariadb" ? "mysql" : host.conn()?.kind ?? "postgres");
 /** Index methods to choose from when adding one (`ddl::IndexMethod`); SQLite has none. */
-const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [] };
+const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [], duckdb: [] };
 const blank = (s: string | null | undefined) => (s ?? "").trim() || null;
 const shortName = (table: string) => (kind() === "postgres" ? table.split(".").slice(1).join(".") || table : table);
 
@@ -253,8 +255,8 @@ export async function showStructure(out: HTMLElement, tabId: number, table: stri
         table, create, name: shortName(table), comment: "", engine: "", collation: "",
         columns: [{ ...newColumn(), name: "id", primary: true, nullable: false }], indexes: [], fks: [], checks: [], triggers: [],
       };
-      if (kind() !== "sqlite") d.columns[0].auto_increment = true;
-      d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER" }[kind()]!;
+      if (kind() !== "sqlite" && kind() !== "duckdb") d.columns[0].auto_increment = true; // DuckDB has none
+      d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER", duckdb: "BIGINT" }[kind()]!;
       drafts.set(tabId, d);
       host.pendingChanged(); // the footer was drawn before this draft existed
     } else {
@@ -300,7 +302,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
   // Columns
   const types = el("datalist", { id: `types-${tabId}` }, ...TYPES[kind()].map((t) => el("option", { value: t })));
   // A new table takes the drafted order; MySQL and SQLite can also move an existing table's columns.
-  const movable = d.create || kind() !== "postgres"; // MySQL moves them; SQLite rebuilds the table
+  const movable = d.create || (kind() !== "postgres" && kind() !== "duckdb"); // MySQL moves them; SQLite rebuilds the table
   const moveButtons = (c: ColumnDraft) => {
     const shown = d.columns.filter((x) => !x.dropped);
     const i = shown.indexOf(c);
@@ -398,7 +400,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
   const addCheck = addButton("Check", () => (d.checks.push({ name: `${d.name.trim()}_check${d.checks.length + 1}`, definition: "", added: true }), redraw()));
   view.append(section("Checks", ["Name", "Definition", ""], checkRows, addCheck));
 
-  view.append(triggerSection(d, redraw, touched));
+  if (kind() !== "duckdb") view.append(triggerSection(d, redraw, touched)); // DuckDB has no triggers
 
   out.replaceChildren(view);
 }
@@ -406,6 +408,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
 /** Postgres triggers call a function; MySQL and SQLite run statements (SQLite's go inside BEGIN … END). */
 const TRIGGER_BODY: Record<string, string> = {
   postgres: "Function to call, e.g. audit()", mysql: "Statement, e.g. SET NEW.updated_at = NOW()", sqlite: "Statements, e.g. UPDATE …;",
+  duckdb: "",
 };
 
 /** Triggers: an existing one can be dropped, or edited (dropped, and added again as changed); added ones are forms. */
@@ -719,12 +722,12 @@ export function tableMenu(table: string): MenuItem[] {
       const v = await ask(`Clone ${table}`, [{ key: "to", label: "Name of the copy", value: `${shortName(table)}_copy` }, { key: "data", label: "Copy the rows too", value: true }], "Clone…");
       if (v?.to) runOp(`Clone ${table}`, { op: "clone", table, to: v.to, data: v.data }, "Clone", false);
     }],
-    ["Reset auto-increment", () => runOp(`Reset auto-increment of ${table}`, { op: "reset_auto_increment", table }, "Reset", false)],
+    ...(k === "duckdb" ? [] : [["Reset auto-increment", () => runOp(`Reset auto-increment of ${table}`, { op: "reset_auto_increment", table }, "Reset", false)] as MenuItem]),
     "-",
     ["Truncate…", async () => {
       const fields: Field[] = k === "postgres"
         ? [{ key: "restart_identity", label: "Restart identity (auto-increment)", value: false }, { key: "cascade", label: "Cascade to tables that reference it", value: false }]
-        : k === "sqlite" ? [{ key: "restart_identity", label: "Reset auto-increment", value: false }] : fkField;
+        : k === "sqlite" ? [{ key: "restart_identity", label: "Reset auto-increment", value: false }] : k === "duckdb" ? [] : fkField;
       const v = fields.length ? await ask(`Truncate ${table}`, fields, "Truncate…") : {};
       if (v) runOp(`Truncate ${table}`, { op: "truncate", table, cascade: !!v.cascade, restart_identity: !!v.restart_identity, ignore_fk: !!v.ignore_fk }, "Delete all rows", true);
     }],

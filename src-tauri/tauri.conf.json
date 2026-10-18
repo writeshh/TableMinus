@@ -51,6 +51,15 @@
       },
       {
         "ext": [
+          "duckdb",
+          "ddb"
+        ],
+        "name": "DuckDB database",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
           "sql"
         ],
         "name": "SQL script",

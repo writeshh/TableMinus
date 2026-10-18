@@ -103,6 +103,7 @@ const ENGINES: Engine[] = [
   { id: "mariadb", kind: "mariadb", label: "MariaDB", mono: "Ma", color: "var(--pink)",
     defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
   { id: "sqlite", kind: "sqlite", label: "SQLite", mono: "Sl", color: "var(--yellow)" },
+  { id: "duckdb", kind: "duckdb", label: "DuckDB", mono: "Dk", color: "var(--accent)" },
   { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
@@ -164,8 +165,11 @@ function colorDot(c: Saved) {
   return dot;
 }
 
+/** SQLite and DuckDB are files: no host, port, user or tunnel. */
+const isFile = (kind: string) => kind === "sqlite" || kind === "duckdb";
+
 function hostOf(c: Saved) {
-  if (c.kind === "sqlite") return c.url;
+  if (isFile(c.kind)) return c.url;
   const via = c.ssh ? ` via ${c.ssh.host}` : "";
   try {
     const u = new URL(c.url);
@@ -436,8 +440,10 @@ function openEditor(id: string, existing?: Saved, fresh = false, password = "") 
   editingFlavor = e.flavor;
   form.reset();
   $("editor-title").textContent = `${e.label} connection`;
-  form.querySelector<HTMLElement>(".net")!.hidden = kind === "sqlite";
-  form.querySelector<HTMLElement>(".file")!.hidden = kind !== "sqlite";
+  form.querySelector<HTMLElement>(".net")!.hidden = isFile(kind);
+  form.querySelector<HTMLElement>(".file")!.hidden = !isFile(kind);
+  form.querySelector<HTMLElement>(".passphrase")!.hidden = kind !== "sqlite"; // only SQLCipher has one
+  field("path").placeholder = kind === "duckdb" ? "/path/to/database.duckdb, or :memory:" : "/path/to/database.sqlite";
   setStatus("form-status", "");
   field("via").value = existing?.ssh ? "ssh" : "";
   showSsh();
@@ -487,7 +493,7 @@ function openEditor(id: string, existing?: Saved, fresh = false, password = "") 
       field("ssh_user").value = existing.ssh.user;
       field("ssh_key").value = existing.ssh.key;
     }
-    if (kind === "sqlite") field("path").value = existing.url;
+    if (isFile(kind)) field("path").value = existing.url;
     else {
       // Only fill fields that differ from the default, so placeholders keep meaning "default".
       const u = new URL(existing.url);
@@ -540,7 +546,7 @@ function formOptions(): Options | undefined {
 }
 
 function formTls(): Tls | undefined {
-  if (editingKind === "sqlite") return undefined;
+  if (isFile(editingKind)) return undefined;
   const tls = { mode: field("ssl").value, ca: field("ssl_ca").value.trim(), cert: field("ssl_cert").value.trim(), key: field("ssl_key").value.trim() };
   if (tls.mode === "disable") Object.assign(tls, { ca: "", cert: "", key: "" });
   if (!tls.cert !== !tls.key) throw "A client certificate needs both the certificate file and its key file.";
@@ -557,7 +563,7 @@ for (const b of form.querySelectorAll<HTMLButtonElement>("button[data-pick]")) {
   };
 }
 
-const overSsh = () => editingKind !== "sqlite" && field("via").value === "ssh";
+const overSsh = () => !isFile(editingKind) && field("via").value === "ssh";
 function showSsh() {
   form.querySelector<HTMLElement>(".ssh")!.hidden = !overSsh();
 }
@@ -576,7 +582,7 @@ function formSsh(): Ssh | undefined {
 function formToSaved(): Saved {
   const e = engine(editingFlavor ?? editingKind);
   let url: string;
-  if (editingKind === "sqlite") {
+  if (isFile(editingKind)) {
     url = field("path").value.trim();
     if (!url) throw "Choose a database file path.";
   } else {
@@ -593,7 +599,7 @@ function formToSaved(): Saved {
   if (name !== editing?.name && saved.some((c) => c.name === name)) throw `A connection named "${name}" already exists.`;
   const conn: Saved = { name, kind: editingKind, url, tag: field("tag").value, safety: field("safety").value as Safety };
   // Defaults are left out, as the backend writes them.
-  const mode = editingKind === "sqlite" ? "keychain" : (field("password_mode").value as Saved["password_mode"]);
+  const mode = isFile(editingKind) ? "keychain" : (field("password_mode").value as Saved["password_mode"]);
   if (mode !== "keychain") conn.password_mode = mode;
   if (field("color").value) conn.color = field("color").value;
   if (field("group").value) conn.group = field("group").value;
@@ -742,7 +748,7 @@ async function showConnectionInfo() {
       ...row("Connection", active.name),
       ...row("Server", i.server),
       ...row("Driver", i.driver),
-      ...row("Encryption", i.cipher ? i.cipher : active.kind === "sqlite" ? "Local file" : "Not encrypted"),
+      ...row("Encryption", i.cipher ? i.cipher : isFile(active.kind) ? "Local file" : "Not encrypted"),
       ...(i.ssh ? row("Via SSH", i.ssh) : []),
     );
   } catch (e) {
@@ -2038,7 +2044,7 @@ type MenuItem = [string, () => void] | "-";
 /** Backup, restore and the process list, on a launcher row's right-click and the workspace's Tools button. */
 function toolsMenu(c: Saved, database?: string | null): MenuItem[] {
   const items: MenuItem[] = dumps(c) ? [["Backup…", () => openBackup(c, database)], ["Restore…", () => openRestore(c, database, confirmDialog)]] : [];
-  if (c.kind !== "sqlite") items.push(...(items.length ? ["-" as const] : []), ["Processes", () => openProcesses(c, confirmDialog)]);
+  if (!isFile(c.kind)) items.push(...(items.length ? ["-" as const] : []), ["Processes", () => openProcesses(c, confirmDialog)]);
   return items;
 }
 $("tools-button").onclick = () => {
@@ -3549,13 +3555,13 @@ function anythingItems(): AnythingItem[] {
 
 const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
-const dumps = (c: Saved) => c.flavor !== "cockroach";
-const managesUsers = (c: Saved) => c.kind !== "sqlite" && c.flavor !== "cockroach";
+const dumps = (c: Saved) => c.flavor !== "cockroach" && c.kind !== "duckdb";
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach";
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },
   { id: "diagram", label: "Show Diagram", menu: "Tools", when: hasTools, run: () => showDiagram() },
-  { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && active!.kind !== "sqlite",
+  { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && !isFile(active!.kind),
     sep: true, run: () => openProcesses(active!, confirmDialog) },
   { id: "users", label: "Users…", menu: "Tools", when: () => hasTools() && managesUsers(active!), run: () => showUsers() },
   { id: "metrics-board", label: "Metrics Board", menu: "Tools", sep: true, when: hasTools, run: () => openBoard(boardCtx()) },

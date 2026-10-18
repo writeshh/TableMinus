@@ -10,10 +10,11 @@ import { statementAt, splitStatements, type Dialect, type Statement } from "./st
 import { formatDialect, mariadb, mysql, postgresql, sqlite } from "sql-formatter";
 import { byLine, transformText, type Transform } from "./transforms";
 
-const FORMAT_DIALECTS = { postgres: postgresql, mysql, mariadb, sqlite } as const;
+// DuckDB's SQL follows PostgreSQL's, so it borrows its highlighting and formatting.
+const FORMAT_DIALECTS = { postgres: postgresql, mysql, mariadb, sqlite, duckdb: postgresql } as const;
 export type FormatStyle = "standard" | "tabularLeft" | "tabularRight";
 
-const DIALECTS = { postgres: PostgreSQL, mysql: MySQL, mariadb: MariaSQL, sqlite: SQLite } as const;
+const DIALECTS = { postgres: PostgreSQL, mysql: MySQL, mariadb: MariaSQL, sqlite: SQLite, duckdb: PostgreSQL } as const;
 
 // Colours are CSS variables (see styles.css) so they follow the app's light/dark theme.
 const highlight = HighlightStyle.define([

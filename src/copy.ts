@@ -2,7 +2,7 @@
 // Pure functions, so they're tested on their own (copy.test.ts).
 
 export type Cells = { columns: string[]; rows: (string | null)[][] };
-export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite";
+export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb";
 
 /** Plain text: one cell as it is; several as tab-separated lines, quoting any value that holds a tab, newline or quote. */
 export function plain(c: Cells): string {
