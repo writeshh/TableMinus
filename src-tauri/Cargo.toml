@@ -61,6 +61,10 @@ argon2 = "0.6"
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 # Plugins run in QuickJS, with no file, network or app access but what plugins.rs gives them.
 rquickjs = "0.14"
+tokio-util = { version = "0.7.20", features = ["compat"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+tiberius = { version = "0.13.0", default-features = false, features = ["tds73", "rustls", "rust_decimal", "chrono"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 robius-authentication = "0.3.1"

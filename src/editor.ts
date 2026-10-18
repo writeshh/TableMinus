@@ -4,17 +4,17 @@ import { Decoration, ViewPlugin, highlightWhitespace, keymap, placeholder, type 
 import { indentLess, indentMore, indentWithTab } from "@codemirror/commands";
 import { acceptCompletion, autocompletion, completionKeymap, type CompletionContext } from "@codemirror/autocomplete";
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
-import { MariaSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
+import { MSSQL, MariaSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
 import { highlightCode, tags as t } from "@lezer/highlight";
 import { statementAt, splitStatements, type Dialect, type Statement } from "./statements";
-import { formatDialect, mariadb, mysql, postgresql, sqlite } from "sql-formatter";
+import { formatDialect, mariadb, mysql, postgresql, sqlite, transactsql } from "sql-formatter";
 import { byLine, transformText, type Transform } from "./transforms";
 
 // DuckDB's SQL follows PostgreSQL's, so it borrows its highlighting and formatting.
-const FORMAT_DIALECTS = { postgres: postgresql, mysql, mariadb, sqlite, duckdb: postgresql } as const;
+const FORMAT_DIALECTS = { postgres: postgresql, mysql, mariadb, sqlite, duckdb: postgresql, mssql: transactsql } as const;
 export type FormatStyle = "standard" | "tabularLeft" | "tabularRight";
 
-const DIALECTS = { postgres: PostgreSQL, mysql: MySQL, mariadb: MariaSQL, sqlite: SQLite, duckdb: PostgreSQL } as const;
+const DIALECTS = { postgres: PostgreSQL, mysql: MySQL, mariadb: MariaSQL, sqlite: SQLite, duckdb: PostgreSQL, mssql: MSSQL } as const;
 
 // Colours are CSS variables (see styles.css) so they follow the app's light/dark theme.
 const highlight = HighlightStyle.define([

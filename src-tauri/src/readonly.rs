@@ -2,7 +2,7 @@
 
 use crate::db::Engine;
 use sqlparser::ast::{Expr, ObjectName, ObjectNamePart, Select, Statement, TableFactor, Visit, Visitor};
-use sqlparser::dialect::{Dialect, DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::dialect::{Dialect, DuckDbDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 use std::ops::ControlFlow;
 
@@ -75,6 +75,7 @@ pub fn is_read_only(engine: Engine, sql: &str) -> bool {
         Engine::Mysql | Engine::Mariadb => &MySqlDialect {},
         Engine::Sqlite => &SQLiteDialect {},
         Engine::Duckdb => &DuckDbDialect {},
+        Engine::Mssql => &MsSqlDialect {},
         // Redis commands aren't SQL; redis.rs has its own list.
         Engine::Redis => return false,
     };
@@ -181,11 +182,12 @@ mod tests {
         use crate::db::{Dialect, Engine};
         use proptest::prelude::*;
 
-        const ENGINES: [(Engine, Dialect); 4] = [
+        const ENGINES: [(Engine, Dialect); 5] = [
             (Engine::Postgres, Dialect::Pg),
             (Engine::Mysql, Dialect::My),
             (Engine::Sqlite, Dialect::Lite),
             (Engine::Duckdb, Dialect::Duck),
+            (Engine::Mssql, Dialect::Mssql),
         ];
         const WRITES: [&str; 5] = [
             "DELETE FROM {}",

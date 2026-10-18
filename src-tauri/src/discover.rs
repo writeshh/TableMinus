@@ -26,7 +26,7 @@ const HOST: &str = "127.0.0.1";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Inclusive ranges: the usual ports, and the few above them that `DBngin` and a second Homebrew install move to.
-const USUAL_PORTS: [(u16, u16); 4] = [(5432, 5440), (3306, 3310), (6379, 6382), (26257, 26258)];
+const USUAL_PORTS: [(u16, u16); 5] = [(5432, 5440), (3306, 3310), (6379, 6382), (26257, 26258), (1433, 1434)];
 const COCKROACH_PORT: u16 = 26257;
 /// A busy Docker host publishes a lot; this many are plenty to look at.
 const MAX_DOCKER_PORTS: usize = 100;
@@ -41,6 +41,13 @@ const DOCKER: [&str; 4] = [
 /// Postgres's request to start TLS (length 8, code 80877103); any Postgres server answers `S` or `N`.
 const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 4, 210, 22, 47];
 
+/// A TDS pre-login message (the start of every `SQL Server` connection), which a server answers with a type 4 packet.
+const TDS_PRELOGIN: [u8; 47] = [
+    0x12, 0x01, 0x00, 0x2f, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x1a, 0x00, 0x06, 0x01, 0x00, 0x20, 0x00, 0x01, 0x02,
+    0x00, 0x21, 0x00, 0x01, 0x03, 0x00, 0x22, 0x00, 0x04, 0x04, 0x00, 0x26, 0x00, 0x01, 0xff, 0x09, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
 /// What speaks on a port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Wire {
@@ -49,6 +56,7 @@ enum Wire {
     Mysql(bool),
     /// Whether it wants a password before answering.
     Redis(bool),
+    SqlServer,
 }
 
 /// A server found, ready to save under a free name.
@@ -108,6 +116,10 @@ async fn probe(port: u16) -> Option<Wire> {
     if let Some(auth) = redis_reply(&buf[..n]) {
         return Some(Wire::Redis(auth));
     }
+    let n = exchange(port, Some(&TDS_PRELOGIN), &mut buf).await?;
+    if buf[..n].first() == Some(&0x04) {
+        return Some(Wire::SqlServer);
+    }
     let n = exchange(port, Some(&SSL_REQUEST), &mut buf).await?;
     matches!(buf[..n].first(), Some(b'S' | b'N')).then_some(Wire::Postgres)
 }
@@ -154,6 +166,7 @@ fn label(kind: Engine, flavor: Option<Flavor>) -> &'static str {
         (Engine::Redis, _) => "Redis",
         (Engine::Sqlite, _) => "SQLite",
         (Engine::Duckdb, _) => "DuckDB",
+        (Engine::Mssql, _) => "SQL Server",
     }
 }
 
@@ -258,6 +271,7 @@ async fn found_on(port: u16, container: Option<String>) -> Option<Found> {
             try_sql(port, kind, "mysql", &["root".to_string()]).await
         }
         Wire::Redis(auth) => try_redis(port, auth).await,
+        Wire::SqlServer => try_sql(port, Engine::Mssql, "mssql", &["sa".to_string()]).await,
     };
     let (conn, detail) = tried.ok()?;
     Some(Found { conn: named(conn, port, container.as_deref()), detail })
@@ -277,6 +291,7 @@ fn local_port(c: &Saved) -> Option<u16> {
         Engine::Postgres => Some(5432),
         Engine::Mysql | Engine::Mariadb => Some(3306),
         Engine::Redis => Some(6379),
+        Engine::Mssql => Some(1433),
         Engine::Sqlite | Engine::Duckdb => None,
     })
 }
@@ -502,11 +517,16 @@ mod tests {
         let redis =
             fake_server(vec![], |req| if req == b"PING\r\n" { b"+PONG\r\n".to_vec() } else { b"-ERR\r\n".to_vec() });
         let pg = fake_server(vec![], |req| if req == SSL_REQUEST { b"N".to_vec() } else { vec![] });
+        let sql_server =
+            fake_server(vec![], |req| if req.first() == Some(&0x12) { vec![0x04, 0x01, 0x00, 0x20] } else { vec![] });
         let other = fake_server(vec![], |_| b"HTTP/1.1 400 Bad Request\r\n".to_vec());
         let results = tauri::async_runtime::block_on(async {
-            (probe(mysql).await, probe(redis).await, probe(pg).await, probe(other).await)
+            (probe(mysql).await, probe(redis).await, probe(pg).await, probe(sql_server).await, probe(other).await)
         });
-        assert_eq!(results, (Some(Wire::Mysql(true)), Some(Wire::Redis(false)), Some(Wire::Postgres), None));
+        assert_eq!(
+            results,
+            (Some(Wire::Mysql(true)), Some(Wire::Redis(false)), Some(Wire::Postgres), Some(Wire::SqlServer), None)
+        );
     }
 
     #[test]
@@ -514,12 +534,12 @@ mod tests {
     fn local_servers_should_be_found_and_tried_with_the_defaults() {
         let found = tauri::async_runtime::block_on(async {
             let mut found = vec![];
-            for port in [5432, 3306, 6379, 26257] {
+            for port in [5432, 3306, 6379, 26257, 1433] {
                 found.extend(super::found_on(port, None).await);
             }
             found
         });
-        assert!(!found.is_empty(), "no server answered on 5432, 3306, 6379 or 26257");
+        assert!(!found.is_empty(), "no server answered on 5432, 3306, 6379, 26257 or 1433");
         for f in &found {
             println!(
                 "{} · {} · needs credentials: {} · {}",

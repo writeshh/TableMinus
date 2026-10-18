@@ -39,6 +39,19 @@ services:
     networks: [front, back]
     healthcheck: { test: ["CMD", "curl", "-sf", "http://localhost:8080/health?ready=1"], interval: 2s, retries: 40 }
 
+  # Reachable directly: 127.0.0.1:1433, user sa, password TestPass1!word. An amd64 image, so it runs emulated on Apple
+  # silicon and takes a minute to start.
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    environment: { ACCEPT_EULA: "Y", MSSQL_SA_PASSWORD: "TestPass1!word" }
+    ports: ["127.0.0.1:1433:1433"]
+    networks: [front, back]
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/1433'"]
+      interval: 5s
+      retries: 60
+
 networks:
   front: {}
   back: { internal: true }

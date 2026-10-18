@@ -104,10 +104,22 @@ pub struct Page {
     pub ids: Option<Vec<String>>,
 }
 
+/// `rows` (a SELECT) cut to `limit` rows from `offset`. SQL Server pages with OFFSET … FETCH, which needs an ORDER BY,
+/// so an unordered one gets the no-op `order by (select null)`.
+pub(crate) fn page_clause(d: Dialect, rows: &str, ordered: bool, limit: u32, offset: u64) -> String {
+    if d == Dialect::Mssql {
+        let order = if ordered { "" } else { " order by (select null)" };
+        format!("{rows}{order} offset {offset} rows fetch next {limit} rows only")
+    } else {
+        format!("{rows} limit {limit} offset {offset}")
+    }
+}
+
 /// A LIKE pattern matching `value` literally, with `!` as the escape character. `!` rather than backslash
 /// because MySQL reads backslashes in string literals differently depending on `sql_mode`.
 fn like_pattern(value: &str, prefix: bool, suffix: bool) -> String {
-    let escaped = value.replace('!', "!!").replace('%', "!%").replace('_', "!_");
+    // `[` too: SQL Server reads `[a-z]` in a pattern as a range.
+    let escaped = value.replace('!', "!!").replace('%', "!%").replace('_', "!_").replace('[', "![");
     format!("{}{escaped}{}", if prefix { "%" } else { "" }, if suffix { "%" } else { "" })
 }
 
@@ -120,6 +132,7 @@ impl Conn {
             Dialect::My => format!("cast({c} as char)"),
             Dialect::Lite => format!("cast({c} as text)"),
             Dialect::Duck => format!("cast({c} as varchar)"),
+            Dialect::Mssql => format!("cast({c} as nvarchar(max))"),
         }
     }
 
@@ -241,6 +254,7 @@ impl Conn {
         let select: Vec<String> = select.into_iter().chain(identity.map(String::from)).collect();
         let count = if self.dialect() == Dialect::Pg { "count(*)::text" } else { "count(*)" };
         Ok(Select {
+            ordered: !order.is_empty(),
             rows: format!("select {} from {from}{filter}{order}", select.join(", ")),
             count: format!("select {count} from {from}{filter}"),
             columns,
@@ -254,7 +268,8 @@ impl Conn {
     pub async fn filter_sql(&mut self, req: &Browse) -> Result<String> {
         let (_, filter, order) = self.clauses(req, &mut Values::Shown).await?;
         let from = self.table_ident(&req.table);
-        Ok(format!("select * from {from}{filter}{order} limit {} offset {}", req.limit.min(MAX_PAGE), req.offset))
+        let rows = format!("select * from {from}{filter}{order}");
+        Ok(page_clause(self.dialect(), &rows, !order.is_empty(), req.limit.min(MAX_PAGE), req.offset))
     }
 
     /// The expression for a row's identity in `from`, if it has one: views and SQLite's WITHOUT ROWID tables
@@ -264,7 +279,7 @@ impl Conn {
             Dialect::Pg => "ctid::text",
             Dialect::Lite => "rowid",
             // DuckDB's rowid moves when rows are updated, so it can't name a row to edit later.
-            Dialect::My | Dialect::Duck => return None,
+            Dialect::My | Dialect::Duck | Dialect::Mssql => return None,
         };
         self.fetch_with(&format!("select {expr} from {from} limit 0"), &[]).await.ok().map(|_| expr)
     }
@@ -278,9 +293,7 @@ impl Conn {
     /// One page of `req.table`. Column names in filters and sorts must belong to the table; values are bound.
     pub async fn browse(&mut self, req: &Browse) -> Result<Page> {
         let s = self.select(req).await?;
-        // Limit and offset are numbers from the request type, so they're written in, not bound: MySQL refuses
-        // string parameters there.
-        let sql = format!("{} limit {} offset {}", s.rows, req.limit.min(MAX_PAGE), req.offset);
+        let sql = s.page(self.dialect(), req.limit.min(MAX_PAGE), req.offset);
         let mut rows = self.fetch_with(&sql, &s.bound()).await?;
         let ids = s.identity.then(|| rows.iter_mut().map(|r| r.pop().flatten().unwrap_or_default()).collect());
         let estimate = match req.estimate_over {
@@ -315,8 +328,10 @@ enum Values<'p> {
 /// The SQL for a browse request: see [`Conn::select`].
 pub(crate) struct Select {
     pub columns: Vec<String>,
-    /// Every matching row, sorted; add `limit … offset …` for a page.
+    /// Every matching row, sorted; [`Select::page`] makes a page of it.
     pub rows: String,
+    /// `rows` has an ORDER BY, which SQL Server's paging needs.
+    pub ordered: bool,
     pub count: String,
     pub params: Vec<String>,
     /// `rows` selects each row's identity after the columns.
@@ -324,6 +339,12 @@ pub(crate) struct Select {
 }
 
 impl Select {
+    /// `rows` cut to one page. Limit and offset are numbers from the request type, so they're written in, not
+    /// bound (MySQL refuses string parameters there). SQL Server pages with OFFSET … FETCH, which needs an ORDER BY.
+    pub fn page(&self, d: Dialect, limit: u32, offset: u64) -> String {
+        page_clause(d, &self.rows, self.ordered, limit, offset)
+    }
+
     pub fn bound(&self) -> Vec<Option<&str>> {
         self.params.iter().map(|p| Some(p.as_str())).collect()
     }

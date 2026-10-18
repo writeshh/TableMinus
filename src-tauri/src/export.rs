@@ -175,7 +175,7 @@ async fn plan(conn: &mut Conn, source: &Source) -> Result<Plan> {
     let s = conn.select(&request).await?;
     let (sql, total) = if page {
         let limit = request.limit.min(MAX_PAGE);
-        (format!("{} limit {limit} offset {}", s.rows, request.offset), None)
+        (s.page(conn.dialect(), limit, request.offset), None)
     } else {
         let total = conn.count(&s).await?;
         (s.rows, total)
@@ -262,8 +262,8 @@ async fn structure(conn: &mut Conn, table: &str) -> Result<String> {
             let sql = r.rows.into_iter().next().and_then(|mut row| row.pop().flatten());
             Ok(format!("{};\n", sql.ok_or(Error::Invalid("no such table"))?))
         }
-        // DuckDB keeps each CREATE statement (and its indexes), which `ddl` gathers.
-        Dialect::Duck => Ok(format!("{}\n", conn.ddl(table).await?)),
+        // SQL Server and DuckDB have the statement written (SQL Server) or kept (DuckDB), with the indexes, by `ddl`.
+        Dialect::Duck | Dialect::Mssql => Ok(format!("{}\n", conn.ddl(table).await?)),
         // ponytail: Postgres has no SHOW CREATE TABLE, so this is rebuilt from the columns: types, NOT NULL,
         // defaults and the primary key, without other constraints or indexes. Backups (pg_dump) copy everything.
         Dialect::Pg => {

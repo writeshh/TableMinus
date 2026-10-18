@@ -401,7 +401,7 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
             let plugins = conn.fetch_with(plugins, &[]).await?.into_iter().map(|mut r| text(&mut r, 0)).collect();
             Ok(Accounts { users, objects, plugins, mariadb, ..Accounts::default() })
         }
-        Engine::Sqlite | Engine::Duckdb => Err(Error::Invalid("SQLite and DuckDB have no users")),
+        Engine::Sqlite | Engine::Duckdb | Engine::Mssql => Err(Error::Invalid("this engine has no user manager here")),
         Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
     }
 }
@@ -718,7 +718,7 @@ pub async fn user_privileges(
             let params = [Some(user.as_str()), Some(host)];
             live.conn.fetch_with(&my_privileges_sql(), &[params, params, params].concat()).await
         }
-        Engine::Sqlite | Engine::Duckdb => Err(Error::Invalid("SQLite and DuckDB have no users")),
+        Engine::Sqlite | Engine::Duckdb | Engine::Mssql => Err(Error::Invalid("this engine has no user manager here")),
         Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
     };
     Ok(grants(live.check(r)?))

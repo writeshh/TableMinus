@@ -3,6 +3,7 @@
 //! variant, and the arms the compiler then points out where SQL differs.
 
 pub mod duckdb;
+pub mod mssql;
 pub mod mysql;
 pub mod postgres;
 pub mod sqlite;
@@ -18,6 +19,34 @@ use std::any::Any;
 /// engines (SQLite, `DuckDB`), whose calls run on the calling thread.
 pub(crate) fn blocking<T>(work: impl FnOnce() -> T) -> T {
     tokio::task::block_in_place(work)
+}
+
+/// Whether `sql` is blank or only comments, which `DuckDB` refuses to prepare.
+pub(crate) fn only_comments(sql: &str) -> bool {
+    let mut rest = sql.trim_start();
+    loop {
+        if let Some(r) = rest.strip_prefix("--") {
+            rest = r.split_once('\n').map_or("", |(_, after)| after).trim_start();
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            rest = r.split_once("*/").map_or("", |(_, after)| after).trim_start();
+        } else {
+            return rest.is_empty();
+        }
+    }
+}
+
+/// The statement's first word, lower case.
+pub(crate) fn first_word(sql: &str) -> String {
+    let mut rest = sql.trim_start();
+    while rest.starts_with("--") || rest.starts_with("/*") {
+        rest = if let Some(r) = rest.strip_prefix("--") {
+            r.split_once('\n').map_or("", |(_, a)| a)
+        } else {
+            rest[2..].split_once("*/").map_or("", |(_, a)| a)
+        }
+        .trim_start();
+    }
+    rest.split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or_default().to_ascii_lowercase()
 }
 
 /// The most results one call keeps; statements after that still run, but their results are dropped.
@@ -90,6 +119,8 @@ pub enum Stopper {
     Lite(rusqlite::InterruptHandle),
     /// Likewise `DuckDB`.
     Duck(std::sync::Arc<::duckdb::InterruptHandle>),
+    /// Wakes the running call, which cancels itself on the server (the connection stays usable).
+    Mssql(std::sync::Arc<tokio::sync::Notify>),
 }
 
 /// Receives a query result as it arrives: the column names once, then each row.

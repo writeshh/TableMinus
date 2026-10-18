@@ -81,6 +81,8 @@ pub enum Error {
     Sqlite(#[from] rusqlite::Error),
     #[error("DuckDB: {0}")]
     DuckDb(#[from] duckdb::Error),
+    #[error("SQL Server: {0}")]
+    Mssql(#[from] tiberius::error::Error),
     /// A `DuckDB` value Arrow couldn't turn into text.
     #[error("DuckDB: {0}")]
     Arrow(String),

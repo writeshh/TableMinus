@@ -65,7 +65,9 @@ pub fn view_sql(d: Dialect, view: &str, matview: bool, body: &str, create: bool)
     let body = statement(body, "the view needs a SELECT")?;
     let t = d.table_ident(view);
     let what = if matview { "MATERIALIZED VIEW" } else { "VIEW" };
-    let new = |replace: bool| format!("CREATE {}{what} {t} AS\n{body}", if replace { "OR REPLACE " } else { "" });
+    // SQL Server says CREATE OR ALTER, and takes it on views from 2016 SP1.
+    let or = if d == Dialect::Mssql { "OR ALTER " } else { "OR REPLACE " };
+    let new = |replace: bool| format!("CREATE {}{what} {t} AS\n{body}", if replace { or } else { "" });
     Ok(if create {
         vec![new(false)]
     } else if matview || d == Dialect::Lite {
@@ -94,7 +96,7 @@ pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, cre
         Dialect::Pg => Ok(vec![def]),
         Dialect::My if create => Ok(vec![def]),
         Dialect::My => Ok(vec![format!("DROP {what} IF EXISTS {}", d.ident(name)), def]),
-        Dialect::Lite | Dialect::Duck => Err(NO_ROUTINES),
+        Dialect::Lite | Dialect::Duck | Dialect::Mssql => Err(NO_ROUTINES),
     }
 }
 
@@ -110,7 +112,7 @@ pub fn routine_template(d: Dialect, kind: ItemKind, name: &str) -> Result<String
         }
         (Dialect::My, ItemKind::Function) => format!("CREATE FUNCTION {t}()\nRETURNS int\nDETERMINISTIC\nRETURN 1"),
         (Dialect::My, ItemKind::Procedure) => format!("CREATE PROCEDURE {t}()\nBEGIN\n  SELECT 1;\nEND"),
-        (Dialect::Lite | Dialect::Duck, _) => return Err(NO_ROUTINES),
+        (Dialect::Lite | Dialect::Duck | Dialect::Mssql, _) => return Err(NO_ROUTINES),
         _ => return Err(Error::Invalid("not a function or procedure")),
     })
 }
@@ -255,6 +257,11 @@ impl Conn {
             Dialect::Lite => {
                 self.fetch_with("select sql from sqlite_master where type = 'view' and name = $1", &[Some(view)]).await?
             }
+            Dialect::Mssql => {
+                let name = self.table_ident(view);
+                self.fetch_with("select definition from sys.sql_modules where object_id = object_id(@P1)", &[Some(&name)])
+                    .await?
+            }
             Dialect::Duck => {
                 let (schema, name) = view.split_once('.').unwrap_or(("main", view));
                 self.fetch_with(
@@ -266,8 +273,8 @@ impl Conn {
             }
         };
         let text = body.into_iter().next().and_then(|mut r| r.pop().flatten()).ok_or(Error::Invalid("no such view"))?;
-        // SQLite and DuckDB keep the whole CREATE VIEW statement.
-        let text = if matches!(self.dialect(), Dialect::Lite | Dialect::Duck) {
+        // SQLite, DuckDB and SQL Server keep the whole CREATE VIEW statement.
+        let text = if matches!(self.dialect(), Dialect::Lite | Dialect::Duck | Dialect::Mssql) {
             sqlite_view_body(&text).ok_or(Error::Invalid("can't find the SELECT in this view's definition"))?
         } else {
             &text
@@ -304,7 +311,7 @@ impl Conn {
                     .map(|mut r| vec![r.get_mut(2).and_then(Option::take)])
                     .collect()
             }
-            Dialect::Lite | Dialect::Duck => return Err(NO_ROUTINES),
+            Dialect::Lite | Dialect::Duck | Dialect::Mssql => return Err(NO_ROUTINES),
         };
         let pg = self.dialect() == Dialect::Pg;
         let defs: Vec<String> = rows
@@ -380,7 +387,7 @@ impl Conn {
                             .collect()
                     }
                     Dialect::My => vec![format!("DROP {what} {t}")],
-                    Dialect::Lite | Dialect::Duck => return Err(NO_ROUTINES),
+                    Dialect::Lite | Dialect::Duck | Dialect::Mssql => return Err(NO_ROUTINES),
                 }
             }
         })
@@ -393,9 +400,11 @@ impl Conn {
         let end = |list: Vec<String>| list.into_iter().map(|s| format!("{s};")).collect::<Vec<_>>().join("\n\n");
         match (kind, script) {
             // No columns needed, so it works on Postgres's materialized views too.
-            (None | Some(ItemKind::View | ItemKind::Matview), Script::SelectTop) => {
-                Ok(format!("SELECT * FROM {t} LIMIT 100;"))
-            }
+            (None | Some(ItemKind::View | ItemKind::Matview), Script::SelectTop) => Ok(if d == Dialect::Mssql {
+                format!("SELECT TOP 100 * FROM {t};")
+            } else {
+                format!("SELECT * FROM {t} LIMIT 100;")
+            }),
             (None, Script::Create) => self.ddl(name).await,
             (None, Script::Drop) => {
                 Ok(format!("DROP {} {t};", if self.is_view(name).await? { "VIEW" } else { "TABLE" }))

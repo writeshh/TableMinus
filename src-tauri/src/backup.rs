@@ -265,12 +265,16 @@ fn custom_flags(flags: &str) -> Result<Vec<&str>> {
     Ok(flags.split_whitespace().collect())
 }
 
-/// The password goes in the environment, never the command line, where other users' `ps` could see it.
-/// `DuckDB` is one file and has no dump tool of its own to run.
-fn no_duckdb_backup() -> Error {
-    Error::Invalid("DuckDB has no backup tool here: copy the database file, or run EXPORT DATABASE in a SQL tab")
+/// `DuckDB` is one file, and `SQL Server`'s backups are its own statements; neither has a dump tool to run.
+fn no_backup_tool(engine: Engine) -> Error {
+    Error::Invalid(if engine == Engine::Mssql {
+        "SQL Server has no backup tool here: run BACKUP DATABASE (and RESTORE DATABASE) in a SQL tab"
+    } else {
+        "DuckDB has no backup tool here: copy the database file, or run EXPORT DATABASE in a SQL tab"
+    })
 }
 
+/// The password goes in the environment, never the command line, where other users' `ps` could see it.
 fn password_env(cmd: &mut Command, engine: Engine, password: Option<&SecretString>) {
     let var = if engine == Engine::Postgres { "PGPASSWORD" } else { "MYSQL_PWD" };
     match password {
@@ -349,7 +353,7 @@ fn dump_command(
             cmd.args(flags).arg("--").arg(&r.database);
         }
         Engine::Sqlite => return Err(Error::Invalid("SQLite is backed up without client tools")),
-        Engine::Duckdb => return Err(no_duckdb_backup()),
+        Engine::Duckdb | Engine::Mssql => return Err(no_backup_tool(saved.kind)),
         Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
     }
     password_env(&mut cmd, saved.kind, password);
@@ -384,7 +388,7 @@ fn restore_command(
             cmd.args(my_args(saved, tunnel_port, tools.mariadb)?).args(flags).arg(format!("--database={database}"));
         }
         Engine::Sqlite => return Err(Error::Invalid("SQLite is restored without client tools")),
-        Engine::Duckdb => return Err(no_duckdb_backup()),
+        Engine::Duckdb | Engine::Mssql => return Err(no_backup_tool(saved.kind)),
         Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
     }
     password_env(&mut cmd, saved.kind, password);
@@ -746,8 +750,8 @@ pub struct Setup {
 #[tauri::command]
 pub async fn backup_setup(app: AppHandle, name: String) -> Result<Setup> {
     let mut live = crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?;
-    if live.saved.kind == Engine::Duckdb {
-        return Err(no_duckdb_backup());
+    if matches!(live.saved.kind, Engine::Duckdb | Engine::Mssql) {
+        return Err(no_backup_tool(live.saved.kind));
     }
     let server = live.conn.server_version().await?;
     let (tools, matched, problem) = if live.saved.kind == Engine::Sqlite {
@@ -785,8 +789,8 @@ async fn tools_for(live: &mut crate::Live, chosen: Option<&Path>) -> Result<Tool
 #[tauri::command]
 pub async fn start_backup(app: AppHandle, name: String, request: BackupRequest) -> Result<u64> {
     let mut live = crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?;
-    if live.saved.kind == Engine::Duckdb {
-        return Err(no_duckdb_backup());
+    if matches!(live.saved.kind, Engine::Duckdb | Engine::Mssql) {
+        return Err(no_backup_tool(live.saved.kind));
     }
     if live.saved.kind == Engine::Sqlite {
         let crate::Live { conn, password, .. } = live;
@@ -819,8 +823,8 @@ pub async fn start_restore(
     let mut live = crate::open_saved(&app.state::<crate::Open>(), &crate::dir(&app)?, &name).await?;
     let (level, password) = (live.saved.safety, live.password.as_ref());
     crate::safety::check(level, false, confirmed, unlock.as_ref(), password).await?;
-    if live.saved.kind == Engine::Duckdb {
-        return Err(no_duckdb_backup());
+    if matches!(live.saved.kind, Engine::Duckdb | Engine::Mssql) {
+        return Err(no_backup_tool(live.saved.kind));
     }
     if live.saved.kind == Engine::Sqlite {
         let crate::Live { conn, password, .. } = live;

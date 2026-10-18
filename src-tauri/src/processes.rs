@@ -22,6 +22,13 @@ const COCKROACH: &str = "select session_id as \"Session\", user_name as \"User\"
     application_name as \"Application\", status as \"State\", date_trunc('second', now() - active_query_start) as \"Running\", \
     coalesce(nullif(active_queries, ''), last_active_query) as \"Query\" from crdb_internal.cluster_sessions \
     where session_id <> (select * from [show session_id]) order by active_query_start nulls last";
+/// User sessions with the request each is running, minus this one. Needs `VIEW SERVER STATE`.
+pub(crate) const MSSQL: &str = "select s.session_id as [Session], s.login_name as [User], s.host_name as [Host], \
+    db_name(s.database_id) as [Database], s.status as [Status], r.command as [Command], \
+    r.total_elapsed_time / 1000 as [Running (s)], r.wait_type as [Waiting on], t.text as [Query] \
+    from sys.dm_exec_sessions s left join sys.dm_exec_requests r on r.session_id = s.session_id \
+    outer apply sys.dm_exec_sql_text(r.sql_handle) t \
+    where s.is_user_process = 1 and s.session_id <> @@spid order by r.total_elapsed_time desc";
 /// `SHOW FULL PROCESSLIST`, minus this connection.
 const MYSQL: &str = "select id as `Id`, user as `User`, host as `Host`, db as `Database`, command as `Command`, \
     time as `Time`, state as `State`, info as `Info` from information_schema.processlist \
@@ -39,6 +46,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Engine::Postgres => POSTGRES,
         Engine::Mysql | Engine::Mariadb => MYSQL,
         Engine::Sqlite | Engine::Duckdb => return Err(Error::Invalid("SQLite and DuckDB have no process list")),
+        Engine::Mssql => MSSQL,
         Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),
     };
     let r = live.conn.query(sql).await;
@@ -86,6 +94,13 @@ pub async fn kill_process(
             let id = number()?;
             let sql = if connection { format!("kill {id}") } else { format!("kill query {id}") };
             live.conn.query(&sql).await?;
+        }
+        Engine::Mssql => {
+            if !connection {
+                return Err(Error::Invalid("SQL Server can only end a whole session; use Kill"));
+            }
+            // KILL takes no parameters; `id` is a number, so formatting it in can't inject anything.
+            live.conn.query(&format!("kill {}", number()?)).await?;
         }
         Engine::Sqlite | Engine::Duckdb => return Err(Error::Invalid("SQLite and DuckDB have no process list")),
         Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),

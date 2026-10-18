@@ -2,7 +2,7 @@
 // Pure functions, so they're tested on their own (copy.test.ts).
 
 export type Cells = { columns: string[]; rows: (string | null)[][] };
-export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb";
+export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql";
 
 /** Plain text: one cell as it is; several as tab-separated lines, quoting any value that holds a tab, newline or quote. */
 export function plain(c: Cells): string {
@@ -25,6 +25,7 @@ export function markdown(c: Cells): string {
 }
 
 function ident(name: string, d: Dialect): string {
+  if (d === "mssql") return `[${name.replaceAll("]", "]]")}]`;
   return d === "mysql" || d === "mariadb" ? `\`${name.replaceAll("`", "``")}\`` : `"${name.replaceAll('"', '""')}"`;
 }
 
@@ -32,12 +33,13 @@ function ident(name: string, d: Dialect): string {
 function literal(v: string | null, d: Dialect): string {
   if (v === null) return "NULL";
   const s = v.replaceAll("'", "''");
+  if (d === "mssql") return `N'${s}'`;
   return `'${d === "mysql" || d === "mariadb" ? s.replaceAll("\\", "\\\\") : s}'`;
 }
 
 /** One INSERT per row. `table` is `schema.table` for Postgres. Values are quoted strings; the server casts them. */
 export function inserts(c: Cells, table: string, d: Dialect): string {
-  const target = (d === "postgres" ? table.split(".") : [table]).map((p) => ident(p, d)).join(".");
+  const target = (d === "postgres" || d === "mssql" ? table.split(".") : [table]).map((p) => ident(p, d)).join(".");
   const cols = c.columns.map((n) => ident(n, d)).join(", ");
   return c.rows.map((r) => `INSERT INTO ${target} (${cols}) VALUES (${r.map((v) => literal(v, d)).join(", ")});`).join("\n");
 }

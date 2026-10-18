@@ -117,6 +117,29 @@ const DUCK: &str = "select 'c', case when c.table_schema = 'main' then c.table_n
      from duckdb_constraints() k \
      where k.constraint_type = 'FOREIGN KEY' and k.database_name = current_database()";
 
+/// `SQL Server`: the current database's tables and views, then its foreign keys with their columns joined by `SEP`.
+const MSSQL: &str = "select 'c', case when c.table_schema = 'dbo' then c.table_name \
+       else c.table_schema + '.' + c.table_name end, c.column_name, c.data_type, \
+     case when exists (select 1 from information_schema.table_constraints t \
+       join information_schema.key_column_usage k on k.constraint_name = t.constraint_name \
+       and k.table_schema = t.table_schema and k.table_name = t.table_name \
+       where t.constraint_type = 'PRIMARY KEY' and t.table_schema = c.table_schema \
+       and t.table_name = c.table_name and k.column_name = c.column_name) then 'true' else 'false' end, \
+     case when c.is_nullable = 'YES' then 'true' else 'false' end, \
+     case when t.table_type = 'VIEW' then 'true' else 'false' end, cast(c.ordinal_position as varchar(10)) \
+     from information_schema.columns c join information_schema.tables t on t.table_schema = c.table_schema \
+       and t.table_name = c.table_name \
+     union all select 'f', case when ps.name = 'dbo' then pt.name else ps.name + '.' + pt.name end, fk.name, \
+     string_agg(pc.name, char(31)) within group (order by fkc.constraint_column_id), \
+     case when rs.name = 'dbo' then rt.name else rs.name + '.' + rt.name end, \
+     string_agg(rc.name, char(31)) within group (order by fkc.constraint_column_id), null, '0' \
+     from sys.foreign_keys fk join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id \
+     join sys.tables pt on pt.object_id = fk.parent_object_id join sys.schemas ps on ps.schema_id = pt.schema_id \
+     join sys.columns pc on pc.object_id = fkc.parent_object_id and pc.column_id = fkc.parent_column_id \
+     join sys.tables rt on rt.object_id = fk.referenced_object_id join sys.schemas rs on rs.schema_id = rt.schema_id \
+     join sys.columns rc on rc.object_id = fkc.referenced_object_id and rc.column_id = fkc.referenced_column_id \
+     group by ps.name, pt.name, fk.name, rs.name, rt.name";
+
 fn list(cell: Option<String>) -> Vec<String> {
     cell.map(|c| c.split(SEP).map(String::from).collect()).unwrap_or_default()
 }
@@ -162,6 +185,7 @@ impl Conn {
             Dialect::My => self.fetch_with(MY, &[]).await?,
             Dialect::Lite => self.fetch_with(LITE, &[]).await?,
             Dialect::Duck => self.fetch_with(DUCK, &[]).await?,
+            Dialect::Mssql => self.fetch_with(MSSQL, &[]).await?,
         };
         Ok(assemble(rows))
     }

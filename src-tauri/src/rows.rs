@@ -168,8 +168,8 @@ struct Target<'a> {
 fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: &mut Vec<Part<'a>>) -> Result<()> {
     let Target { key, id, original } = *t;
     if key.is_empty() && id.is_none() && !original.is_empty() {
-        if d == Dialect::Duck {
-            return Err(Error::Invalid("DuckDB rows have no stable identity; add a primary key to edit this table"));
+        if matches!(d, Dialect::Duck | Dialect::Mssql) {
+            return Err(Error::Invalid("this engine has no stable row identity; add a primary key to edit this table"));
         }
         if d != Dialect::My {
             return Err(Error::Invalid("only MySQL rows are matched on their values; this engine has row identities"));
@@ -206,7 +206,9 @@ fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: 
         let column = match d {
             Dialect::Pg => "ctid",
             Dialect::Lite => "rowid",
-            Dialect::My | Dialect::Duck => return Err(Error::Invalid("MySQL and DuckDB rows have no row identity")),
+            Dialect::My | Dialect::Duck | Dialect::Mssql => {
+                return Err(Error::Invalid("MySQL, DuckDB and SQL Server rows have no row identity"));
+            }
         };
         parts.push(Part::Sql(format!(" where {column} = ")));
         parts.push(Part::Param(Param::RowId(id)));
@@ -308,7 +310,7 @@ impl Statement<'_> {
                 }
                 Part::Param(p) => *p,
             };
-            let mark = if d == Dialect::My { "?".into() } else { format!("${}", params.len() + 1) };
+            let mark = d.param(params.len() + 1);
             let (mark, param) = match p {
                 Param::Text(v) => (mark, v.map(Cow::Borrowed)),
                 // SQLite compares a text parameter with rowid as text, which never matches.
@@ -410,7 +412,7 @@ impl Conn {
         let plan = plan(d, table, changes, &types)?;
         let files = read_files(&plan).await?; // before the transaction: a bad file fails before anything runs
         let statements = plan.iter().map(|s| s.bind(d, &files)).collect::<Result<Vec<_>>>()?;
-        self.query(if d == Dialect::My { "start transaction" } else { "begin" }).await?;
+        self.query(if d == Dialect::My { "start transaction" } else { "begin transaction" }).await?;
         let mut total = 0;
         for (n, ((sql, params), s)) in (1..).zip(statements.iter().zip(&plan)) {
             let params: Vec<Option<&str>> = params.iter().map(Option::as_deref).collect();
@@ -461,6 +463,9 @@ impl Conn {
             Dialect::My | Dialect::Duck => {
                 format!("select hex(substring({c}, 1, {HEX_PREVIEW})), octet_length({c})")
             }
+            Dialect::Mssql => {
+                format!("select convert(varchar(max), substring({c}, 1, {HEX_PREVIEW}), 2), datalength({c})")
+            }
             Dialect::Lite => format!("select hex(substr({c}, 1, {HEX_PREVIEW})), length(cast({c} as blob))"),
         };
         let mut parts = vec![Part::Sql(format!("{select} from {}", d.table_ident(table)))];
@@ -508,7 +513,7 @@ impl Conn {
                     }
                 }
             }
-            Dialect::Lite | Dialect::Duck => {}
+            Dialect::Lite | Dialect::Duck | Dialect::Mssql => {}
         }
         Ok(out)
     }

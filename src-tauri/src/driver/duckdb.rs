@@ -2,7 +2,7 @@
 //! `PostgreSQL`-flavoured SQL and returns Arrow batches, which Arrow's own formatter turns into text cells (lists,
 //! structs and maps included).
 
-use super::{Driver, Results, RowSink, Stopper, blocking};
+use super::{Driver, Results, RowSink, Stopper, blocking, first_word, only_comments};
 use crate::db::Dialect;
 use crate::error::{Error, Result};
 use async_trait::async_trait;
@@ -64,20 +64,6 @@ pub fn split_statements(sql: &str) -> Vec<&str> {
     out.into_iter().filter(|s| !only_comments(s)).collect()
 }
 
-/// Whether `sql` is blank or only comments, which `DuckDB` refuses to prepare.
-fn only_comments(sql: &str) -> bool {
-    let mut rest = sql.trim_start();
-    loop {
-        if let Some(r) = rest.strip_prefix("--") {
-            rest = r.split_once('\n').map_or("", |(_, after)| after).trim_start();
-        } else if let Some(r) = rest.strip_prefix("/*") {
-            rest = r.split_once("*/").map_or("", |(_, after)| after).trim_start();
-        } else {
-            return rest.is_empty();
-        }
-    }
-}
-
 /// Statements that change something rather than ask: `DuckDB` answers them with one `Count` (rows changed) or `Success`
 /// column, which is the statement's outcome, not a result to show.
 fn is_command(first_word: &str) -> bool {
@@ -110,20 +96,6 @@ fn is_command(first_word: &str) -> bool {
             | "export"
             | "import"
     )
-}
-
-/// The statement's first word, lower case.
-fn first_word(sql: &str) -> String {
-    let mut rest = sql.trim_start();
-    while rest.starts_with("--") || rest.starts_with("/*") {
-        rest = if let Some(r) = rest.strip_prefix("--") {
-            r.split_once('\n').map_or("", |(_, a)| a)
-        } else {
-            rest[2..].split_once("*/").map_or("", |(_, a)| a)
-        }
-        .trim_start();
-    }
-    rest.split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or_default().to_ascii_lowercase()
 }
 
 fn format_options() -> FormatOptions<'static> {

@@ -99,6 +99,10 @@ impl Conn {
                  where routine_schema = database() order by 1, 2"
                 .into(),
             Dialect::Lite => "select 'view', name from sqlite_master where type = 'view' order by 2".into(),
+            // Views only: SQL Server's routines and sequences have no editors here either.
+            Dialect::Mssql => "select 'view', case when s.name = 'dbo' then v.name else s.name + '.' + v.name end \
+                 from sys.views v join sys.schemas s on s.schema_id = v.schema_id where v.is_ms_shipped = 0 order by 2"
+                .into(),
             // Views only: DuckDB's sequences and macros have no editors here.
             Dialect::Duck => "select 'view', case when schema_name = 'main' then view_name \
                  else schema_name || '.' || view_name end from duckdb_views() \
@@ -141,7 +145,7 @@ impl Conn {
         };
         let s = self.select(&req).await?;
         let count = if self.dialect() == Dialect::Pg { "count(*)::text" } else { "count(*)" };
-        let sql = format!("select {count} from ({} limit {SEARCH_CAP}) found", s.rows);
+        let sql = format!("select {count} from ({}) found", s.page(self.dialect(), SEARCH_CAP, 0));
         let r = self.fetch_with(&sql, &s.bound()).await?;
         Ok(r.first().and_then(|row| row.first().cloned().flatten()).and_then(|n| n.parse().ok()).unwrap_or(0))
     }
@@ -178,6 +182,22 @@ impl Conn {
                 // InnoDB's table_rows is an estimate too.
                 let innodb = row.get(3).cloned().flatten().is_some_and(|t| t == "BASE TABLE");
                 Ok(Overview { rows: num(0), estimated: innodb, bytes: num(1), created })
+            }
+            Dialect::Mssql => {
+                let name = self.table_ident(table);
+                let r = self
+                    .fetch_with(
+                        "select (select sum(rows) from sys.partitions where object_id = object_id(@P1) \
+                           and index_id in (0, 1)), \
+                         (select sum(a.total_pages) * 8192 from sys.allocation_units a \
+                           join sys.partitions p on p.partition_id = a.container_id where p.object_id = object_id(@P1)), \
+                         (select convert(varchar(30), create_date, 120) from sys.objects where object_id = object_id(@P1))",
+                        &[Some(&name)],
+                    )
+                    .await?;
+                let row = r.into_iter().next().ok_or(Error::Invalid("no such table"))?;
+                let num = |i: usize| row.get(i).cloned().flatten().and_then(|n| n.parse::<u64>().ok());
+                Ok(Overview { rows: num(0), estimated: false, bytes: num(1), created: row.get(2).cloned().flatten() })
             }
             Dialect::Lite | Dialect::Duck => {
                 let count = format!("select count(*) from {}", self.table_ident(table));

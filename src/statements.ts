@@ -2,7 +2,7 @@
 // outside strings, quoted names, comments and Postgres dollar quotes; and finding the one table a plain SELECT
 // reads. Pure, so it's tested on its own (statements.test.ts).
 
-export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb";
+export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql";
 export type Statement = { from: number; to: number; text: string };
 
 /** The stretches of `sql` that are code: everything except strings, quoted names, comments and dollar quotes. */

@@ -335,7 +335,7 @@ pub async fn run(conn: &mut Conn, imp: &Import, job: &Job) -> Result<u64> {
         }
     }
     let insert = Insert::new(conn, imp, &columns).await?;
-    conn.query(if conn.dialect() == Dialect::My { "start transaction" } else { "begin" }).await?;
+    conn.query(if conn.dialect() == Dialect::My { "start transaction" } else { "begin transaction" }).await?;
     let result = match &imp.format {
         FileFormat::Csv(f) => import_csv(conn, imp, *f, &picked, &insert, job).await,
         FileFormat::Json => import_json(conn, imp, &picked, &insert, job).await,

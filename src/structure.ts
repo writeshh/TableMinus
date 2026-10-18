@@ -72,12 +72,14 @@ const TYPES: Record<string, string[]> = {
   mysql: ["int", "bigint", "tinyint(1)", "smallint", "varchar(255)", "text", "longtext", "decimal(10,2)", "float", "double", "date",
     "datetime", "timestamp", "time", "json", "blob"],
   sqlite: ["INTEGER", "TEXT", "REAL", "NUMERIC", "BLOB"],
+  mssql: ["int", "bigint", "smallint", "tinyint", "bit", "nvarchar(255)", "nvarchar(max)", "varchar(255)", "decimal(18,2)", "float", "real",
+    "date", "datetime2", "datetimeoffset", "time", "uniqueidentifier", "varbinary(max)", "xml"],
   duckdb: ["INTEGER", "BIGINT", "SMALLINT", "VARCHAR", "BOOLEAN", "DECIMAL(18,3)", "DOUBLE", "REAL", "DATE", "TIMESTAMP",
     "TIMESTAMPTZ", "TIME", "INTERVAL", "UUID", "JSON", "BLOB"],
 };
 const kind = () => (host.conn()?.kind === "mariadb" ? "mysql" : host.conn()?.kind ?? "postgres");
 /** Index methods to choose from when adding one (`ddl::IndexMethod`); SQLite has none. */
-const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [], duckdb: [] };
+const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [], duckdb: [], mssql: [] };
 const blank = (s: string | null | undefined) => (s ?? "").trim() || null;
 const shortName = (table: string) => (kind() === "postgres" ? table.split(".").slice(1).join(".") || table : table);
 
@@ -256,7 +258,7 @@ export async function showStructure(out: HTMLElement, tabId: number, table: stri
         columns: [{ ...newColumn(), name: "id", primary: true, nullable: false }], indexes: [], fks: [], checks: [], triggers: [],
       };
       if (kind() !== "sqlite" && kind() !== "duckdb") d.columns[0].auto_increment = true; // DuckDB has none
-      d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER", duckdb: "BIGINT" }[kind()]!;
+      d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER", duckdb: "BIGINT", mssql: "bigint" }[kind()]!;
       drafts.set(tabId, d);
       host.pendingChanged(); // the footer was drawn before this draft existed
     } else {
@@ -277,7 +279,8 @@ export async function showStructure(out: HTMLElement, tabId: number, table: stri
 function draw(out: HTMLElement, tabId: number, d: Draft) {
   const redraw = () => (draw(out, tabId, d), host.pendingChanged());
   const touched = () => host.pendingChanged();
-  const lite = kind() === "sqlite";
+  // SQLite has no comments, and SQL Server's are extended properties that are set in a SQL tab.
+  const lite = kind() === "sqlite" || kind() === "mssql";
   const view = el("div", { className: "structure" });
   if (d.error) view.append(el("p", { className: "error-text structure-error", textContent: d.error }));
 
@@ -302,7 +305,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
   // Columns
   const types = el("datalist", { id: `types-${tabId}` }, ...TYPES[kind()].map((t) => el("option", { value: t })));
   // A new table takes the drafted order; MySQL and SQLite can also move an existing table's columns.
-  const movable = d.create || (kind() !== "postgres" && kind() !== "duckdb"); // MySQL moves them; SQLite rebuilds the table
+  const movable = d.create || (kind() !== "postgres" && kind() !== "duckdb" && kind() !== "mssql"); // MySQL moves them; SQLite rebuilds the table
   const moveButtons = (c: ColumnDraft) => {
     const shown = d.columns.filter((x) => !x.dropped);
     const i = shown.indexOf(c);
@@ -408,7 +411,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
 /** Postgres triggers call a function; MySQL and SQLite run statements (SQLite's go inside BEGIN … END). */
 const TRIGGER_BODY: Record<string, string> = {
   postgres: "Function to call, e.g. audit()", mysql: "Statement, e.g. SET NEW.updated_at = NOW()", sqlite: "Statements, e.g. UPDATE …;",
-  duckdb: "",
+  duckdb: "", mssql: "",
 };
 
 /** Triggers: an existing one can be dropped, or edited (dropped, and added again as changed); added ones are forms. */

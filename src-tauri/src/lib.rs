@@ -39,7 +39,7 @@ mod users;
 #[cfg(fuzzing)]
 #[doc(hidden)]
 pub fn fuzz_read_only(sql: &str) {
-    for engine in [Engine::Postgres, Engine::Mysql, Engine::Sqlite, Engine::Duckdb] {
+    for engine in [Engine::Postgres, Engine::Mysql, Engine::Sqlite, Engine::Duckdb, Engine::Mssql] {
         readonly::is_read_only(engine, sql);
     }
 }
@@ -510,6 +510,10 @@ async fn stop_query(
             handle.interrupt();
             Ok(())
         }
+        db::Stopper::Mssql(cancel) => {
+            cancel.notify_waiters();
+            Ok(())
+        }
     }
 }
 
@@ -533,6 +537,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::Mysql | Engine::Mariadb => "mysql_async",
                 Engine::Sqlite => "rusqlite (bundled SQLite)",
                 Engine::Duckdb => "duckdb (bundled DuckDB)",
+                Engine::Mssql => "tiberius (TDS)",
                 Engine::Redis => "TableMinus RESP2 client",
             },
             cipher: live.conn.tls_cipher().await?,

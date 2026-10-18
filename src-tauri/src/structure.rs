@@ -232,6 +232,7 @@ impl Conn {
             Dialect::My => self.my_structure(table).await?,
             Dialect::Lite => self.lite_structure(table).await?,
             Dialect::Duck => self.duck_structure(table).await?,
+            Dialect::Mssql => self.mssql_structure(table).await?,
         };
         if s.columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
@@ -583,6 +584,129 @@ impl Conn {
             .map(|sql| crate::ddl::lite_checks(&sql))
             .unwrap_or_default();
         Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment: None, options: None })
+    }
+
+    /// A `SQL Server` table's structure from the `sys` views. Triggers are listed by name and definition only: they
+    /// are statement-level (they read `inserted` and `deleted`), so the form for row triggers can't restate them.
+    #[expect(clippy::too_many_lines, reason = "one query per kind of thing, each read the same way")]
+    async fn mssql_structure(&mut self, table: &str) -> Result<Structure> {
+        let name = self.table_ident(table);
+        let t = [Some(name.as_str())];
+        let columns = self
+            .fetch_with(
+                "select c.name, type_name(c.user_type_id) + case \
+                 when ty.name in ('varchar', 'char', 'varbinary', 'binary') then '(' + case when c.max_length = -1 \
+                   then 'max' else cast(c.max_length as varchar(10)) end + ')' \
+                 when ty.name in ('nvarchar', 'nchar') then '(' + case when c.max_length = -1 then 'max' \
+                   else cast(c.max_length / 2 as varchar(10)) end + ')' \
+                 when ty.name in ('decimal', 'numeric') then '(' + cast(c.precision as varchar(10)) + ',' \
+                   + cast(c.scale as varchar(10)) + ')' \
+                 when ty.name in ('datetime2', 'time', 'datetimeoffset') then '(' + cast(c.scale as varchar(10)) + ')' \
+                 else '' end, \
+                 case when c.is_nullable = 1 then 'true' else 'false' end, object_definition(c.default_object_id), \
+                 cast(ep.value as nvarchar(max)), case when c.is_identity = 1 then 'true' else 'false' end, \
+                 case when exists (select 1 from sys.index_columns ic join sys.indexes i on i.object_id = ic.object_id \
+                   and i.index_id = ic.index_id where i.is_primary_key = 1 and ic.object_id = c.object_id \
+                   and ic.column_id = c.column_id) then 'true' else 'false' end \
+                 from sys.columns c join sys.types ty on ty.user_type_id = c.user_type_id \
+                 left join sys.extended_properties ep on ep.class = 1 and ep.major_id = c.object_id \
+                   and ep.minor_id = c.column_id and ep.name = 'MS_Description' \
+                 where c.object_id = object_id(@P1) order by c.column_id",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| ColumnInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                data_type: take(&mut r, 1).unwrap_or_default(),
+                nullable: take(&mut r, 2).as_deref() == Some("true"),
+                default: take(&mut r, 3),
+                comment: take(&mut r, 4),
+                auto_increment: take(&mut r, 5).as_deref() == Some("true"),
+                primary: take(&mut r, 6).as_deref() == Some("true"),
+                ..ColumnInfo::default()
+            })
+            .collect();
+        let indexes = self
+            .fetch_with(
+                "select i.name, string_agg(case when ic.is_included_column = 0 then c.name end, char(31)) \
+                   within group (order by ic.key_ordinal), cast(i.is_unique as varchar(1)), \
+                 cast(i.is_primary_key as varchar(1)), i.type_desc, \
+                 cast(case when i.is_primary_key = 1 or i.is_unique_constraint = 1 then 1 else 0 end as varchar(1)) \
+                 from sys.indexes i join sys.index_columns ic on ic.object_id = i.object_id and ic.index_id = i.index_id \
+                 join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
+                 where i.object_id = object_id(@P1) and i.type > 0 \
+                 group by i.name, i.is_unique, i.is_primary_key, i.is_unique_constraint, i.type_desc order by i.name",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| IndexInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                columns: list(take(&mut r, 1)),
+                unique: take(&mut r, 2).as_deref() == Some("1"),
+                primary: take(&mut r, 3).as_deref() == Some("1"),
+                method: take(&mut r, 4),
+                constraint: take(&mut r, 5).as_deref() == Some("1"),
+            })
+            .collect();
+        let foreign_keys = self
+            .fetch_with(
+                "select fk.name, string_agg(pc.name, char(31)) within group (order by fkc.constraint_column_id), \
+                 case when rs.name = 'dbo' then rt.name else rs.name + '.' + rt.name end, \
+                 string_agg(rc.name, char(31)) within group (order by fkc.constraint_column_id), \
+                 replace(fk.update_referential_action_desc, '_', ' '), replace(fk.delete_referential_action_desc, '_', ' ') \
+                 from sys.foreign_keys fk join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id \
+                 join sys.columns pc on pc.object_id = fkc.parent_object_id and pc.column_id = fkc.parent_column_id \
+                 join sys.tables rt on rt.object_id = fk.referenced_object_id \
+                 join sys.schemas rs on rs.schema_id = rt.schema_id \
+                 join sys.columns rc on rc.object_id = fkc.referenced_object_id and rc.column_id = fkc.referenced_column_id \
+                 where fk.parent_object_id = object_id(@P1) \
+                 group by fk.name, rs.name, rt.name, fk.update_referential_action_desc, fk.delete_referential_action_desc \
+                 order by fk.name",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| ForeignKeyInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                columns: list(take(&mut r, 1)),
+                ref_table: take(&mut r, 2).unwrap_or_default(),
+                ref_columns: list(take(&mut r, 3)),
+                on_update: take(&mut r, 4).unwrap_or_else(|| "NO ACTION".into()),
+                on_delete: take(&mut r, 5).unwrap_or_else(|| "NO ACTION".into()),
+            })
+            .collect();
+        let checks = self
+            .named(
+                "select name, definition from sys.check_constraints where parent_object_id = object_id(@P1) order by name",
+                &t,
+            )
+            .await?;
+        let triggers = self
+            .fetch_with(
+                "select name, object_definition(object_id) from sys.triggers where parent_id = object_id(@P1) order by name",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| TriggerInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                definition: take(&mut r, 1).unwrap_or_default(),
+                ..TriggerInfo::default()
+            })
+            .collect();
+        let comment = self
+            .fetch_with(
+                "select cast(value as nvarchar(max)) from sys.extended_properties \
+                 where class = 1 and major_id = object_id(@P1) and minor_id = 0 and name = 'MS_Description'",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|mut r| take(&mut r, 0));
+        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment, options: None })
     }
 
     /// A `DuckDB` table's indexes other than its constraints', with their columns read from the CREATE INDEX text.

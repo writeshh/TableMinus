@@ -2,6 +2,7 @@
 //! text cells), browse the catalog.
 
 use crate::driver::duckdb::DuckDb;
+use crate::driver::mssql::SqlServer;
 use crate::driver::mysql::Mysql;
 use crate::driver::postgres::{Postgres, cockroach_version};
 use crate::driver::sqlite::Sqlite;
@@ -25,6 +26,7 @@ pub enum Engine {
     Mariadb,
     Sqlite,
     Duckdb,
+    Mssql,
     Redis,
 }
 
@@ -104,6 +106,7 @@ pub enum Dialect {
     My,
     Lite,
     Duck,
+    Mssql,
 }
 
 impl Dialect {
@@ -112,14 +115,16 @@ impl Dialect {
     pub fn ident(self, name: &str) -> String {
         match self {
             Dialect::My => format!("`{}`", name.replace('`', "``")),
+            Dialect::Mssql => format!("[{}]", name.replace(']', "]]")),
             _ => format!("\"{}\"", name.replace('"', "\"\"")),
         }
     }
 
-    /// A table name; Postgres and `DuckDB` tables are `schema.table` (`DuckDB`'s `main` schema is left off).
+    /// A table name; Postgres, `DuckDB` and `SQL Server` tables are `schema.table` (`DuckDB`'s `main` and `SQL Server`'s
+    /// `dbo` schemas are left off).
     pub fn table_ident(self, table: &str) -> String {
         match (self, table.split_once('.')) {
-            (Dialect::Pg | Dialect::Duck, Some((schema, name))) => {
+            (Dialect::Pg | Dialect::Duck | Dialect::Mssql, Some((schema, name))) => {
                 format!("{}.{}", self.ident(schema), self.ident(name))
             }
             _ => self.ident(table),
@@ -136,6 +141,17 @@ impl Dialect {
             Dialect::Pg => format!("E'{}'", quoted.replace('\\', "\\\\")),
             Dialect::My => format!("'{}'", quoted.replace('\\', "\\\\")),
             Dialect::Lite | Dialect::Duck => format!("'{quoted}'"),
+            // N'…' keeps characters outside the database's code page; a backslash is only a backslash.
+            Dialect::Mssql => format!("N'{quoted}'"),
+        }
+    }
+
+    /// The placeholder for the `n`th (1-based) bound parameter.
+    pub fn param(self, n: usize) -> String {
+        match self {
+            Dialect::My => "?".into(),
+            Dialect::Mssql => format!("@P{n}"),
+            _ => format!("${n}"),
         }
     }
 }
@@ -143,6 +159,15 @@ impl Dialect {
 /// A quoted identifier for code that only knows whether it's MySQL; [`Dialect::ident`] does the quoting.
 pub(crate) fn quote_ident(mysql: bool, name: &str) -> String {
     if mysql { Dialect::My.ident(name) } else { Dialect::Pg.ident(name) }
+}
+
+/// Both crypto providers rustls ships with are in the build (the SQL Server driver wants one, MySQL's TLS the other),
+/// so rustls can't pick a process-wide default itself. This installs `ring`, once; already installed is fine.
+fn install_tls_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
 }
 
 /// An open connection: the engine's [`Driver`], and on top of it the catalog queries and statement building that
@@ -163,6 +188,7 @@ impl Conn {
         options: &Options,
         tunnel_port: Option<u16>,
     ) -> Result<Conn> {
+        install_tls_provider();
         let open = async {
             Ok::<Box<dyn Driver>, Error>(match engine {
                 Engine::Postgres => Box::new(Postgres::open(url, password, tls, options, tunnel_port).await?),
@@ -171,6 +197,8 @@ impl Conn {
                 }
                 Engine::Sqlite => Box::new(Sqlite::open(url, password)?),
                 Engine::Duckdb => Box::new(DuckDb::open(url)?),
+                // Boxed: tiberius's connect future is big.
+                Engine::Mssql => Box::new(Box::pin(SqlServer::open(url, password, tls, options, tunnel_port)).await?),
                 Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
             })
         };
@@ -217,6 +245,9 @@ impl Conn {
                 let r = self.query("show status like 'Ssl_cipher'").await?;
                 r.rows.into_iter().next().and_then(|mut row| row.pop().flatten())
             }
+            Dialect::Mssql => self
+                .scalar("select case when encrypt_option = 'TRUE' then 'TLS' end from sys.dm_exec_connections where session_id = @@spid")
+                .await?,
             Dialect::Lite | Dialect::Duck => None,
         };
         Ok(cipher.filter(|c| !c.is_empty()))
@@ -289,6 +320,10 @@ impl Conn {
                  and table_schema not in ('information_schema', 'pg_catalog') \
                  order by table_schema, table_name, ordinal_position"
             }
+            Dialect::Mssql => {
+                "select case when table_schema = 'dbo' then table_name else table_schema + '.' + table_name end, \
+                 column_name from information_schema.columns order by table_schema, table_name, ordinal_position"
+            }
         };
         let r = self.query(sql).await?;
         Ok(r.rows
@@ -334,6 +369,7 @@ impl Conn {
         let sql = match self.dialect() {
             Dialect::Pg => "select datname from pg_database where not datistemplate and datallowconn order by 1",
             Dialect::My => "select schema_name from information_schema.schemata order by 1",
+            Dialect::Mssql => "select name from sys.databases where state = 0 and database_id > 4 order by name",
             Dialect::Lite | Dialect::Duck => return Ok(vec![]),
         };
         Ok(self.query(sql).await?.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
@@ -344,6 +380,7 @@ impl Conn {
         match self.dialect() {
             Dialect::Pg => self.scalar("select current_database()").await,
             Dialect::My => self.scalar("select database()").await,
+            Dialect::Mssql => self.scalar("select db_name()").await,
             Dialect::Lite | Dialect::Duck => Ok(None),
         }
     }
@@ -361,6 +398,7 @@ impl Conn {
             Dialect::My => ("MySQL", "select version()"),
             Dialect::Lite => ("SQLite", "select sqlite_version()"),
             Dialect::Duck => ("DuckDB", "select version()"),
+            Dialect::Mssql => ("SQL Server", "select cast(serverproperty('ProductVersion') as nvarchar(50))"),
         };
         let v = self.scalar(sql).await?.unwrap_or_default();
         // MariaDB reports e.g. "11.4.2-MariaDB"; name it after what the server says it is.
@@ -374,7 +412,7 @@ impl Conn {
     /// MySQL switches in place; Postgres cannot change database within a session, so the caller reconnects.
     pub async fn use_database(&mut self, db: &str) -> Result<()> {
         match self.dialect() {
-            Dialect::My => {
+            Dialect::My | Dialect::Mssql => {
                 let sql = format!("use {}", self.ident(db));
                 self.query(&sql).await.map(|_| ())
             }
@@ -431,6 +469,25 @@ impl Conn {
                  case when pk > 0 then 'PRI' else '' end from pragma_table_info($1)",
                 vec![Some(table)],
             ),
+            Dialect::Mssql => {
+                let (schema, name) = table.split_once('.').unwrap_or(("dbo", table));
+                (
+                    "select c.column_name, c.data_type + case \
+                     when c.character_maximum_length is not null then '(' + case when c.character_maximum_length = -1 \
+                       then 'max' else cast(c.character_maximum_length as varchar(10)) end + ')' \
+                     when c.data_type in ('decimal', 'numeric') then '(' + cast(c.numeric_precision as varchar(10)) + ',' \
+                       + cast(c.numeric_scale as varchar(10)) + ')' else '' end, \
+                     c.is_nullable, c.column_default, \
+                     case when exists (select 1 from information_schema.table_constraints t \
+                       join information_schema.key_column_usage k on k.constraint_name = t.constraint_name \
+                       and k.table_schema = t.table_schema and k.table_name = t.table_name \
+                       where t.constraint_type = 'PRIMARY KEY' and t.table_schema = c.table_schema \
+                       and t.table_name = c.table_name and k.column_name = c.column_name) then 'PRI' else '' end \
+                     from information_schema.columns c where c.table_schema = @P1 and c.table_name = @P2 \
+                     order by c.ordinal_position",
+                    vec![Some(schema), Some(name)],
+                )
+            }
             Dialect::Duck => {
                 let (schema, name) = table.split_once('.').unwrap_or(("main", table));
                 (
@@ -483,6 +540,11 @@ impl Conn {
                  from information_schema.tables where table_catalog = current_database() \
                  and table_schema not in ('information_schema', 'pg_catalog') order by table_schema <> 'main', 1"
             }
+            Dialect::Mssql => {
+                "select case when table_schema = 'dbo' then table_name else table_schema + '.' + table_name end \
+                 from information_schema.tables where table_type in ('BASE TABLE', 'VIEW') \
+                 order by case when table_schema = 'dbo' then 0 else 1 end, 1"
+            }
         };
         let r = self.query(sql).await?;
         Ok(r.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
@@ -496,15 +558,18 @@ mod tests {
         use crate::db::Dialect;
         use proptest::prelude::*;
         use sqlparser::ast::{Expr, ObjectNamePart, SelectItem, SetExpr, Statement, TableFactor, Value};
-        use sqlparser::dialect::{Dialect as Parsing, DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+        use sqlparser::dialect::{
+            Dialect as Parsing, DuckDbDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect,
+        };
         use sqlparser::parser::Parser;
 
-        fn dialects() -> [(Dialect, Box<dyn Parsing>); 4] {
+        fn dialects() -> [(Dialect, Box<dyn Parsing>); 5] {
             [
                 (Dialect::Pg, Box::new(PostgreSqlDialect {})),
                 (Dialect::My, Box::new(MySqlDialect {})),
                 (Dialect::Lite, Box::new(SQLiteDialect {})),
                 (Dialect::Duck, Box::new(DuckDbDialect {})),
+                (Dialect::Mssql, Box::new(MsSqlDialect {})),
             ]
         }
 
@@ -536,7 +601,7 @@ mod tests {
                     let s = select(p.as_ref(), &sql);
                     let SelectItem::UnnamedExpr(Expr::Value(v)) = &s.projection[0] else { panic!("{sql}") };
                     let read = match &v.value {
-                        Value::SingleQuotedString(t) | Value::EscapedStringLiteral(t) => t,
+                        Value::SingleQuotedString(t) | Value::EscapedStringLiteral(t) | Value::NationalStringLiteral(t) => t,
                         other => panic!("{sql}: {other:?}"),
                     };
                     prop_assert_eq!(read, &value, "{}", sql);

@@ -104,6 +104,8 @@ const ENGINES: Engine[] = [
     defaults: { host: "127.0.0.1", port: "3306", user: "root", database: "" } },
   { id: "sqlite", kind: "sqlite", label: "SQLite", mono: "Sl", color: "var(--yellow)" },
   { id: "duckdb", kind: "duckdb", label: "DuckDB", mono: "Dk", color: "var(--accent)" },
+  { id: "mssql", kind: "mssql", label: "SQL Server", mono: "Ss", color: "var(--danger)",
+    defaults: { host: "127.0.0.1", port: "1433", user: "sa", database: "" } },
   { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
@@ -591,7 +593,7 @@ function formToSaved(): Saved {
     const port = field("port").value.trim() || d.port;
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
-    const scheme = editingKind === "postgres" ? "postgres" : editingKind === "redis" ? "redis" : "mysql";
+    const scheme = editingKind === "postgres" ? "postgres" : editingKind === "redis" ? "redis" : editingKind === "mssql" ? "mssql" : "mysql";
     if (editingKind === "redis" && !/^\d+$/.test(db || "0")) throw "A Redis database is a number, such as 0.";
     url = `${scheme}://${user ? encodeURIComponent(user) + "@" : ""}${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
   }
@@ -3408,8 +3410,10 @@ $("run-all").onclick = runAll;
 $("explain").onclick = async () => {
   const sql = editor.current();
   if (!sql.trim() || !active) return;
-  const prefix = active.kind === "sqlite" ? "explain query plan " : "explain ";
-  const filled = await withParams([prefix + sql]);
+  // SQL Server shows a plan through a session setting, in a batch of its own on each side of the statement.
+  const explain = active.kind === "mssql" ? `SET SHOWPLAN_TEXT ON\nGO\n${sql}\nGO\nSET SHOWPLAN_TEXT OFF`
+    : (active.kind === "sqlite" ? "explain query plan " : "explain ") + sql;
+  const filled = await withParams([explain]);
   if (filled) execute(filled);
 };
 $("format-sql").onclick = () => (formatSql(), editor.focus());
@@ -3555,8 +3559,8 @@ function anythingItems(): AnythingItem[] {
 
 const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
-const dumps = (c: Saved) => c.flavor !== "cockroach" && c.kind !== "duckdb";
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach";
+const dumps = (c: Saved) => c.flavor !== "cockroach" && c.kind !== "duckdb" && c.kind !== "mssql"; // SQL Server backs up with its own statement
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && c.kind !== "mssql";
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },
