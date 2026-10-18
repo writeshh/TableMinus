@@ -49,6 +49,9 @@ tokio = { version = "1", features = ["time", "process", "net", "io-std", "io-uti
 russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-config = "0.58.0"
 tauri-plugin-dialog = "2"
+# Updates from GitHub Releases, signed with the key build.sh finds (updater.rs). No `zip`: v2 update artifacts
+# are the installers themselves, and the zip crate it would bring has open advisories.
+tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
 futures-util = { version = "0.3", default-features = false }
 flate2 = "1"
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "transport-streamable-http-server"] }

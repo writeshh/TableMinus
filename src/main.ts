@@ -31,6 +31,7 @@ import { openScript } from "./scripts";
 import { initPlugins, pluginMenu } from "./plugins"; // also adds Settings › Plugins
 import { forgetRedis, initRedis, syncRedis } from "./redis";
 import { forgetMongo, initMongo, syncMongo } from "./mongo";
+import { checkForUpdates, showReleaseNotes } from "./updates";
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
@@ -3345,6 +3346,8 @@ type Settings = {
   reopenWorkspaces: boolean;
   /** What ⌘T opens: a SQL tab, or an empty one that the next table or query fills. */
   newTabKind: "sql" | "empty";
+  /** Look for a new version at startup; and take beta versions. */
+  autoUpdate: boolean; betaUpdates: boolean;
   /** Rows on a table tab's page. */
   pageSize: number;
   /** Tables the catalog estimates at this many rows or more show the estimate instead of a count; 0 = always count. */
@@ -3365,7 +3368,7 @@ const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
   keyBinding: "sublime", upperKeywords: false, completeKey: "enter", filterColumn: "any", filterOp: "contains", filterBar: false,
-  shortcuts: {}, launcherSort: "name", reopenWorkspaces: false, newTabKind: "sql",
+  shortcuts: {}, launcherSort: "name", reopenWorkspaces: false, newTabKind: "sql", autoUpdate: true, betaUpdates: false,
   resultsMode: "tabs", stopOnError: true, historyYears: 0,
   pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, hideScrollbars: false, logOriginals: false,
   revealExport: false, closeBrackets: true,
@@ -3410,6 +3413,8 @@ function applySettings() {
   $<HTMLInputElement>("keep-tabs").checked = settings.keepTabs;
   $<HTMLInputElement>("reopen-workspaces").checked = settings.reopenWorkspaces;
   $<HTMLSelectElement>("new-tab-kind").value = settings.newTabKind;
+  $<HTMLInputElement>("auto-update").checked = settings.autoUpdate;
+  $<HTMLInputElement>("beta-updates").checked = settings.betaUpdates;
   $<HTMLSelectElement>("conn-sort").value = settings.launcherSort;
   $<HTMLSelectElement>("results-mode").value = settings.resultsMode;
   $<HTMLInputElement>("stop-on-error").checked = settings.stopOnError;
@@ -3518,6 +3523,8 @@ $<HTMLInputElement>("show-invisibles").onchange = (e) => setSetting("showInvisib
 $<HTMLInputElement>("keep-tabs").onchange = (e) => setSetting("keepTabs", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("reopen-workspaces").onchange = (e) => setSetting("reopenWorkspaces", (e.target as HTMLInputElement).checked);
 $<HTMLSelectElement>("new-tab-kind").onchange = (e) => setSetting("newTabKind", (e.target as HTMLSelectElement).value as Settings["newTabKind"]);
+$<HTMLInputElement>("auto-update").onchange = (e) => setSetting("autoUpdate", (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>("beta-updates").onchange = (e) => setSetting("betaUpdates", (e.target as HTMLInputElement).checked);
 $<HTMLSelectElement>("conn-sort").onchange = (e) => (setSetting("launcherSort", (e.target as HTMLSelectElement).value as Settings["launcherSort"]), renderConns());
 $<HTMLSelectElement>("results-mode").onchange = (e) => setSetting("resultsMode", (e.target as HTMLSelectElement).value as Settings["resultsMode"]);
 $<HTMLInputElement>("stop-on-error").onchange = (e) => setSetting("stopOnError", (e.target as HTMLInputElement).checked);
@@ -3672,6 +3679,8 @@ addCommands([
   { id: "metrics-board", label: "Metrics Board", menu: "Tools", sep: true, when: hasTools, run: () => openBoard(boardCtx()) },
   { id: "custom-script", label: "Run Custom Script…", menu: "Tools", when: hasTools, run: showScript },
   { id: "shortcuts", label: "Keyboard Shortcuts", menu: "Help", overDialogs: true, run: () => (openSettings(), showTab("shortcuts")) },
+  { id: "check-updates", label: "Check for Updates…", menu: "Help", run: () => checkForUpdates({ beta: settings.betaUpdates, quiet: false }) },
+  { id: "release-notes", label: "Release Notes", menu: "Help", run: showReleaseNotes },
 ]);
 initMenu();
 initHiding();
@@ -3748,4 +3757,6 @@ refresh().then(async () => {
   }
   listen("opened", openFromOs).catch(() => {}); // no event bridge outside the app
   openFromOs();
+  // A moment after starting, so the check never slows the first connect.
+  if (settings.autoUpdate) setTimeout(() => void checkForUpdates({ beta: settings.betaUpdates, quiet: true }), 5000);
 });

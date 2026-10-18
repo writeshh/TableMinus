@@ -134,6 +134,8 @@ dialog { border: 1px solid var(--line); border-radius: 20px; padding: 20px; back
 dialog::backdrop { background: color-mix(in srgb, var(--ink) 40%, transparent); backdrop-filter: blur(2px); }
 dialog[open] { animation: arrive 180ms ease-out; }
 dialog.small { width: min(380px, calc(100vw - 32px)); }
+dialog.wide { width: min(760px, calc(100vw - 32px)); }
+.release-notes { max-height: min(56vh, 520px); overflow: auto; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 var(--mono); user-select: text; -webkit-user-select: text; }
 dialog footer { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
 .spacer { flex: 1; }
 #engine-search { width: 100%; border-radius: 999px; padding: 7px 14px; margin-bottom: 14px; }

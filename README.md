@@ -20,6 +20,18 @@ npm run bundle           # check, audit, MCP bridge, then .app/.dmg on macOS (.d
 
 Rust comes from `rustup`. On Linux, Tauri also needs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `librsvg2-dev`, and `libdbus-1-dev` for the keychain.
 
+## Release
+
+1. Set the version in `src-tauri/tauri.conf.json` (and `package.json`, `src-tauri/Cargo.toml`), and rename the
+   changelog's Unreleased section to it.
+2. `npm run bundle`. With the updater's signing key at `~/.tauri/tableminus.key` (or in `TAURI_SIGNING_PRIVATE_KEY`)
+   the bundle folder also gets the signed update file (`macos/TableMinus.app.tar.gz` and its `.sig`) and
+   `latest.json`. Its public key is in `tauri.conf.json`; a lost private key means installed copies can't update.
+3. To sign with a Developer ID instead of ad hoc, set `APPLE_SIGNING_IDENTITY`; add `APPLE_ID`, `APPLE_PASSWORD` (an
+   app-specific password) and `APPLE_TEAM_ID` to have Tauri notarize it too.
+4. Make a GitHub release tagged `v<version>` with the `.dmg`, the update file, its `.sig` and `latest.json`. The app
+   checks `releases/latest/download/latest.json`; beta versions go to a release tagged `beta`.
+
 ## Layout
 
 | File | Role |

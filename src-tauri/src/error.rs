@@ -89,6 +89,9 @@ pub enum Error {
     /// `MongoDB`'s own error, or a script or value the shell couldn't read.
     #[error("MongoDB: {0}")]
     Mongo(String),
+    /// Checking for, downloading or installing an update failed.
+    #[error("update: {0}")]
+    Update(String),
     /// A server reached over HTTP (libSQL, Cloudflare D1) answered with an error, or not in its format.
     #[error("{engine}: {message}")]
     Server { engine: &'static str, message: String },

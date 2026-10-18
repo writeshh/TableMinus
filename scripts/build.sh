@@ -5,6 +5,12 @@
 #   scripts/build.sh --skip-checks   bundle only
 #   scripts/build.sh --target x86_64-apple-darwin   cross-build (install it with rustup target add first)
 #
+# Updates: with the updater's signing key (TAURI_SIGNING_PRIVATE_KEY, or the file ~/.tauri/tableminus.key, or
+# TAURI_SIGNING_PRIVATE_KEY_PATH), the bundle also has a signed update file and latest.json for the release.
+# macOS signing: APPLE_SIGNING_IDENTITY (a "Developer ID Application: …" certificate in the keychain) signs instead of
+# the ad-hoc signature; with APPLE_ID, APPLE_PASSWORD (an app-specific password) and APPLE_TEAM_ID, or APPLE_API_ISSUER,
+# APPLE_API_KEY and APPLE_API_KEY_PATH, Tauri also notarizes and staples it.
+#
 # The bridge goes in through src-tauri/tauri.bundle.json rather than tauri.conf.json: Tauri refuses to build when an
 # external binary is missing, and plain `cargo test` / `tauri dev` shouldn't need the bridge built first.
 set -euo pipefail
@@ -60,10 +66,30 @@ mkdir -p src-tauri/binaries
 # Tauri looks for <name>-<target triple>; the bundle drops the suffix, leaving it next to the app's executable.
 cp "$out" "src-tauri/binaries/tableminus-mcp-$triple$ext"
 
+key="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/tableminus.key}"
+configs=(--config src-tauri/tauri.bundle.json)
+updater=0
+if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -f "$key" ]; then
+  [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")"
+  export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+  configs+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+  updater=1
+else
+  echo "==> no updater signing key ($key): bundling without update files" >&2
+fi
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  echo "==> signing as $APPLE_SIGNING_IDENTITY"
+  configs+=(--config "$(node -e 'console.log(JSON.stringify({ bundle: { macOS: { signingIdentity: process.argv[1] } } }))' "$APPLE_SIGNING_IDENTITY")")
+fi
+
 echo "==> bundling"
-npm run tauri build -- --config src-tauri/tauri.bundle.json ${target:+--target "$target"}
+npm run tauri build -- "${configs[@]}" ${target:+--target "$target"}
 
 bundle="src-tauri/target/${target:+$target/}release/bundle"
+if [ "$updater" = 1 ]; then
+  echo "==> latest.json"
+  node scripts/latest-json.mjs "$bundle" "$triple"
+fi
 echo
 echo "Done. Bundles:"
 find "$bundle" -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.msi' -o -name '*.exe' \) \

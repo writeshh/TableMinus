@@ -180,7 +180,7 @@ pub(crate) fn quote_ident(mysql: bool, name: &str) -> String {
 
 /// Both crypto providers rustls ships with are in the build (the SQL Server driver wants one, MySQL's TLS the other),
 /// so rustls can't pick a process-wide default itself. This installs `ring`, once; already installed is fine.
-fn install_tls_provider() {
+pub(crate) fn install_tls_provider() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();

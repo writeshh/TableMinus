@@ -33,6 +33,7 @@ mod store;
 mod structure;
 mod themes;
 mod tls;
+mod updater;
 mod users;
 
 /// What `cargo fuzz` drives (`fuzz/fuzz_targets/read_only.rs`): safe mode's read-only check on arbitrary text, for
@@ -893,6 +894,7 @@ pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(open.clone())
         .manage(prefs.clone())
         .manage(backup::Jobs::default())
@@ -901,6 +903,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(acp::Agents::default())
         .manage(redis::Sessions::default())
         .manage(mongo::Sessions::default())
+        .manage(updater::Pending::default())
         .manage(launcher::Opened::default())
         .setup(|app| {
             secrets::init(&app.path().app_config_dir()?);
@@ -984,6 +987,8 @@ pub fn run() -> tauri::Result<()> {
             mongo::mongo_run,
             mongo::mongo_edit,
             mongo::mongo_connection_info,
+            updater::update_check,
+            updater::update_install,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,

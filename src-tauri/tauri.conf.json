@@ -18,13 +18,18 @@
         "height": 800,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 14, "y": 21 }
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 21
+        }
       }
     ],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'",
       "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost ws://localhost:1420; object-src 'none'; base-uri 'none'; frame-src 'none'",
-      "dangerousDisableAssetCspModification": ["style-src"]
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {
@@ -67,5 +72,13 @@
         "rank": "Alternate"
       }
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcwMzJFRkIzMkEwRTNFODcKUldTSFBnNHFzKzh5Y0czTDdjVDhRem96b3hXN2RFeWkvQWZwNHBOZzFCbWg4ekQzeUk5Z0RUVDYK",
+      "endpoints": [
+        "https://github.com/writeshh/TableMinus/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
