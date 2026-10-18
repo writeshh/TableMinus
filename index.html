@@ -112,6 +112,13 @@
                 <label class="check"><input type="checkbox" name="opt_system_schemas" /> Show system schemas</label>
               </div>
             </div>
+            <div class="opt-row" data-engines="mongodb">
+              <span>MongoDB</span>
+              <div class="checks">
+                <label class="check"><input type="checkbox" name="mongo_srv" /> DNS seed list (mongodb+srv://): the host is the cluster's name</label>
+              </div>
+            </div>
+            <label data-engines="mongodb">Connection options <input name="mongo_query" spellcheck="false" placeholder="Optional, e.g. authSource=admin&amp;replicaSet=rs0" /></label>
             <label data-engines="mysql mariadb">Socket <input name="opt_socket" placeholder="Optional, e.g. /tmp/mysql.sock; replaces host and port" /></label>
             <label data-engines="mysql mariadb">SNI name <input name="opt_sni" placeholder="Optional TLS server name, for proxies that route by it" /></label>
             <div class="opt-row" data-engines="mysql mariadb">

@@ -55,6 +55,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Engine::Mssql => MSSQL,
         Engine::Clickhouse => CLICKHOUSE,
         Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),
+        Engine::Mongodb => return Err(Error::Invalid("MongoDB operations show in the shell: db.currentOp()")),
     };
     let r = live.conn.query(sql).await;
     if r.as_ref().is_err_and(|e| live.conn.lost_by(e)) {
@@ -123,6 +124,7 @@ pub async fn kill_process(
             return Err(Error::Invalid("SQLite-based engines and DuckDB have no process list"));
         }
         Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),
+        Engine::Mongodb => return Err(Error::Invalid("MongoDB operations show in the shell: db.currentOp()")),
     }
     Ok(())
 }

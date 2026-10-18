@@ -405,6 +405,7 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
             Err(Error::Invalid("this engine has no user manager here"))
         }
         Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
+        Engine::Mongodb => Err(Error::Invalid("MongoDB users are managed in the shell: db.createUser(…)")),
     }
 }
 
@@ -724,6 +725,7 @@ pub async fn user_privileges(
             Err(Error::Invalid("this engine has no user manager here"))
         }
         Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
+        Engine::Mongodb => Err(Error::Invalid("MongoDB users are managed in the shell: db.createUser(…)")),
     };
     Ok(grants(live.check(r)?))
 }

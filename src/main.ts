@@ -30,6 +30,7 @@ import { withVault } from "./vault";
 import { openScript } from "./scripts";
 import { initPlugins, pluginMenu } from "./plugins"; // also adds Settings › Plugins
 import { forgetRedis, initRedis, syncRedis } from "./redis";
+import { forgetMongo, initMongo, syncMongo } from "./mongo";
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
 import { csvDefaults, exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
@@ -112,6 +113,8 @@ const ENGINES: Engine[] = [
     defaults: { host: "127.0.0.1", port: "", user: "", database: "" } },
   { id: "d1", kind: "d1", label: "Cloudflare D1", mono: "D1", color: "var(--orange)",
     defaults: { host: "", port: "", user: "", database: "" } },
+  { id: "mongodb", kind: "mongodb", label: "MongoDB", mono: "Mg", color: "var(--ok)",
+    defaults: { host: "127.0.0.1", port: "27017", user: "", database: "" } },
   { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
@@ -529,7 +532,21 @@ function openEditor(id: string, existing?: Saved, fresh = false, password = "") 
       field("ssh_key").value = existing.ssh.key;
     }
     if (isFile(kind)) field("path").value = existing.url;
-    else {
+    else if (kind === "mongodb") {
+      // Not a URL the browser reads when it lists several hosts (h1:27017,h2:27017).
+      const m = /^mongodb(\+srv)?:\/\/(?:([^@/]*)@)?([^/?]*)\/?([^?]*)(?:\?(.*))?$/.exec(existing.url);
+      if (m) {
+        const [, srv, user, hosts, db, query] = m;
+        const single = /^([^,:]+)(?::(\d+))?$/.exec(hosts);
+        field("host").value = single ? single[1] : hosts;
+        field("port").value = single?.[2] && single[2] !== "27017" ? single[2] : "";
+        field("user").value = decodeURIComponent(user ?? "");
+        field("database").value = decodeURIComponent(db);
+        field("mongo_srv").checked = !!srv;
+        field("mongo_query").value = query ?? "";
+        if (srv || query) form.querySelector<HTMLDetailsElement>("details.more")!.open = true;
+      }
+    } else {
       // Only fill fields that differ from the default, so placeholders keep meaning "default".
       const u = new URL(existing.url);
       const set = (k: string, v: string) => (field(k).value = v && v !== (d as Record<string, string>)[k] ? v : "");
@@ -631,6 +648,12 @@ function formToSaved(): Saved {
     if (editingKind === "d1") {
       if (!/^[\w-]+$/.test(user) || !/^[\w-]+$/.test(db)) throw "Enter the Cloudflare account ID and the D1 database ID.";
       url = `d1://${user}/${db}`;
+    } else if (editingKind === "mongodb") {
+      const srv = field("mongo_srv").checked;
+      const query = field("mongo_query").value.trim().replace(/^\?/, "");
+      // A host list (h1:27017,h2:27017) or a seed list name goes as typed; one host takes the port.
+      const hosts = srv || /[,:]/.test(host) ? host : `${host}:${port}`;
+      url = `mongodb${srv ? "+srv" : ""}://${user ? encodeURIComponent(user) + "@" : ""}${hosts}/${db ? encodeURIComponent(db) : ""}${query ? "?" + query : ""}`;
     } else if (editingKind === "libsql") {
       if (!host) throw "Enter the server's host, such as my-db-org.turso.io.";
       url = `libsql://${host}${port ? ":" + port : ""}`; // no port: 443 with SSL, 8080 without
@@ -744,8 +767,9 @@ async function reconnect() {
   btn.disabled = true;
   status("Reconnecting…", "busy");
   try {
-    if (isRedis()) await invoke("disconnect", { name: sessionKey() }); // redis_connect then opens a fresh session
-    info = await invoke<Info>(isRedis() ? "redis_connect" : "reconnect", { name: sessionKey(), ...(isRedis() ? { database: info?.database } : {}) });
+    // Redis and MongoDB keep sessions of their own: drop it, and their connect opens a fresh one.
+    if (ownView()) await invoke("disconnect", { name: sessionKey() });
+    info = await invoke<Info>(ownView() ? connectCommand(active.kind) : "reconnect", { name: sessionKey(), ...(ownView() ? { database: info?.database } : {}) });
     $("lost").hidden = true;
     renderDbTabs();
     tables = info.tables;
@@ -753,6 +777,7 @@ async function reconnect() {
     renderTables();
     loadSchema();
     syncRedis(true);
+    syncMongo(true);
     status(`Reconnected · ${info.server}`, "done");
   } catch (e) {
     status(String(e), "error");
@@ -784,7 +809,7 @@ async function showConnectionInfo() {
   Object.assign(pop.style, { top: `${r.bottom + 6}px`, left: `${Math.max(8, r.right - 340)}px` });
   pop.hidden = false;
   try {
-    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>(isRedis() ? "redis_connection_info" : "connection_info", { name: sessionKey() });
+    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>(isRedis() ? "redis_connection_info" : isMongo() ? "mongo_connection_info" : "connection_info", { name: sessionKey() });
     list.replaceChildren(
       ...row("Connection", active.name),
       ...row("Server", i.server),
@@ -859,9 +884,12 @@ async function openWorkspace(c: Saved, database?: string) {
   else editor.focus();
 }
 
-/** The command that opens a session: Redis isn't SQL, and has its own (redis.rs). */
-const connectCommand = (kind: string) => (kind === "redis" ? "redis_connect" : "connect");
+/** The command that opens a session: Redis and MongoDB aren't SQL, and have their own (redis.rs, mongo/mod.rs). */
+const connectCommand = (kind: string) => (kind === "redis" ? "redis_connect" : kind === "mongodb" ? "mongo_connect" : "connect");
 const isRedis = () => active?.kind === "redis";
+const isMongo = () => active?.kind === "mongodb";
+/** A workspace with a view of its own in place of tables and SQL tabs. */
+const ownView = () => isRedis() || isMongo();
 /** A database as the header shows it: Redis numbers its databases. */
 const dbLabel = (database: string) => (isRedis() ? `db${database}` : database);
 
@@ -889,6 +917,7 @@ function applyInfo(i: Info) {
   if (kept.length) select(tabs[0].id);
   renderTables();
   syncRedis(true);
+  syncMongo(true);
 }
 
 /** The workspace header, the database button and the sidebar filter for the active connection. */
@@ -953,6 +982,7 @@ function showWorkspace(w: Workspace) {
   renderFavorites();
   renderMain();
   syncRedis();
+  syncMongo();
 }
 
 function cycleWorkspace(step: number) {
@@ -1295,7 +1325,7 @@ async function loadDbs(pick: string) {
   try {
     databases = isRedis()
       ? (await call<{ index: number; keys: number }[]>("redis_databases", { name: sessionKey() })).map((d) => String(d.index))
-      : await call<string[]>("list_databases", { name: sessionKey() });
+      : await call<string[]>(isMongo() ? "mongo_databases" : "list_databases", { name: sessionKey() });
     $<HTMLInputElement>("db-search").value = "";
     dbPick = Math.max(0, databases.indexOf(pick));
     setStatus("db-status", "");
@@ -1333,7 +1363,7 @@ async function openDb(name?: string) {
   for (const t of allTabs()) if (!(await okToDiscard(t))) return;
   setStatus("db-status", `Opening ${name}…`, "busy");
   try {
-    const next = await call<Info>(isRedis() ? "redis_connect" : "use_database", { name: sessionKey(), database: name });
+    const next = await call<Info>(ownView() ? connectCommand(active.kind) : "use_database", { name: sessionKey(), database: name });
     stashEditor();
     saveSqlTabs(); // under the database being left
     applyInfo(next);
@@ -1424,7 +1454,7 @@ async function loadColumns(table: string) {
 
 /** The sidebar tree (sidebar.ts), drawing table rows with `tableRow`. */
 function renderTables() {
-  if (isRedis()) return; // the Redis view lists keys instead (redis.ts)
+  if (ownView()) return; // the Redis view lists keys instead (redis.ts), the MongoDB one collections (mongo.ts)
   const shown = active ? renderTree($("tables"), $<HTMLInputElement>("filter").value) : 0;
   const hint = $("no-tables");
   hint.hidden = shown > 0;
@@ -1811,7 +1841,7 @@ function renderMain() {
   $("tabs").querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 
   const env = active?.tag ? `${tagLabel(active.tag)} | ` : "";
-  $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${dbLabel(info.database)}` : ""}${tab && !isRedis() ? ` : ${tab.title}` : ""}`;
+  $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${dbLabel(info.database)}` : ""}${tab && !ownView() ? ` : ${tab.title}` : ""}`;
   $("pill").className = `pill ${active?.tag ?? ""}`;
   if (tab?.kind === "empty") return showNoTab(true);
   if (!tab) return showNoTab();
@@ -2182,7 +2212,7 @@ function ask(text: string, detail: string, okLabel: string): Promise<boolean> {
 /** The sidebar's items again (new or dropped tables), with columns and autocomplete reloaded. */
 async function reloadItems() {
   if (isRedis()) return syncRedis(true);
-  const i = await call<Info>("connect", { name: sessionKey() }); // reuses the open connection
+  const i = await call<Info>(connectCommand(active!.kind), { name: sessionKey() }); // reuses the open connection
   forgetItems(sessionKey());
   info = i;
   tables = i.tables;
@@ -2195,7 +2225,7 @@ async function reloadItems() {
 async function loadSchema() {
   forgetSchema(); // the assistant's copy, with types, is fetched again when next needed
   renderAssistant();
-  if (!active || isRedis()) return;
+  if (!active || ownView()) return;
   const [conn, key] = [active, sessionKey()];
   try {
     const pairs = await invoke<[string, string][]>("schema", { name: key });
@@ -3101,6 +3131,12 @@ function showDiagram(table?: string) {
 }
 initDiagram({ call, conn: hostConn, openTable: (t) => openTable(t), menu: contextMenu });
 initRedis({ conn: hostConn, call, confirm: confirmDialog, menu: contextMenu });
+initMongo({
+  conn: hostConn, call, confirm: confirmDialog, menu: contextMenu,
+  collections: () => tables,
+  reload: reloadItems,
+  limit: () => settings.sqlLimit || 50_000,
+});
 initPlugins({
   conn: hostConn,
   insert(sql) {
@@ -3244,6 +3280,7 @@ async function closeWorkspace(next?: Workspace | null) {
   if (ws) {
     invoke("disconnect", { name: ws.key }).catch(() => {});
     forgetRedis(ws.key);
+    forgetMongo(ws.key);
     // An asked-for password serves every tab of its connection, so it goes with the last one.
     const name = ws.conn.name;
     if (!workspaces.some((w) => w !== ws && w.conn.name === name)) launcher.forgetAskedPassword(name);
@@ -3621,10 +3658,10 @@ const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
 // SQL Server and ClickHouse back up with their own statements.
 // libSQL and D1 have their own (turso db shell .dump, wrangler d1 export).
-const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1"].includes(c.kind);
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1"].includes(c.kind);
+const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1", "mongodb"].includes(c.kind);
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1", "mongodb"].includes(c.kind);
 /** Engines with sessions to list and stop. */
-const hasProcesses = (c: Saved) => !isFile(c.kind) && c.kind !== "libsql" && c.kind !== "d1";
+const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb"].includes(c.kind);
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },

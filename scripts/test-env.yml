@@ -61,6 +61,15 @@ services:
     ulimits: { nofile: { soft: 262144, hard: 262144 } }
     healthcheck: { test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"], interval: 3s, retries: 40 }
 
+  # Reachable directly: 127.0.0.1:27018 (27017 is often a local mongod already), user tm, password testpass,
+  # authSource admin.
+  mongo:
+    image: mongo:8.0
+    environment: { MONGO_INITDB_ROOT_USERNAME: tm, MONGO_INITDB_ROOT_PASSWORD: testpass }
+    ports: ["127.0.0.1:27018:27017"]
+    networks: [front, back]
+    healthcheck: { test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 })"], interval: 3s, retries: 40 }
+
   # Reachable directly over HTTP: 127.0.0.1:8080, no auth token (Hrana over HTTP, as Turso serves it).
   libsql:
     image: ghcr.io/tursodatabase/libsql-server:latest

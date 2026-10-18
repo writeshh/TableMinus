@@ -89,6 +89,7 @@ pub async fn open_for(engine: Engine, url: &str, ssh: &Ssh, secret: Option<&Secr
         Engine::Postgres => 5432,
         Engine::Mysql | Engine::Mariadb => 3306,
         Engine::Redis => 6379,
+        Engine::Mongodb => 27017,
         Engine::Mssql => 1433,
         Engine::Clickhouse => 8123,
         Engine::Libsql => 443,

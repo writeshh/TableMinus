@@ -16,6 +16,7 @@ case "${1:-}" in
     echo "MySQL: host mysql, port 3306, user root, password testpass, database app"
     echo "ClickHouse: http://127.0.0.1:8123, user tm, password testpass, database app"
     echo "libSQL: 127.0.0.1:8080 (plain HTTP), no auth token"
+    echo "MongoDB: mongodb://tm@127.0.0.1:27018/?authSource=admin, password testpass"
     echo "SQL Server: 127.0.0.1:1433 (or host mssql through SSH), user sa, password TestPass1!word"
     echo "CockroachDB: 127.0.0.1:26257 (or host cockroach through SSH), user root, no password, sslmode=disable"
     ;;

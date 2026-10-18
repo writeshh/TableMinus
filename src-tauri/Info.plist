@@ -20,6 +20,8 @@
         <string>sqlserver</string>
         <string>clickhouse</string>
         <string>libsql</string>
+        <string>mongodb</string>
+        <string>mongodb+srv</string>
         <string>mssql</string>
         <string>redis</string>
         <string>rediss</string>

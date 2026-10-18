@@ -363,6 +363,7 @@ fn dump_command(
             return Err(no_backup_tool(saved.kind));
         }
         Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
+        Engine::Mongodb => return Err(Error::Invalid("MongoDB is backed up with mongodump, outside the app")),
     }
     password_env(&mut cmd, saved.kind, password);
     Ok(cmd)
@@ -400,6 +401,7 @@ fn restore_command(
             return Err(no_backup_tool(saved.kind));
         }
         Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
+        Engine::Mongodb => return Err(Error::Invalid("MongoDB is backed up with mongodump, outside the app")),
     }
     password_env(&mut cmd, saved.kind, password);
     Ok(cmd)

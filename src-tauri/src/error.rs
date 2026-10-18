@@ -86,6 +86,9 @@ pub enum Error {
     /// `ClickHouse` answered with an error, in its own words.
     #[error("ClickHouse: {0}")]
     ClickHouse(String),
+    /// `MongoDB`'s own error, or a script or value the shell couldn't read.
+    #[error("MongoDB: {0}")]
+    Mongo(String),
     /// A server reached over HTTP (libSQL, Cloudflare D1) answered with an error, or not in its format.
     #[error("{engine}: {message}")]
     Server { engine: &'static str, message: String },
@@ -192,6 +195,12 @@ impl serde::Serialize for Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl From<mongodb::error::Error> for Error {
+    fn from(e: mongodb::error::Error) -> Self {
+        Error::Mongo(e.to_string())
+    }
+}
 
 /// tokio-postgres's own message leaves out the cause ("db error", "error connecting to server"). A server error shows
 /// as the server wrote it (severity, message, detail, hint); anything else gets its chain of causes.

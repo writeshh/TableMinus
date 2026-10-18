@@ -18,6 +18,7 @@ mod jobs;
 mod launcher;
 mod locations;
 mod mcp;
+mod mongo;
 mod objects;
 mod passcode;
 mod plugins;
@@ -320,6 +321,9 @@ async fn test_connection(
     if conn.kind == Engine::Redis {
         return redis::test(conn, password, ssh_secret).await;
     }
+    if conn.kind == Engine::Mongodb {
+        return mongo::test(conn, password, ssh_secret).await;
+    }
     let (mut db, _tunnel) = open_db(&conn, password.as_ref(), ssh_secret).await?;
     let n = db.tables(conn.options.system_schemas).await?.len();
     Ok(format!("Connected · {n} tables"))
@@ -399,8 +403,14 @@ async fn guard(
 
 /// Drops the live connection; the next connect opens a fresh one.
 #[tauri::command]
-async fn disconnect(open: State<'_, Open>, redis: State<'_, redis::Sessions>, name: String) -> Result<()> {
+async fn disconnect(
+    open: State<'_, Open>,
+    redis: State<'_, redis::Sessions>,
+    mongo: State<'_, mongo::Sessions>,
+    name: String,
+) -> Result<()> {
     redis.remove(&name).await;
+    mongo.remove(&name).await;
     open.remove(&name).await;
     Ok(())
 }
@@ -543,6 +553,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::Libsql => "Hrana 3 over HTTP",
                 Engine::D1 => "Cloudflare D1 HTTP API",
                 Engine::Redis => "TableMinus RESP2 client",
+                Engine::Mongodb => "mongodb (official Rust driver)",
             },
             cipher: live.conn.tls_cipher().await?,
             ssh: live.saved.ssh.as_ref().map(|s| s.host.clone()),
@@ -795,6 +806,7 @@ async fn set_safety(
     app: AppHandle,
     open: State<'_, Open>,
     redis: State<'_, redis::Sessions>,
+    mongo: State<'_, mongo::Sessions>,
     name: String,
     safety: safety::Safety,
     unlock: Option<safety::Unlock>,
@@ -813,6 +825,7 @@ async fn set_safety(
         live.lock().await.saved.safety = safety;
     }
     redis.set_safety(&name, safety).await;
+    mongo.set_safety(&name, safety).await;
     Ok(())
 }
 
@@ -887,6 +900,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(jobs::Jobs::default())
         .manage(acp::Agents::default())
         .manage(redis::Sessions::default())
+        .manage(mongo::Sessions::default())
         .manage(launcher::Opened::default())
         .setup(|app| {
             secrets::init(&app.path().app_config_dir()?);
@@ -965,6 +979,11 @@ pub fn run() -> tauri::Result<()> {
             redis::redis_edit,
             redis::redis_command,
             redis::redis_connection_info,
+            mongo::mongo_connect,
+            mongo::mongo_databases,
+            mongo::mongo_run,
+            mongo::mongo_edit,
+            mongo::mongo_connection_info,
             passcode::passcode_set,
             passcode::set_passcode,
             passcode::remove_passcode,
