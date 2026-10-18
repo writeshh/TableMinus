@@ -98,6 +98,25 @@ const LITE: &str = "select 'c', m.name, p.name, p.type, case when p.pk > 0 then 
      where m.type = 'table' and m.name not like 'sqlite\\_%' escape '\\' \
      group by m.name, f.id";
 
+/// The current database, every user schema; tables outside `main` are `schema.table`, as the sidebar lists them.
+const DUCK: &str = "select 'c', case when c.table_schema = 'main' then c.table_name \
+       else c.table_schema || '.' || c.table_name end, c.column_name, c.data_type, \
+     case when exists (select 1 from duckdb_constraints() k where k.constraint_type = 'PRIMARY KEY' \
+       and k.database_name = c.table_catalog and k.schema_name = c.table_schema and k.table_name = c.table_name \
+       and list_contains(k.constraint_column_names, c.column_name)) then 'true' else 'false' end, \
+     case when c.is_nullable = 'YES' then 'true' else 'false' end, \
+     case when t.table_type = 'VIEW' then 'true' else 'false' end, cast(c.ordinal_position as varchar) \
+     from information_schema.columns c join information_schema.tables t on t.table_catalog = c.table_catalog \
+       and t.table_schema = c.table_schema and t.table_name = c.table_name \
+     where c.table_catalog = current_database() and c.table_schema not in ('information_schema', 'pg_catalog') \
+     union all select 'f', case when k.schema_name = 'main' then k.table_name \
+       else k.schema_name || '.' || k.table_name end, \
+     coalesce(k.constraint_name, k.table_name || '_fk' || cast(k.constraint_index as varchar)), \
+     array_to_string(k.constraint_column_names, chr(31)), k.referenced_table, \
+     array_to_string(k.referenced_column_names, chr(31)), null, '0' \
+     from duckdb_constraints() k \
+     where k.constraint_type = 'FOREIGN KEY' and k.database_name = current_database()";
+
 fn list(cell: Option<String>) -> Vec<String> {
     cell.map(|c| c.split(SEP).map(String::from).collect()).unwrap_or_default()
 }
@@ -142,6 +161,7 @@ impl Conn {
             Dialect::Pg => self.fetch_with(PG, &[schema]).await?,
             Dialect::My => self.fetch_with(MY, &[]).await?,
             Dialect::Lite => self.fetch_with(LITE, &[]).await?,
+            Dialect::Duck => self.fetch_with(DUCK, &[]).await?,
         };
         Ok(assemble(rows))
     }

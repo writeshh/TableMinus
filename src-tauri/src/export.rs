@@ -262,6 +262,8 @@ async fn structure(conn: &mut Conn, table: &str) -> Result<String> {
             let sql = r.rows.into_iter().next().and_then(|mut row| row.pop().flatten());
             Ok(format!("{};\n", sql.ok_or(Error::Invalid("no such table"))?))
         }
+        // DuckDB keeps each CREATE statement (and its indexes), which `ddl` gathers.
+        Dialect::Duck => Ok(format!("{}\n", conn.ddl(table).await?)),
         // ponytail: Postgres has no SHOW CREATE TABLE, so this is rebuilt from the columns: types, NOT NULL,
         // defaults and the primary key, without other constraints or indexes. Backups (pg_dump) copy everything.
         Dialect::Pg => {

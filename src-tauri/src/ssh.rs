@@ -89,7 +89,7 @@ pub async fn open_for(engine: Engine, url: &str, ssh: &Ssh, secret: Option<&Secr
         Engine::Postgres => 5432,
         Engine::Mysql | Engine::Mariadb => 3306,
         Engine::Redis => 6379,
-        Engine::Sqlite => return Err(Error::Invalid("SQLite files can't be opened over SSH")),
+        Engine::Sqlite | Engine::Duckdb => return Err(Error::Invalid("database files can't be opened over SSH")),
     };
     let u = url::Url::parse(url)?;
     let target_host = u.host_str().unwrap_or("127.0.0.1").to_string();

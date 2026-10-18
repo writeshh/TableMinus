@@ -192,6 +192,33 @@ fn my_column(maria: bool, mut r: Vec<Option<String>>) -> ColumnInfo {
     }
 }
 
+/// The columns of a `DuckDB` `CREATE INDEX name ON table(a, "b")`, read back from its statement: what's between the
+/// first parenthesis and the last, split at the commas outside parentheses and quotes, with plain quoted names bare.
+fn index_columns(sql: &str) -> Vec<String> {
+    let (Some(open), Some(close)) = (sql.find('('), sql.rfind(')')) else { return vec![] };
+    let (mut out, mut depth, mut quoted, mut start) = (vec![], 0, false, open + 1);
+    for (i, c) in sql[open + 1..close].char_indices().map(|(i, c)| (i + open + 1, c)) {
+        match c {
+            '"' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth -= 1,
+            ',' if !quoted && depth == 0 => {
+                out.push(&sql[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&sql[start..close]);
+    out.into_iter()
+        .map(|c| {
+            let c = c.trim();
+            let bare = c.strip_prefix('"').and_then(|c| c.strip_suffix('"')).filter(|c| !c.contains('"'));
+            bare.unwrap_or(c).to_string()
+        })
+        .collect()
+}
+
 /// Cell `i` of a catalog row, taken out (rows are read once, front to back).
 fn take(row: &mut [Option<String>], i: usize) -> Option<String> {
     row.get_mut(i).and_then(Option::take)
@@ -204,6 +231,7 @@ impl Conn {
             Dialect::Pg => self.pg_structure(table).await?,
             Dialect::My => self.my_structure(table).await?,
             Dialect::Lite => self.lite_structure(table).await?,
+            Dialect::Duck => self.duck_structure(table).await?,
         };
         if s.columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
@@ -555,6 +583,120 @@ impl Conn {
             .map(|sql| crate::ddl::lite_checks(&sql))
             .unwrap_or_default();
         Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment: None, options: None })
+    }
+
+    /// A `DuckDB` table's indexes other than its constraints', with their columns read from the CREATE INDEX text.
+    async fn duck_indexes(&mut self, table: &[Option<&str>; 2]) -> Result<Vec<IndexInfo>> {
+        let rows = self
+            .fetch_with(
+                "select index_name, is_unique, sql from duckdb_indexes() where database_name = current_database() \
+                 and schema_name = $1 and table_name = $2 order by index_name",
+                table,
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|mut r| IndexInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                unique: take(&mut r, 1).as_deref() == Some("true"),
+                columns: take(&mut r, 2).map(|sql| index_columns(&sql)).unwrap_or_default(),
+                primary: false,
+                method: None,
+                constraint: false,
+            })
+            .collect())
+    }
+
+    async fn duck_structure(&mut self, table: &str) -> Result<Structure> {
+        let (schema, name) = table.split_once('.').unwrap_or(("main", table));
+        let t = [Some(schema), Some(name)];
+        let constraints = self
+            .fetch_with(
+                "select constraint_type, constraint_name, constraint_text, \
+                 array_to_string(constraint_column_names, chr(31)), referenced_table, \
+                 array_to_string(referenced_column_names, chr(31)) from duckdb_constraints() \
+                 where database_name = current_database() and schema_name = $1 and table_name = $2 \
+                 order by constraint_index",
+                &t,
+            )
+            .await?;
+        let mut primary: Vec<String> = Vec::new();
+        let mut indexes = Vec::new();
+        let mut foreign_keys = Vec::new();
+        let mut checks = Vec::new();
+        for mut r in constraints {
+            let (kind, cname, text) = (take(&mut r, 0), take(&mut r, 1).unwrap_or_default(), take(&mut r, 2));
+            let columns = list(take(&mut r, 3));
+            match kind.as_deref() {
+                Some("PRIMARY KEY") => {
+                    primary.clone_from(&columns);
+                    indexes.push(IndexInfo {
+                        name: cname,
+                        columns,
+                        unique: true,
+                        primary: true,
+                        method: None,
+                        constraint: true,
+                    });
+                }
+                Some("UNIQUE") => {
+                    indexes.push(IndexInfo {
+                        name: cname,
+                        columns,
+                        unique: true,
+                        primary: false,
+                        method: None,
+                        constraint: true,
+                    });
+                }
+                Some("FOREIGN KEY") => foreign_keys.push(ForeignKeyInfo {
+                    name: cname,
+                    columns,
+                    ref_table: take(&mut r, 4).unwrap_or_default(),
+                    ref_columns: list(take(&mut r, 5)),
+                    // DuckDB has no referential actions.
+                    on_update: "NO ACTION".into(),
+                    on_delete: "NO ACTION".into(),
+                }),
+                Some("CHECK") => checks.push(NamedDef { name: cname, definition: text.unwrap_or_default() }),
+                _ => {}
+            }
+        }
+        indexes.extend(self.duck_indexes(&t).await?);
+        let columns = self
+            .fetch_with(
+                "select column_name, data_type, is_nullable, column_default, comment from duckdb_columns() \
+                 where database_name = current_database() and schema_name = $1 and table_name = $2 \
+                 order by column_index",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| {
+                let name = take(&mut r, 0).unwrap_or_default();
+                ColumnInfo {
+                    primary: primary.contains(&name),
+                    name,
+                    data_type: take(&mut r, 1).unwrap_or_default(),
+                    nullable: take(&mut r, 2).as_deref() == Some("true"),
+                    default: take(&mut r, 3),
+                    comment: take(&mut r, 4),
+                    ..ColumnInfo::default()
+                }
+            })
+            .collect();
+        let comment = self
+            .fetch_with(
+                "select comment from (select comment, schema_name, table_name from duckdb_tables() \
+                 union all select comment, schema_name, view_name from duckdb_views()) \
+                 where schema_name = $1 and table_name = $2",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|mut r| take(&mut r, 0));
+        Ok(Structure { columns, indexes, foreign_keys, checks, triggers: vec![], comment, options: None })
     }
 
     async fn named(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<NamedDef>> {

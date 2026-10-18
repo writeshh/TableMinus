@@ -2,6 +2,7 @@
 //! (catalog queries, DDL) on top of it by the engine's [`Dialect`]. A new SQL engine is a new `Driver`, a `Dialect`
 //! variant, and the arms the compiler then points out where SQL differs.
 
+pub mod duckdb;
 pub mod mysql;
 pub mod postgres;
 pub mod sqlite;
@@ -10,6 +11,14 @@ use crate::db::{Dialect, QueryResult};
 use crate::error::{Error, Result};
 use async_trait::async_trait;
 use std::any::Any;
+
+/// Runs blocking work without stalling the async worker it's on: the pool takes over the worker's other tasks
+/// meanwhile. `block_in_place` rather than `spawn_blocking`, which would need to own the borrowed connection. Every
+/// runtime here (the app's, the tests', the MCP bridge's) is multi-threaded, which it requires. For the embedded
+/// engines (SQLite, `DuckDB`), whose calls run on the calling thread.
+pub(crate) fn blocking<T>(work: impl FnOnce() -> T) -> T {
+    tokio::task::block_in_place(work)
+}
 
 /// The most results one call keeps; statements after that still run, but their results are dropped.
 pub const MAX_RESULTS: usize = 100;
@@ -79,6 +88,8 @@ pub enum Stopper {
     My(u32),
     /// SQLite runs on the calling thread, so it is interrupted from another one.
     Lite(rusqlite::InterruptHandle),
+    /// Likewise `DuckDB`.
+    Duck(std::sync::Arc<::duckdb::InterruptHandle>),
 }
 
 /// Receives a query result as it arrives: the column names once, then each row.

@@ -119,11 +119,12 @@ impl Conn {
             Dialect::Pg => format!("{c}::text"),
             Dialect::My => format!("cast({c} as char)"),
             Dialect::Lite => format!("cast({c} as text)"),
+            Dialect::Duck => format!("cast({c} as varchar)"),
         }
     }
 
     fn like(&self) -> &'static str {
-        if self.dialect() == Dialect::Pg { "ilike" } else { "like" }
+        if matches!(self.dialect(), Dialect::Pg | Dialect::Duck) { "ilike" } else { "like" }
     }
 
     /// One filter on one column. `as_text` compares the column's text form, for "any column" filters where
@@ -262,7 +263,8 @@ impl Conn {
         let expr = match self.dialect() {
             Dialect::Pg => "ctid::text",
             Dialect::Lite => "rowid",
-            Dialect::My => return None,
+            // DuckDB's rowid moves when rows are updated, so it can't name a row to edit later.
+            Dialect::My | Dialect::Duck => return None,
         };
         self.fetch_with(&format!("select {expr} from {from} limit 0"), &[]).await.ok().map(|_| expr)
     }

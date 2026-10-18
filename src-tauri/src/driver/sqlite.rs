@@ -1,19 +1,12 @@
 //! SQLite (and `SQLCipher`) through rusqlite. SQLite runs on the calling thread, so every call goes through
 //! [`blocking`].
 
-use super::{Driver, Results, RowSink, Stopper};
+use super::{Driver, Results, RowSink, Stopper, blocking};
 use crate::db::Dialect;
 use crate::error::{Error, Result};
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use std::any::Any;
-
-/// Runs blocking SQLite work without stalling the async worker it's on: the pool takes over the worker's other tasks
-/// meanwhile. `block_in_place` rather than `spawn_blocking`, which would need to own the borrowed connection. Every
-/// runtime here (the app's, the tests', the MCP bridge's) is multi-threaded, which it requires.
-fn blocking<T>(work: impl FnOnce() -> T) -> T {
-    tokio::task::block_in_place(work)
-}
 
 pub struct Sqlite(pub rusqlite::Connection);
 

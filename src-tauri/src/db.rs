@@ -1,6 +1,7 @@
 //! One connection type over the supported SQL engines: open (through the engine's [`Driver`]), run SQL (results as
 //! text cells), browse the catalog.
 
+use crate::driver::duckdb::DuckDb;
 use crate::driver::mysql::Mysql;
 use crate::driver::postgres::{Postgres, cockroach_version};
 use crate::driver::sqlite::Sqlite;
@@ -23,6 +24,7 @@ pub enum Engine {
     Mysql,
     Mariadb,
     Sqlite,
+    Duckdb,
     Redis,
 }
 
@@ -101,6 +103,7 @@ pub enum Dialect {
     Pg,
     My,
     Lite,
+    Duck,
 }
 
 impl Dialect {
@@ -113,10 +116,12 @@ impl Dialect {
         }
     }
 
-    /// A table name; Postgres tables are `schema.table`.
+    /// A table name; Postgres and `DuckDB` tables are `schema.table` (`DuckDB`'s `main` schema is left off).
     pub fn table_ident(self, table: &str) -> String {
         match (self, table.split_once('.')) {
-            (Dialect::Pg, Some((schema, name))) => format!("{}.{}", self.ident(schema), self.ident(name)),
+            (Dialect::Pg | Dialect::Duck, Some((schema, name))) => {
+                format!("{}.{}", self.ident(schema), self.ident(name))
+            }
             _ => self.ident(table),
         }
     }
@@ -130,7 +135,7 @@ impl Dialect {
         match self {
             Dialect::Pg => format!("E'{}'", quoted.replace('\\', "\\\\")),
             Dialect::My => format!("'{}'", quoted.replace('\\', "\\\\")),
-            Dialect::Lite => format!("'{quoted}'"),
+            Dialect::Lite | Dialect::Duck => format!("'{quoted}'"),
         }
     }
 }
@@ -165,6 +170,7 @@ impl Conn {
                     Box::new(Mysql::open(url, password, tls, options, tunnel_port).await?)
                 }
                 Engine::Sqlite => Box::new(Sqlite::open(url, password)?),
+                Engine::Duckdb => Box::new(DuckDb::open(url)?),
                 Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
             })
         };
@@ -211,7 +217,7 @@ impl Conn {
                 let r = self.query("show status like 'Ssl_cipher'").await?;
                 r.rows.into_iter().next().and_then(|mut row| row.pop().flatten())
             }
-            Dialect::Lite => None,
+            Dialect::Lite | Dialect::Duck => None,
         };
         Ok(cipher.filter(|c| !c.is_empty()))
     }
@@ -277,6 +283,12 @@ impl Conn {
                 "select m.name, p.name from sqlite_master m join pragma_table_info(m.name) p \
                  where m.type in ('table', 'view') order by m.name, p.cid"
             }
+            Dialect::Duck => {
+                "select case when table_schema = 'main' then table_name else table_schema || '.' || table_name end, \
+                 column_name from information_schema.columns where table_catalog = current_database() \
+                 and table_schema not in ('information_schema', 'pg_catalog') \
+                 order by table_schema, table_name, ordinal_position"
+            }
         };
         let r = self.query(sql).await?;
         Ok(r.rows
@@ -317,12 +329,12 @@ impl Conn {
         Ok(self.query(sql).await?.rows.into_iter().next().and_then(|mut row| row.swap_remove(0)))
     }
 
-    /// Databases on the server; empty for SQLite (one file, one database).
+    /// Databases on the server; empty for SQLite and `DuckDB` (one file, one database).
     pub async fn databases(&mut self) -> Result<Vec<String>> {
         let sql = match self.dialect() {
             Dialect::Pg => "select datname from pg_database where not datistemplate and datallowconn order by 1",
             Dialect::My => "select schema_name from information_schema.schemata order by 1",
-            Dialect::Lite => return Ok(vec![]),
+            Dialect::Lite | Dialect::Duck => return Ok(vec![]),
         };
         Ok(self.query(sql).await?.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
     }
@@ -332,7 +344,7 @@ impl Conn {
         match self.dialect() {
             Dialect::Pg => self.scalar("select current_database()").await,
             Dialect::My => self.scalar("select database()").await,
-            Dialect::Lite => Ok(None),
+            Dialect::Lite | Dialect::Duck => Ok(None),
         }
     }
 
@@ -348,6 +360,7 @@ impl Conn {
             Dialect::Pg => ("PostgreSQL", "show server_version"),
             Dialect::My => ("MySQL", "select version()"),
             Dialect::Lite => ("SQLite", "select sqlite_version()"),
+            Dialect::Duck => ("DuckDB", "select version()"),
         };
         let v = self.scalar(sql).await?.unwrap_or_default();
         // MariaDB reports e.g. "11.4.2-MariaDB"; name it after what the server says it is.
@@ -418,6 +431,19 @@ impl Conn {
                  case when pk > 0 then 'PRI' else '' end from pragma_table_info($1)",
                 vec![Some(table)],
             ),
+            Dialect::Duck => {
+                let (schema, name) = table.split_once('.').unwrap_or(("main", table));
+                (
+                    "select c.column_name, c.data_type, c.is_nullable, c.column_default, \
+                     case when exists (select 1 from duckdb_constraints() k where k.constraint_type = 'PRIMARY KEY' \
+                     and k.database_name = c.table_catalog and k.schema_name = c.table_schema \
+                     and k.table_name = c.table_name and list_contains(k.constraint_column_names, c.column_name)) \
+                     then 'PRI' else '' end \
+                     from information_schema.columns c where c.table_catalog = current_database() \
+                     and c.table_schema = $1 and c.table_name = $2 order by c.ordinal_position",
+                    vec![Some(schema), Some(name)],
+                )
+            }
         };
         Ok(self
             .fetch_with(sql, &params)
@@ -452,6 +478,11 @@ impl Conn {
                 "select table_name from information_schema.tables where table_schema = database() order by 1"
             }
             Dialect::Lite => "select name from sqlite_master where type in ('table', 'view') order by 1",
+            Dialect::Duck => {
+                "select case when table_schema = 'main' then table_name else table_schema || '.' || table_name end \
+                 from information_schema.tables where table_catalog = current_database() \
+                 and table_schema not in ('information_schema', 'pg_catalog') order by table_schema <> 'main', 1"
+            }
         };
         let r = self.query(sql).await?;
         Ok(r.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
@@ -465,14 +496,15 @@ mod tests {
         use crate::db::Dialect;
         use proptest::prelude::*;
         use sqlparser::ast::{Expr, ObjectNamePart, SelectItem, SetExpr, Statement, TableFactor, Value};
-        use sqlparser::dialect::{Dialect as Parsing, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+        use sqlparser::dialect::{Dialect as Parsing, DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
         use sqlparser::parser::Parser;
 
-        fn dialects() -> [(Dialect, Box<dyn Parsing>); 3] {
+        fn dialects() -> [(Dialect, Box<dyn Parsing>); 4] {
             [
                 (Dialect::Pg, Box::new(PostgreSqlDialect {})),
                 (Dialect::My, Box::new(MySqlDialect {})),
                 (Dialect::Lite, Box::new(SQLiteDialect {})),
+                (Dialect::Duck, Box::new(DuckDbDialect {})),
             ]
         }
 

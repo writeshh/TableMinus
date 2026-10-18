@@ -168,6 +168,9 @@ struct Target<'a> {
 fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: &mut Vec<Part<'a>>) -> Result<()> {
     let Target { key, id, original } = *t;
     if key.is_empty() && id.is_none() && !original.is_empty() {
+        if d == Dialect::Duck {
+            return Err(Error::Invalid("DuckDB rows have no stable identity; add a primary key to edit this table"));
+        }
         if d != Dialect::My {
             return Err(Error::Invalid("only MySQL rows are matched on their values; this engine has row identities"));
         }
@@ -203,7 +206,7 @@ fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: 
         let column = match d {
             Dialect::Pg => "ctid",
             Dialect::Lite => "rowid",
-            Dialect::My => return Err(Error::Invalid("MySQL rows have no row identity")),
+            Dialect::My | Dialect::Duck => return Err(Error::Invalid("MySQL and DuckDB rows have no row identity")),
         };
         parts.push(Part::Sql(format!(" where {column} = ")));
         parts.push(Part::Param(Param::RowId(id)));
@@ -455,7 +458,9 @@ impl Conn {
             Dialect::Pg => {
                 format!("select encode(substring({c} from 1 for {HEX_PREVIEW}), 'hex'), octet_length({c})::text")
             }
-            Dialect::My => format!("select hex(substring({c}, 1, {HEX_PREVIEW})), octet_length({c})"),
+            Dialect::My | Dialect::Duck => {
+                format!("select hex(substring({c}, 1, {HEX_PREVIEW})), octet_length({c})")
+            }
             Dialect::Lite => format!("select hex(substr({c}, 1, {HEX_PREVIEW})), length(cast({c} as blob))"),
         };
         let mut parts = vec![Part::Sql(format!("{select} from {}", d.table_ident(table)))];
@@ -503,7 +508,7 @@ impl Conn {
                     }
                 }
             }
-            Dialect::Lite => {}
+            Dialect::Lite | Dialect::Duck => {}
         }
         Ok(out)
     }

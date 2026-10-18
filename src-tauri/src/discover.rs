@@ -153,6 +153,7 @@ fn label(kind: Engine, flavor: Option<Flavor>) -> &'static str {
         (Engine::Mariadb, _) => "MariaDB",
         (Engine::Redis, _) => "Redis",
         (Engine::Sqlite, _) => "SQLite",
+        (Engine::Duckdb, _) => "DuckDB",
     }
 }
 
@@ -276,7 +277,7 @@ fn local_port(c: &Saved) -> Option<u16> {
         Engine::Postgres => Some(5432),
         Engine::Mysql | Engine::Mariadb => Some(3306),
         Engine::Redis => Some(6379),
-        Engine::Sqlite => None,
+        Engine::Sqlite | Engine::Duckdb => None,
     })
 }
 

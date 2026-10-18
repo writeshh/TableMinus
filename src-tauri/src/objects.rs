@@ -94,7 +94,7 @@ pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, cre
         Dialect::Pg => Ok(vec![def]),
         Dialect::My if create => Ok(vec![def]),
         Dialect::My => Ok(vec![format!("DROP {what} IF EXISTS {}", d.ident(name)), def]),
-        Dialect::Lite => Err(NO_ROUTINES),
+        Dialect::Lite | Dialect::Duck => Err(NO_ROUTINES),
     }
 }
 
@@ -110,7 +110,7 @@ pub fn routine_template(d: Dialect, kind: ItemKind, name: &str) -> Result<String
         }
         (Dialect::My, ItemKind::Function) => format!("CREATE FUNCTION {t}()\nRETURNS int\nDETERMINISTIC\nRETURN 1"),
         (Dialect::My, ItemKind::Procedure) => format!("CREATE PROCEDURE {t}()\nBEGIN\n  SELECT 1;\nEND"),
-        (Dialect::Lite, _) => return Err(NO_ROUTINES),
+        (Dialect::Lite | Dialect::Duck, _) => return Err(NO_ROUTINES),
         _ => return Err(Error::Invalid("not a function or procedure")),
     })
 }
@@ -255,9 +255,19 @@ impl Conn {
             Dialect::Lite => {
                 self.fetch_with("select sql from sqlite_master where type = 'view' and name = $1", &[Some(view)]).await?
             }
+            Dialect::Duck => {
+                let (schema, name) = view.split_once('.').unwrap_or(("main", view));
+                self.fetch_with(
+                    "select sql from duckdb_views() where database_name = current_database() \
+                     and schema_name = $1 and view_name = $2",
+                    &[Some(schema), Some(name)],
+                )
+                .await?
+            }
         };
         let text = body.into_iter().next().and_then(|mut r| r.pop().flatten()).ok_or(Error::Invalid("no such view"))?;
-        let text = if self.dialect() == Dialect::Lite {
+        // SQLite and DuckDB keep the whole CREATE VIEW statement.
+        let text = if matches!(self.dialect(), Dialect::Lite | Dialect::Duck) {
             sqlite_view_body(&text).ok_or(Error::Invalid("can't find the SELECT in this view's definition"))?
         } else {
             &text
@@ -294,7 +304,7 @@ impl Conn {
                     .map(|mut r| vec![r.get_mut(2).and_then(Option::take)])
                     .collect()
             }
-            Dialect::Lite => return Err(NO_ROUTINES),
+            Dialect::Lite | Dialect::Duck => return Err(NO_ROUTINES),
         };
         let pg = self.dialect() == Dialect::Pg;
         let defs: Vec<String> = rows
@@ -370,7 +380,7 @@ impl Conn {
                             .collect()
                     }
                     Dialect::My => vec![format!("DROP {what} {t}")],
-                    Dialect::Lite => return Err(NO_ROUTINES),
+                    Dialect::Lite | Dialect::Duck => return Err(NO_ROUTINES),
                 }
             }
         })

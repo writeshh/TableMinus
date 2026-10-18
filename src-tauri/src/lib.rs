@@ -39,7 +39,7 @@ mod users;
 #[cfg(fuzzing)]
 #[doc(hidden)]
 pub fn fuzz_read_only(sql: &str) {
-    for engine in [Engine::Postgres, Engine::Mysql, Engine::Sqlite] {
+    for engine in [Engine::Postgres, Engine::Mysql, Engine::Sqlite, Engine::Duckdb] {
         readonly::is_read_only(engine, sql);
     }
 }
@@ -181,7 +181,7 @@ struct Info {
 
 async fn info(live: &mut Live) -> Result<Info> {
     let database = live.conn.current_database().await?;
-    let file_based = live.saved.kind == Engine::Sqlite;
+    let file_based = matches!(live.saved.kind, Engine::Sqlite | Engine::Duckdb);
     // No database selected yet (MySQL connected without one): nothing to list.
     let tables = if database.is_none() && !file_based {
         vec![]
@@ -506,6 +506,10 @@ async fn stop_query(
             handle.interrupt();
             Ok(())
         }
+        db::Stopper::Duck(handle) => {
+            handle.interrupt();
+            Ok(())
+        }
     }
 }
 
@@ -528,6 +532,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::Postgres => "tokio-postgres",
                 Engine::Mysql | Engine::Mariadb => "mysql_async",
                 Engine::Sqlite => "rusqlite (bundled SQLite)",
+                Engine::Duckdb => "duckdb (bundled DuckDB)",
                 Engine::Redis => "TableMinus RESP2 client",
             },
             cipher: live.conn.tls_cipher().await?,

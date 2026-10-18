@@ -79,6 +79,11 @@ pub enum Error {
     MySql(#[from] mysql_async::Error),
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
+    #[error("DuckDB: {0}")]
+    DuckDb(#[from] duckdb::Error),
+    /// A `DuckDB` value Arrow couldn't turn into text.
+    #[error("DuckDB: {0}")]
+    Arrow(String),
     #[error("TLS: {0}")]
     Tls(#[from] native_tls::Error),
     #[error("keychain: {0}")]

@@ -99,6 +99,11 @@ impl Conn {
                  where routine_schema = database() order by 1, 2"
                 .into(),
             Dialect::Lite => "select 'view', name from sqlite_master where type = 'view' order by 2".into(),
+            // Views only: DuckDB's sequences and macros have no editors here.
+            Dialect::Duck => "select 'view', case when schema_name = 'main' then view_name \
+                 else schema_name || '.' || view_name end from duckdb_views() \
+                 where not internal and database_name = current_database() order by 2"
+                .into(),
         };
         let rows = self.fetch_with(&sql, &[]).await?;
         Ok(rows
@@ -174,7 +179,7 @@ impl Conn {
                 let innodb = row.get(3).cloned().flatten().is_some_and(|t| t == "BASE TABLE");
                 Ok(Overview { rows: num(0), estimated: innodb, bytes: num(1), created })
             }
-            Dialect::Lite => {
+            Dialect::Lite | Dialect::Duck => {
                 let count = format!("select count(*) from {}", self.table_ident(table));
                 let rows = self.fetch_with(&count, &[]).await?;
                 let rows = rows.first().and_then(|r| r.first().cloned().flatten()).and_then(|n| n.parse().ok());
