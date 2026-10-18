@@ -119,7 +119,7 @@
               </div>
             </div>
             <label data-engines="mongodb">Connection options <input name="mongo_query" spellcheck="false" placeholder="Optional, e.g. authSource=admin&amp;replicaSet=rs0" /></label>
-            <label data-engines="mysql mariadb">Socket <input name="opt_socket" placeholder="Optional, e.g. /tmp/mysql.sock; replaces host and port" /></label>
+            <label data-engines="postgres mysql mariadb">Socket <input name="opt_socket" placeholder="Optional; replaces host and port. MySQL: /tmp/mysql.sock; Postgres: /tmp or /tmp/.s.PGSQL.5432" /></label>
             <label data-engines="mysql mariadb">SNI name <input name="opt_sni" placeholder="Optional TLS server name, for proxies that route by it" /></label>
             <div class="opt-row" data-engines="mysql mariadb">
               <span>Auth</span>

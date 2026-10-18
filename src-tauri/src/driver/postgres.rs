@@ -62,6 +62,39 @@ fn tunnelled_config(url: &str, tunnel_port: u16) -> Result<tokio_postgres::Confi
     Ok(cfg)
 }
 
+#[cfg(not(unix))]
+fn socket_config(_url: &str, _socket: &str) -> Result<tokio_postgres::Config> {
+    Err(Error::Invalid("Unix sockets work on macOS and Linux only"))
+}
+
+/// The URL's user and database, reached through a Unix socket instead of its host: `socket` is the socket's folder
+/// (`/tmp`), or the socket itself (`/tmp/.s.PGSQL.5432`), whose name gives the port.
+#[cfg(unix)]
+fn socket_config(url: &str, socket: &str) -> Result<tokio_postgres::Config> {
+    let from: tokio_postgres::Config = url.parse()?;
+    let path = std::path::Path::new(socket);
+    let named_port = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix(".s.PGSQL."))
+        .and_then(|p| p.parse().ok());
+    let (dir, port) = match named_port {
+        Some(port) => (path.parent().unwrap_or(path), port),
+        None => (path, from.get_ports().first().copied().unwrap_or(5432)),
+    };
+    let mut cfg = tokio_postgres::Config::new();
+    cfg.host_path(dir);
+    cfg.port(port);
+    if let Some(user) = from.get_user() {
+        cfg.user(user);
+    }
+    if let Some(db) = from.get_dbname() {
+        cfg.dbname(db);
+    }
+    cfg.connect_timeout(crate::db::CONNECT_TIMEOUT);
+    Ok(cfg)
+}
+
 impl Postgres {
     pub async fn open(
         url: &str,
@@ -72,13 +105,16 @@ impl Postgres {
     ) -> Result<Postgres> {
         let mut cfg: tokio_postgres::Config = match tunnel_port {
             Some(port) => tunnelled_config(url, port)?,
+            None if !options.socket.is_empty() => socket_config(url, &options.socket)?,
             None => url.parse()?,
         };
         if let Some(password) = password {
             cfg.password(password.expose_secret());
         }
         let (mode, connector) = tls.postgres()?;
-        cfg.ssl_mode(mode);
+        // A Unix socket never leaves the machine, and the server offers no TLS on one.
+        let on_socket = tunnel_port.is_none() && !options.socket.is_empty();
+        cfg.ssl_mode(if on_socket { tokio_postgres::config::SslMode::Disable } else { mode });
         if options.direct_tls {
             cfg.ssl_negotiation(tokio_postgres::config::SslNegotiation::Direct);
         }

@@ -56,7 +56,8 @@ pub struct Options {
     pub no_channel_binding: bool,
     /// Postgres: also list tables in `pg_catalog` and `information_schema`.
     pub system_schemas: bool,
-    /// MySQL: connect through this Unix socket instead of host and port.
+    /// MySQL and Postgres: connect through this Unix socket instead of host and port (for Postgres, its folder or the
+    /// `.s.PGSQL.<port>` file).
     pub socket: String,
     /// MySQL: the TLS server name to send and check, for proxies that route by SNI.
     pub sni: String,
