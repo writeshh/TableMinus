@@ -12,14 +12,11 @@ use crate::safety::{self, Unlock};
 use crate::store::{self, Saved};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream};
-use tokio::sync::Mutex;
 
 /// Longer than any value worth showing; a bigger one is cut (strings) or refused.
 const MAX_BULK: usize = 64 * 1024 * 1024;
@@ -450,7 +447,7 @@ pub fn split_line(line: &str) -> Result<Vec<Vec<u8>>> {
 
 // ---------- Sessions ----------
 
-struct Session {
+pub(crate) struct Session {
     client: Client,
     saved: Saved,
     password: Option<SecretString>,
@@ -458,33 +455,12 @@ struct Session {
     _tunnel: Option<crate::ssh::Tunnel>,
 }
 
-/// The open Redis sessions, by session key (as `Open` keys SQL ones).
-#[derive(Default)]
-pub struct Sessions(Mutex<HashMap<String, Arc<Mutex<Session>>>>);
+/// The open sessions, by session key.
+pub(crate) type Sessions = crate::sessions::Sessions<Session>;
 
-impl Sessions {
-    async fn get(&self, name: &str) -> Result<tokio::sync::OwnedMutexGuard<Session>> {
-        let s = self.0.lock().await.get(name).cloned().ok_or(Error::NotConnected)?;
-        Ok(s.lock_owned().await)
-    }
-
-    pub async fn remove(&self, name: &str) {
-        self.0.lock().await.remove(name);
-    }
-
-    /// A new safe mode level for every session of the saved connection `connection`.
-    pub async fn set_safety(&self, connection: &str, level: safety::Safety) {
-        let sessions: Vec<_> = self
-            .0
-            .lock()
-            .await
-            .iter()
-            .filter(|(k, _)| k.split_once('\u{1f}').map_or(k.as_str(), |(n, _)| n) == connection)
-            .map(|(_, s)| s.clone())
-            .collect();
-        for s in sessions {
-            s.lock().await.saved.safety = level;
-        }
+impl crate::sessions::Session for Session {
+    fn saved_mut(&mut self) -> &mut Saved {
+        &mut self.saved
     }
 }
 
@@ -588,7 +564,7 @@ pub async fn redis_connect(
         .as_deref()
         .map(|d| d.parse::<u32>().map_err(|_| Error::Invalid("a Redis database is a number")))
         .transpose()?;
-    if let Some(existing) = sessions.0.lock().await.get(&name).cloned() {
+    if let Some(existing) = sessions.existing(&name).await {
         let mut s = existing.lock().await;
         if db.is_none_or(|d| d == s.db) {
             return info(&prefs, &mut s).await;
@@ -611,7 +587,7 @@ pub async fn redis_connect(
         let _ = store::clear_needs_credentials(&crate::dir(&app)?, &badge);
     }
     let r = info(&prefs, &mut s).await;
-    sessions.0.lock().await.insert(name, Arc::new(Mutex::new(s)));
+    sessions.insert(name, s).await;
     r
 }
 

@@ -29,6 +29,7 @@ mod redis;
 mod rows;
 mod safety;
 mod secrets;
+mod sessions;
 mod ssh;
 mod store;
 mod structure;

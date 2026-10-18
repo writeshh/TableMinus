@@ -67,7 +67,22 @@ impl Endpoint {
         body: Vec<u8>,
         max: usize,
     ) -> Result<(u16, Bytes)> {
-        let mut request = Request::post(path)
+        self.send(hyper::Method::POST, path, headers, body, max).await
+    }
+
+    /// Sends `body` (JSON unless `headers` name another content type) to `path` with `method`, and returns the status
+    /// and up to `max` bytes of the answer.
+    pub async fn send(
+        &self,
+        method: hyper::Method,
+        path: &str,
+        headers: &[(header::HeaderName, header::HeaderValue)],
+        body: Vec<u8>,
+        max: usize,
+    ) -> Result<(u16, Bytes)> {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
             .header(header::HOST, self.host_header())
             .header(header::ACCEPT, "application/json")
             .header(header::CONNECTION, "close");

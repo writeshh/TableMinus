@@ -17,17 +17,15 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::SystemTime;
 use tauri::{AppHandle, State};
-use tokio::sync::Mutex;
 
 /// An answer holds a page of items: `DynamoDB` caps one at 1 MB, so this is plenty.
 const MAX_ANSWER: usize = 64 * 1024 * 1024;
 /// The most tables listed.
 const MAX_TABLES: usize = 10_000;
 
-struct Session {
+pub(crate) struct Session {
     endpoint: Endpoint,
     region: String,
     access_key: String,
@@ -40,32 +38,12 @@ struct Session {
     _tunnel: Option<crate::ssh::Tunnel>,
 }
 
-/// The open `DynamoDB` sessions, by session key.
-#[derive(Default)]
-pub struct Sessions(Mutex<HashMap<String, Arc<Mutex<Session>>>>);
+/// The open sessions, by session key.
+pub(crate) type Sessions = crate::sessions::Sessions<Session>;
 
-impl Sessions {
-    async fn get(&self, name: &str) -> Result<tokio::sync::OwnedMutexGuard<Session>> {
-        let s = self.0.lock().await.get(name).cloned().ok_or(Error::NotConnected)?;
-        Ok(s.lock_owned().await)
-    }
-
-    pub async fn remove(&self, name: &str) {
-        self.0.lock().await.remove(name);
-    }
-
-    pub async fn set_safety(&self, connection: &str, level: safety::Safety) {
-        let sessions: Vec<_> = self
-            .0
-            .lock()
-            .await
-            .iter()
-            .filter(|(k, _)| k.split_once('\u{1f}').map_or(k.as_str(), |(n, _)| n) == connection)
-            .map(|(_, s)| s.clone())
-            .collect();
-        for s in sessions {
-            s.lock().await.saved.safety = level;
-        }
+impl crate::sessions::Session for Session {
+    fn saved_mut(&mut self) -> &mut Saved {
+        &mut self.saved
     }
 }
 
@@ -223,7 +201,7 @@ pub async fn dynamo_connect(
     name: String,
 ) -> Result<Info> {
     open.unlocked()?;
-    if let Some(existing) = sessions.0.lock().await.get(&name).cloned() {
+    if let Some(existing) = sessions.existing(&name).await {
         return info(&*existing.lock().await).await;
     }
     let saved_name = name.split_once('\u{1f}').map_or(name.as_str(), |(n, _)| n);
@@ -238,7 +216,7 @@ pub async fn dynamo_connect(
     let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
     let s = open_session(saved, secret, ssh_secret).await?;
     let r = info(&s).await;
-    sessions.0.lock().await.insert(name, Arc::new(Mutex::new(s)));
+    sessions.insert(name, s).await;
     r
 }
 

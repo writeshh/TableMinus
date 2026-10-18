@@ -17,10 +17,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use shell::{Operation, to_bson};
-use std::collections::HashMap;
-use std::sync::Arc;
 use tauri::{AppHandle, State};
-use tokio::sync::Mutex;
 
 /// The most documents one operation shows; the grid pages with skip and limit for more.
 const MAX_DOCS: usize = 50_000;
@@ -57,7 +54,7 @@ const READ_COMMANDS: &[&str] = &[
     "whatsmyuri",
 ];
 
-struct Session {
+pub(crate) struct Session {
     client: Client,
     /// The database `db` means.
     db: String,
@@ -66,33 +63,12 @@ struct Session {
     _tunnel: Option<crate::ssh::Tunnel>,
 }
 
-/// The open `MongoDB` sessions, by session key (as `Open` keys SQL ones).
-#[derive(Default)]
-pub struct Sessions(Mutex<HashMap<String, Arc<Mutex<Session>>>>);
+/// The open sessions, by session key.
+pub(crate) type Sessions = crate::sessions::Sessions<Session>;
 
-impl Sessions {
-    async fn get(&self, name: &str) -> Result<tokio::sync::OwnedMutexGuard<Session>> {
-        let s = self.0.lock().await.get(name).cloned().ok_or(Error::NotConnected)?;
-        Ok(s.lock_owned().await)
-    }
-
-    pub async fn remove(&self, name: &str) {
-        self.0.lock().await.remove(name);
-    }
-
-    /// A new safe mode level for every session of the saved connection `connection`.
-    pub async fn set_safety(&self, connection: &str, level: safety::Safety) {
-        let sessions: Vec<_> = self
-            .0
-            .lock()
-            .await
-            .iter()
-            .filter(|(k, _)| k.split_once('\u{1f}').map_or(k.as_str(), |(n, _)| n) == connection)
-            .map(|(_, s)| s.clone())
-            .collect();
-        for s in sessions {
-            s.lock().await.saved.safety = level;
-        }
+impl crate::sessions::Session for Session {
+    fn saved_mut(&mut self) -> &mut Saved {
+        &mut self.saved
     }
 }
 
@@ -211,7 +187,7 @@ pub async fn mongo_connect(
     database: Option<String>,
 ) -> Result<Info> {
     open.unlocked()?;
-    if let Some(existing) = sessions.0.lock().await.get(&name).cloned() {
+    if let Some(existing) = sessions.existing(&name).await {
         let mut s = existing.lock().await;
         if let Some(db) = database {
             s.db = db; // one client reaches every database
@@ -235,7 +211,7 @@ pub async fn mongo_connect(
         let _ = store::clear_needs_credentials(&crate::dir(&app)?, &badge);
     }
     let r = info(&s).await;
-    sessions.0.lock().await.insert(name, Arc::new(Mutex::new(s)));
+    sessions.insert(name, s).await;
     r
 }
 
