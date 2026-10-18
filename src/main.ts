@@ -1201,8 +1201,7 @@ async function openSqlFile() {
   try {
     const sql = await invoke<string>("read_text_file", { path });
     const tab: SqlTab = { id: nextId++, kind: "sql", title: fileName(path), sql, path };
-    tabs.push(tab);
-    select(tab.id);
+    addTab(tab);
     saveSqlTabs();
   } catch (e) {
     status(String(e), "error");
@@ -1544,7 +1543,9 @@ type TableTab = {
   /** A table being created in the structure view; it doesn't exist yet. */
   create?: boolean;
 };
-type Tab = SqlTab | TableTab;
+/** ⌘T's tab when Settings › General says Empty tab: the next table or SQL query opened takes its place. */
+type EmptyTab = { id: number; kind: "empty"; title: string };
+type Tab = SqlTab | TableTab | EmptyTab;
 type StatusKind = "" | "busy" | "error" | "done";
 let tabs: Tab[] = [];
 let currentId = 0;
@@ -1570,9 +1571,23 @@ function openSqlTab(): SqlTab {
   let n = 1;
   while (used.has(name(n))) n++;
   const tab: SqlTab = { id: nextId++, kind: "sql", title: name(n), sql: "" };
-  tabs.push(tab);
-  select(tab.id);
+  addTab(tab);
   return tab;
+}
+
+/** ⌘T: a SQL tab, or an empty one (Settings › General). */
+function newTab() {
+  if (settings.newTabKind === "sql") return (openSqlTab(), editor.focus());
+  if (current()?.kind === "empty") return;
+  addTab({ id: nextId++, kind: "empty", title: "New Tab" });
+}
+
+/** Adds and selects a tab; an empty tab showing is replaced by it, in its place. */
+function addTab(tab: Tab) {
+  const i = tabs.findIndex((t) => t.id === currentId && t.kind === "empty");
+  if (i < 0) tabs.push(tab);
+  else tabs.splice(i, 1, tab);
+  select(tab.id);
 }
 
 /** A new SQL tab holding `sql`, named `title` (or the next free "SQL Query n"). */
@@ -1600,8 +1615,7 @@ function openTable(table: string, view: TableTab["view"] = "data", create = fals
     id: nextId++, kind: "table", title: table, table, view, offset: 0, staged: new Staged(), create,
     sort: [], filters: filters ?? [], combine: "and", filtersShown: !!filters || settings.filterBar, layout: loadLayout(active!.name, table),
   };
-  tabs.push(tab);
-  select(tab.id);
+  addTab(tab);
   if (view === "data") loadTable(tab);
 }
 
@@ -1743,7 +1757,7 @@ function renderMain() {
       const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
       close.onclick = (e) => (e.stopPropagation(), closeTab(t.id));
       const b = el("button", { className: `tab ${t.kind}`, title: t.kind === "sql" && t.path ? t.path : t.title },
-        el("span", { className: t.kind === "sql" ? "tab-sql" : "tbl-icon", textContent: t.kind === "sql" ? "SQL" : "" }),
+        ...(t.kind === "empty" ? [] : [el("span", { className: t.kind === "sql" ? "tab-sql" : "tbl-icon", textContent: t.kind === "sql" ? "SQL" : "" })]),
         el("span", { className: "label", textContent: t.title }),
         close,
       );
@@ -1762,6 +1776,7 @@ function renderMain() {
   const env = active?.tag ? `${tagLabel(active.tag)} | ` : "";
   $("pill").textContent = `${env}${info?.server ?? ""}${info?.database ? ` : ${dbLabel(info.database)}` : ""}${tab && !isRedis() ? ` : ${tab.title}` : ""}`;
   $("pill").className = `pill ${active?.tag ?? ""}`;
+  if (tab?.kind === "empty") return showNoTab(true);
   if (!tab) return showNoTab();
 
   $("sql-pane").hidden = tab.kind !== "sql";
@@ -1834,15 +1849,16 @@ function syncDetail() {
   syncRowDetail(table, sel && sel.r === table?.result ? sel.focus[0] : null);
 }
 
-/** The workspace with every tab closed: still connected, saying how to go on or leave. */
-function showNoTab() {
+/** The workspace with every tab closed (or an empty tab showing): still connected, saying how to go on or leave. */
+function showNoTab(emptyTab = false) {
   for (const id of ["sql-pane", "table-foot", "result-strip", "filters"]) $(id).hidden = true;
   filtersDrawnFor = 0;
   selection = null;
   syncDetail();
   $("out").replaceChildren(el("p", {
     className: "hint empty",
-    textContent: `No tabs open. Open a table from the sidebar, or press ${keyLabel("new-tab")} for a SQL query. ${keyLabel("close-tab")} closes the connection.`,
+    textContent: emptyTab ? "Open a table from the sidebar, or a SQL query, and it opens in this tab."
+      : `No tabs open. Open a table from the sidebar, or press ${keyLabel("new-tab")} for a new tab. ${keyLabel("close-tab")} closes the connection.`,
   }));
 }
 
@@ -1865,13 +1881,14 @@ function showPending(tab: Tab) {
 
 const pendingCount = (tab: Tab) =>
   tab.kind === "table" ? tab.staged.count + structurePending(tab.id)
-  : (tab.out?.tabs ?? []).reduce((n, r) => n + (r.edit?.staged.count ?? 0), 0);
+  : tab.kind === "sql" ? (tab.out?.tabs ?? []).reduce((n, r) => n + (r.edit?.staged.count ?? 0), 0)
+  : 0;
 
 async function okToDiscard(tab: Tab) {
   const n = pendingCount(tab);
   if (!n || (await confirmDialog(`Discard ${n} unsaved change${n === 1 ? "" : "s"} in ${tab.title}?`, "Discard"))) {
     if (tab.kind === "table") (tab.staged.clear(), dropDraft(tab.id));
-    else for (const r of tab.out?.tabs ?? []) r.edit?.staged.clear();
+    else if (tab.kind === "sql") for (const r of tab.out?.tabs ?? []) r.edit?.staged.clear();
     return true;
   }
   return false;
@@ -3252,6 +3269,8 @@ type Settings = {
   launcherSort: "name" | "kind" | "tag";
   /** Reconnect, at startup, the workspaces open at quit. */
   reopenWorkspaces: boolean;
+  /** What ⌘T opens: a SQL tab, or an empty one that the next table or query fills. */
+  newTabKind: "sql" | "empty";
   /** Rows on a table tab's page. */
   pageSize: number;
   /** Tables the catalog estimates at this many rows or more show the estimate instead of a count; 0 = always count. */
@@ -3272,7 +3291,7 @@ const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
   sqlLimit: 1000, formatStyle: "standard", paramFormat: "colon", wrapLines: false, showInvisibles: false, keepTabs: true,
   keyBinding: "sublime", upperKeywords: false, completeKey: "enter", filterColumn: "any", filterOp: "contains", filterBar: false,
-  shortcuts: {}, launcherSort: "name", reopenWorkspaces: false,
+  shortcuts: {}, launcherSort: "name", reopenWorkspaces: false, newTabKind: "sql",
   resultsMode: "tabs", stopOnError: true, historyYears: 0,
   pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, hideScrollbars: false, logOriginals: false,
   revealExport: false, closeBrackets: true,
@@ -3316,6 +3335,7 @@ function applySettings() {
   $<HTMLInputElement>("show-invisibles").checked = settings.showInvisibles;
   $<HTMLInputElement>("keep-tabs").checked = settings.keepTabs;
   $<HTMLInputElement>("reopen-workspaces").checked = settings.reopenWorkspaces;
+  $<HTMLSelectElement>("new-tab-kind").value = settings.newTabKind;
   $<HTMLSelectElement>("conn-sort").value = settings.launcherSort;
   $<HTMLSelectElement>("results-mode").value = settings.resultsMode;
   $<HTMLInputElement>("stop-on-error").checked = settings.stopOnError;
@@ -3423,6 +3443,7 @@ $<HTMLInputElement>("wrap-lines").onchange = (e) => setSetting("wrapLines", (e.t
 $<HTMLInputElement>("show-invisibles").onchange = (e) => setSetting("showInvisibles", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("keep-tabs").onchange = (e) => setSetting("keepTabs", (e.target as HTMLInputElement).checked);
 $<HTMLInputElement>("reopen-workspaces").onchange = (e) => setSetting("reopenWorkspaces", (e.target as HTMLInputElement).checked);
+$<HTMLSelectElement>("new-tab-kind").onchange = (e) => setSetting("newTabKind", (e.target as HTMLSelectElement).value as Settings["newTabKind"]);
 $<HTMLSelectElement>("conn-sort").onchange = (e) => (setSetting("launcherSort", (e.target as HTMLSelectElement).value as Settings["launcherSort"]), renderConns());
 $<HTMLSelectElement>("results-mode").onchange = (e) => setSetting("resultsMode", (e.target as HTMLSelectElement).value as Settings["resultsMode"]);
 $<HTMLInputElement>("stop-on-error").onchange = (e) => setSetting("stopOnError", (e.target as HTMLInputElement).checked);
@@ -3454,7 +3475,7 @@ const onSqlTab = () => inWorkspace() && current()?.kind === "sql";
 const fontBy = (size: number) => setSetting("fontSize", clamp(size, 9, 28));
 
 addCommands([
-  { id: "new-tab", label: "New Tab", menu: "File", keys: ["Mod+KeyT"], when: inWorkspace, run: () => (openSqlTab(), editor.focus()) },
+  { id: "new-tab", label: "New Tab", menu: "File", keys: ["Mod+KeyT"], when: inWorkspace, run: newTab },
   { id: "reopen-tab", label: "Reopen Closed Tab", menu: "File", keys: ["Mod+Shift+KeyT"], when: () => inWorkspace() && !!pane.closed.length,
     run: reopenClosedTab },
   { id: "open-file", label: "Open…", menu: "File", keys: ["Mod+KeyO"], when: inWorkspace, run: openSqlFile },
