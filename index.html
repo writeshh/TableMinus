@@ -63,26 +63,26 @@
         </fieldset>
         <fieldset class="net">
           <div class="pair">
-            <label>Host <input name="host" placeholder="127.0.0.1" /></label>
-            <label class="port">Port <input name="port" inputmode="numeric" /></label>
+            <label data-f="host"><span>Host</span> <input name="host" placeholder="127.0.0.1" /></label>
+            <label class="port" data-f="port"><span>Port</span> <input name="port" inputmode="numeric" /></label>
           </div>
-          <label>User <input name="user" placeholder="user name" /></label>
+          <label data-f="user"><span>User</span> <input name="user" placeholder="user name" /></label>
           <div class="pair pw-row">
-            <label>Password <input name="password" type="password" placeholder="Stored in the keychain" /></label>
-            <select name="password_mode" aria-label="Password storage" title="Where the password is kept">
+            <label data-f="password"><span>Password</span> <input name="password" type="password" placeholder="Stored in the keychain" /></label>
+            <select name="password_mode" data-f="password_mode" aria-label="Password storage" title="Where the password is kept">
               <option value="keychain">Store in keychain</option>
               <option value="ask">Ask every time</option>
               <option value="no_password">No password</option>
             </select>
           </div>
-          <label>Database <input name="database" placeholder="database name" /></label>
-          <label>SSL mode <select name="ssl"></select></label>
+          <label data-f="database"><span>Database</span> <input name="database" placeholder="database name" /></label>
+          <label data-f="ssl"><span>SSL mode</span> <select name="ssl"></select></label>
           <div class="tls-files">
             <label>SSL CA <span class="pick"><input name="ssl_ca" placeholder="Optional CA certificate (.pem)" /><button type="button" data-pick="ssl_ca">Choose…</button></span></label>
             <label>Client cert <span class="pick"><input name="ssl_cert" placeholder="Optional, with its key below" /><button type="button" data-pick="ssl_cert">Choose…</button></span></label>
             <label>Client key <span class="pick"><input name="ssl_key" placeholder="PKCS#8 key (.pem)" /><button type="button" data-pick="ssl_key">Choose…</button></span></label>
           </div>
-          <label>Connect
+          <label data-f="via">Connect
             <select name="via">
               <option value="">Directly</option>
               <option value="ssh">Over SSH</option>

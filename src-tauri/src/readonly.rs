@@ -75,7 +75,7 @@ pub fn is_read_only(engine: Engine, sql: &str) -> bool {
     let dialect: &dyn Dialect = match engine {
         Engine::Postgres => &PostgreSqlDialect {},
         Engine::Mysql | Engine::Mariadb => &MySqlDialect {},
-        Engine::Sqlite => &SQLiteDialect {},
+        Engine::Sqlite | Engine::Libsql | Engine::D1 => &SQLiteDialect {},
         Engine::Duckdb => &DuckDbDialect {},
         Engine::Mssql => &MsSqlDialect {},
         Engine::Clickhouse => &ClickHouseDialect {},

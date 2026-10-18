@@ -179,6 +179,8 @@ fn label(kind: Engine, flavor: Option<Flavor>) -> &'static str {
         (Engine::Duckdb, _) => "DuckDB",
         (Engine::Mssql, _) => "SQL Server",
         (Engine::Clickhouse, _) => "ClickHouse",
+        (Engine::Libsql, _) => "libSQL",
+        (Engine::D1, _) => "Cloudflare D1",
     }
 }
 
@@ -306,7 +308,8 @@ fn local_port(c: &Saved) -> Option<u16> {
         Engine::Redis => Some(6379),
         Engine::Mssql => Some(1433),
         Engine::Clickhouse => Some(8123),
-        Engine::Sqlite | Engine::Duckdb => None,
+        Engine::Libsql => Some(8080),
+        Engine::Sqlite | Engine::Duckdb | Engine::D1 => None,
     })
 }
 

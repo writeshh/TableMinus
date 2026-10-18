@@ -181,7 +181,8 @@ struct Info {
 
 async fn info(live: &mut Live) -> Result<Info> {
     let database = live.conn.current_database().await?;
-    let file_based = matches!(live.saved.kind, Engine::Sqlite | Engine::Duckdb);
+    // SQLite-based engines and DuckDB have one database, which has no name.
+    let file_based = matches!(live.saved.kind, Engine::Sqlite | Engine::Duckdb | Engine::Libsql | Engine::D1);
     // No database selected yet (MySQL connected without one): nothing to list.
     let tables = if database.is_none() && !file_based {
         vec![]
@@ -539,6 +540,8 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::Duckdb => "duckdb (bundled DuckDB)",
                 Engine::Mssql => "tiberius (TDS)",
                 Engine::Clickhouse => "ClickHouse over HTTP (hyper)",
+                Engine::Libsql => "Hrana 3 over HTTP",
+                Engine::D1 => "Cloudflare D1 HTTP API",
                 Engine::Redis => "TableMinus RESP2 client",
             },
             cipher: live.conn.tls_cipher().await?,

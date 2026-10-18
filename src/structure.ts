@@ -4,6 +4,7 @@
 // confirmation, also for safe mode.
 
 /// <reference types="vite/client" />
+import { sqlKind } from "./statements";
 import { connName, el } from "./dom";
 import { miniEditor } from "./editor";
 import { CANCELLED, guarded } from "./safety";
@@ -80,7 +81,7 @@ const TYPES: Record<string, string[]> = {
   duckdb: ["INTEGER", "BIGINT", "SMALLINT", "VARCHAR", "BOOLEAN", "DECIMAL(18,3)", "DOUBLE", "REAL", "DATE", "TIMESTAMP",
     "TIMESTAMPTZ", "TIME", "INTERVAL", "UUID", "JSON", "BLOB"],
 };
-const kind = () => (host.conn()?.kind === "mariadb" ? "mysql" : host.conn()?.kind ?? "postgres");
+const kind = () => (host.conn()?.kind === "mariadb" ? "mysql" : sqlKind(host.conn()?.kind ?? "postgres"));
 /** Index methods to choose from when adding one (`ddl::IndexMethod`); SQLite has none. */
 const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [], duckdb: [], mssql: [], clickhouse: [] };
 const blank = (s: string | null | undefined) => (s ?? "").trim() || null;

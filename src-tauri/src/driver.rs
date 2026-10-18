@@ -3,7 +3,10 @@
 //! variant, and the arms the compiler then points out where SQL differs.
 
 pub mod clickhouse;
+pub mod d1;
 pub mod duckdb;
+pub mod http;
+pub mod libsql;
 pub mod mssql;
 pub mod mysql;
 pub mod postgres;
@@ -120,7 +123,8 @@ pub enum Stopper {
     Lite(rusqlite::InterruptHandle),
     /// Likewise `DuckDB`.
     Duck(std::sync::Arc<::duckdb::InterruptHandle>),
-    /// Wakes the running call, which cancels itself (`SQL Server`'s attention signal; `ClickHouse` closing its request).
+    /// Wakes the running call, which cancels itself (`SQL Server`'s attention signal; the HTTP engines closing their
+    /// request).
     Notify(std::sync::Arc<tokio::sync::Notify>),
 }
 

@@ -91,11 +91,11 @@ const LITE: &str = "select 'c', m.name, p.name, p.type, case when p.pk > 0 then 
      case when p.\"notnull\" = 0 then 'true' else 'false' end, case when m.type = 'view' then 'true' else 'false' end, \
      p.cid \
      from sqlite_master m join pragma_table_info(m.name) p \
-     where m.type in ('table', 'view') and m.name not like 'sqlite\\_%' escape '\\' \
+     where m.type in ('table', 'view') and m.name not like 'sqlite\\_%' escape '\\' and m.name not like '\\_cf\\_%' escape '\\' \
      union all select 'f', m.name, 'fk_' || f.id, group_concat(f.\"from\", char(31)), min(f.\"table\"), \
      group_concat(coalesce(f.\"to\", ''), char(31)), null, 0 \
      from sqlite_master m join pragma_foreign_key_list(m.name) f \
-     where m.type = 'table' and m.name not like 'sqlite\\_%' escape '\\' \
+     where m.type = 'table' and m.name not like 'sqlite\\_%' escape '\\' and m.name not like '\\_cf\\_%' escape '\\' \
      group by m.name, f.id";
 
 /// The current database, every user schema; tables outside `main` are `schema.table`, as the sidebar lists them.

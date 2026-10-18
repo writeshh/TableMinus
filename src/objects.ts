@@ -2,6 +2,7 @@
 // editor (Ref: SequenceController), New view / materialized view / function / procedure, dropping an item, and Copy
 // Script As. Like the table operations in structure.ts, every change is shown as SQL first and runs through
 // `run_ddl`, so the preview is the confirmation and safe mode still applies.
+import { sqlKind } from "./statements";
 import { el } from "./dom";
 import { miniEditor } from "./editor";
 import { modal as windowModal } from "./backup";
@@ -17,7 +18,7 @@ type Sequence = {
 };
 
 const conn = () => host().conn();
-const kind = () => (conn()?.kind === "mariadb" ? "mysql" : conn()?.kind ?? "postgres");
+const kind = () => (conn()?.kind === "mariadb" ? "mysql" : sqlKind(conn()?.kind ?? "postgres"));
 const call = <T>(cmd: string, args: Record<string, unknown>) => host().call<T>(cmd, { name: conn()!.name, ...args });
 const failed = (e: unknown) => e !== CANCELLED && host().note(String(e), "error");
 

@@ -2254,6 +2254,37 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a local libSQL server on 8080 (scripts/test-env.sh up); replaces its pets, log and dogs"]
+    fn local_libsql_rebuild_should_run_in_one_transaction_on_the_server() {
+        tauri::async_runtime::block_on(async {
+            let tls = Tls { mode: crate::tls::TlsMode::Disable, ..Tls::default() };
+            let mut c = Conn::open(Engine::Libsql, "libsql://127.0.0.1:8080", None, &tls, &Options::default(), None)
+                .await
+                .unwrap();
+            c.query("drop view if exists dogs; drop table if exists pets; drop table if exists log").await.unwrap();
+            c.query(
+                "create table pets(id integer primary key, name text, kind text default 'dog');
+                 create table log(n int);
+                 create trigger pets_log after insert on pets begin insert into log values (new.id); end;
+                 insert into pets values (1, 'Rex', 'dog'), (2, 'Tom', null);",
+            )
+            .await
+            .unwrap();
+            let not_null = ColumnDef { nullable: false, default: Some("'dog'".into()), ..col("kind", "text") };
+            let r =
+                apply(&mut c, "pets", false, &[Change::ModifyColumn { from: "kind".into(), column: not_null }]).await;
+            assert!(r.is_err(), "Tom's kind is NULL");
+            assert!(c.structure("pets").await.unwrap().columns[2].nullable, "rolled back");
+            let kind = ColumnDef { default: Some("'cat'".into()), ..col("kind", "varchar(10)") };
+            apply(&mut c, "pets", false, &[Change::ModifyColumn { from: "kind".into(), column: kind }]).await.unwrap();
+            let s = c.structure("pets").await.unwrap();
+            assert_eq!(s.columns[2].default.as_deref(), Some("'cat'"));
+            assert!(s.triggers.iter().any(|t| t.name == "pets_log"));
+            assert_eq!(c.query("select count(*) from pets").await.unwrap().rows[0][0].as_deref(), Some("2"));
+        });
+    }
+
+    #[test]
     fn sqlite_rebuild_should_leave_everything_as_it_was_when_the_rows_dont_fit() {
         tauri::async_runtime::block_on(async {
             let mut c = sqlite_pets().await;

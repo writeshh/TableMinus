@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { EditorState } from "@codemirror/state";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor, type CompleteKey, type FormatStyle, type Schema } from "./editor";
-import { fillParams, findParams, sourceTable, type ParamFormat } from "./statements";
+import { fillParams, findParams, sourceTable, sqlKind, type ParamFormat } from "./statements";
 import { $, el } from "./dom";
 import { OPS, activeFilters, blankFilter, renderFilters, setFilterDefaults, type DefaultColumn, type FilterRow, type Op } from "./filters";
 import { csv, inserts, markdown, plain, type Dialect } from "./copy";
@@ -108,10 +108,29 @@ const ENGINES: Engine[] = [
     defaults: { host: "127.0.0.1", port: "1433", user: "sa", database: "" } },
   { id: "clickhouse", kind: "clickhouse", label: "ClickHouse", mono: "Ch", color: "var(--yellow)",
     defaults: { host: "127.0.0.1", port: "8123", user: "default", database: "" } },
+  { id: "libsql", kind: "libsql", label: "libSQL / Turso", mono: "Ls", color: "var(--ok)",
+    defaults: { host: "127.0.0.1", port: "", user: "", database: "" } },
+  { id: "d1", kind: "d1", label: "Cloudflare D1", mono: "D1", color: "var(--orange)",
+    defaults: { host: "", port: "", user: "", database: "" } },
   { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
 const engine = (id: string) => ENGINES.find((e) => e.id === id) ?? ENGINES[0];
+
+/** How the connection form differs for engines whose fields mean something else (`data-f` names the field). */
+const FORM_SHAPES: Record<string, { hide: string[]; label?: Record<string, string>; placeholder?: Record<string, string> }> = {
+  libsql: {
+    hide: ["user", "database"],
+    label: { password: "Auth token" },
+    placeholder: { host: "127.0.0.1, or my-db-org.turso.io", port: "443, or 8080 for a local server without SSL" },
+  },
+  d1: {
+    hide: ["host", "port", "ssl", "via", "password_mode"],
+    label: { user: "Account ID", database: "Database ID", password: "API token" },
+    placeholder: { user: "From the Cloudflare dashboard", database: "From the D1 database's page" },
+  },
+};
+const FIELD_LABELS = new Map<HTMLElement, string>();
 /** The picker entry a saved connection belongs to. */
 const engineId = (c: { kind: string; flavor?: string }) => c.flavor ?? c.kind;
 
@@ -464,6 +483,17 @@ function openEditor(id: string, existing?: Saved, fresh = false, password = "") 
     else input.value = v;
   }
   for (const node of form.querySelectorAll<HTMLElement>("[data-engines]")) node.hidden = !node.dataset.engines!.split(" ").includes(kind);
+  const shape = FORM_SHAPES[kind];
+  for (const node of form.querySelectorAll<HTMLElement>("[data-f]")) {
+    const f = node.dataset.f!;
+    node.hidden = !!shape?.hide.includes(f);
+    const text = node.querySelector("span");
+    if (text) {
+      if (!FIELD_LABELS.has(text)) FIELD_LABELS.set(text, text.textContent ?? "");
+      text.textContent = shape?.label?.[f] ?? FIELD_LABELS.get(text)!;
+    }
+  }
+  showTlsFiles();
   // Open the section when something in it is set, so saved options are never out of sight.
   form.querySelector<HTMLDetailsElement>("details.more")!.open = !!existing?.options;
 
@@ -473,7 +503,8 @@ function openEditor(id: string, existing?: Saved, fresh = false, password = "") 
     field("database").placeholder = kind === "redis" ? "0 (a number; choose another after connecting)" : "Optional, choose one after connecting";
     if (kind === "redis") field("user").placeholder = "Optional, an ACL user";
   }
-  field("name").placeholder = d ? `${e.label} · ${d.host}` : e.label;
+  for (const [f, text] of Object.entries(shape?.placeholder ?? {})) field(f).placeholder = text;
+  field("name").placeholder = d?.host ? `${e.label} · ${d.host}` : e.label;
   field("password").placeholder = editing ? "Unchanged (in keychain)" : "None";
   field("passphrase").placeholder = editing ? "Unchanged (in keychain), if any" : "Only for SQLCipher-encrypted files";
   field("tag").replaceChildren(el("option", { value: "", textContent: "None" }), ...launcher.tags.map((t) => el("option", { value: t.name, textContent: tagLabel(t.name) })));
@@ -504,7 +535,7 @@ function openEditor(id: string, existing?: Saved, fresh = false, password = "") 
       const set = (k: string, v: string) => (field(k).value = v && v !== (d as Record<string, string>)[k] ? v : "");
       set("host", u.hostname);
       set("port", u.port);
-      set("user", decodeURIComponent(u.username));
+      set("user", decodeURIComponent(kind === "d1" ? u.hostname : u.username));
       set("database", decodeURIComponent(u.pathname.slice(1)));
 
     }
@@ -533,7 +564,7 @@ const secretField = () => field(editingKind === "sqlite" ? "passphrase" : "passw
 field("ssl").replaceChildren(...TLS_MODES.map(([v, label]) => el("option", { value: v, textContent: label })));
 
 function showTlsFiles() {
-  form.querySelector<HTMLElement>(".tls-files")!.hidden = field("ssl").value === "disable";
+  form.querySelector<HTMLElement>(".tls-files")!.hidden = field("ssl").value === "disable" || !!field("ssl").closest<HTMLElement>("[data-f]")?.hidden;
 }
 field("ssl").addEventListener("change", showTlsFiles);
 
@@ -550,7 +581,7 @@ function formOptions(): Options | undefined {
 }
 
 function formTls(): Tls | undefined {
-  if (isFile(editingKind)) return undefined;
+  if (isFile(editingKind) || editingKind === "d1") return undefined;
   const tls = { mode: field("ssl").value, ca: field("ssl_ca").value.trim(), cert: field("ssl_cert").value.trim(), key: field("ssl_key").value.trim() };
   if (tls.mode === "disable") Object.assign(tls, { ca: "", cert: "", key: "" });
   if (!tls.cert !== !tls.key) throw "A client certificate needs both the certificate file and its key file.";
@@ -567,7 +598,7 @@ for (const b of form.querySelectorAll<HTMLButtonElement>("button[data-pick]")) {
   };
 }
 
-const overSsh = () => !isFile(editingKind) && field("via").value === "ssh";
+const overSsh = () => !isFile(editingKind) && editingKind !== "d1" && field("via").value === "ssh";
 function showSsh() {
   form.querySelector<HTMLElement>(".ssh")!.hidden = !overSsh();
 }
@@ -595,15 +626,21 @@ function formToSaved(): Saved {
     const port = field("port").value.trim() || d.port;
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
-    const scheme = editingKind === "postgres" ? "postgres" : editingKind === "redis" ? "redis" : editingKind === "mssql" ? "mssql" : editingKind === "clickhouse" ? "clickhouse" : "mysql";
+    const scheme = ["postgres", "redis", "mssql", "clickhouse", "libsql"].includes(editingKind) ? editingKind : "mysql";
     if (editingKind === "redis" && !/^\d+$/.test(db || "0")) throw "A Redis database is a number, such as 0.";
-    url = `${scheme}://${user ? encodeURIComponent(user) + "@" : ""}${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
+    if (editingKind === "d1") {
+      if (!/^[\w-]+$/.test(user) || !/^[\w-]+$/.test(db)) throw "Enter the Cloudflare account ID and the D1 database ID.";
+      url = `d1://${user}/${db}`;
+    } else if (editingKind === "libsql") {
+      if (!host) throw "Enter the server's host, such as my-db-org.turso.io.";
+      url = `libsql://${host}${port ? ":" + port : ""}`; // no port: 443 with SSL, 8080 without
+    } else url = `${scheme}://${user ? encodeURIComponent(user) + "@" : ""}${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
   }
   const name = val("name");
   if (name !== editing?.name && saved.some((c) => c.name === name)) throw `A connection named "${name}" already exists.`;
   const conn: Saved = { name, kind: editingKind, url, tag: field("tag").value, safety: field("safety").value as Safety };
   // Defaults are left out, as the backend writes them.
-  const mode = isFile(editingKind) ? "keychain" : (field("password_mode").value as Saved["password_mode"]);
+  const mode = isFile(editingKind) || editingKind === "d1" ? "keychain" : (field("password_mode").value as Saved["password_mode"]);
   if (mode !== "keychain") conn.password_mode = mode;
   if (field("color").value) conn.color = field("color").value;
   if (field("group").value) conn.group = field("group").value;
@@ -2065,7 +2102,7 @@ type MenuItem = [string, () => void] | "-";
 /** Backup, restore and the process list, on a launcher row's right-click and the workspace's Tools button. */
 function toolsMenu(c: Saved, database?: string | null): MenuItem[] {
   const items: MenuItem[] = dumps(c) ? [["Backup…", () => openBackup(c, database)], ["Restore…", () => openRestore(c, database, confirmDialog)]] : [];
-  if (!isFile(c.kind)) items.push(...(items.length ? ["-" as const] : []), ["Processes", () => openProcesses(c, confirmDialog)]);
+  if (hasProcesses(c)) items.push(...(items.length ? ["-" as const] : []), ["Processes", () => openProcesses(c, confirmDialog)]);
   return items;
 }
 $("tools-button").onclick = () => {
@@ -2827,7 +2864,7 @@ function copySelection(format: "plain" | "csv" | "markdown" | "insert") {
   if (format === "plain") return copyText(plain(cells), n === 1 && cells.columns.length === 1 ? "cell" : rows);
   if (format === "csv") return copyText(csv(cells), `${rows} as CSV`);
   if (format === "markdown") return copyText(markdown(cells), `${rows} as Markdown`);
-  copyText(inserts(cells, selection!.table ?? "table_name", active.kind as Dialect), `${rows} as INSERT statements`);
+  copyText(inserts(cells, selection!.table ?? "table_name", sqlKind(active.kind) as Dialect), `${rows} as INSERT statements`);
 }
 
 function wireSelection(table: HTMLTableElement, r: QueryResult, options?: RenderOptions) {
@@ -3009,7 +3046,7 @@ $("result-chart").onclick = () => {
 /** What a metrics board needs from the workspace on screen; see metrics.ts. */
 function boardCtx(): BoardCtx {
   const session = (w: Workspace) => ({
-    key: w.key, label: w.info?.database ? `${w.conn.name} · ${w.info.database}` : w.conn.name, dialect: w.conn.kind as Dialect,
+    key: w.key, label: w.info?.database ? `${w.conn.name} · ${w.info.database}` : w.conn.name, dialect: sqlKind(w.conn.kind) as Dialect,
   });
   return {
     conn: active!.name, session: session(ws!), sessions: () => workspaces.map(session),
@@ -3434,7 +3471,7 @@ $("explain").onclick = async () => {
   if (!sql.trim() || !active) return;
   // SQL Server shows a plan through a session setting, in a batch of its own on each side of the statement.
   const explain = active.kind === "mssql" ? `SET SHOWPLAN_TEXT ON\nGO\n${sql}\nGO\nSET SHOWPLAN_TEXT OFF`
-    : (active.kind === "sqlite" ? "explain query plan " : "explain ") + sql;
+    : (sqlKind(active.kind) === "sqlite" ? "explain query plan " : "explain ") + sql;
   const filled = await withParams([explain]);
   if (filled) execute(filled);
 };
@@ -3583,13 +3620,16 @@ function anythingItems(): AnythingItem[] {
 const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
 // SQL Server and ClickHouse back up with their own statements.
-const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse"].includes(c.kind);
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && c.kind !== "mssql" && c.kind !== "clickhouse";
+// libSQL and D1 have their own (turso db shell .dump, wrangler d1 export).
+const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1"].includes(c.kind);
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1"].includes(c.kind);
+/** Engines with sessions to list and stop. */
+const hasProcesses = (c: Saved) => !isFile(c.kind) && c.kind !== "libsql" && c.kind !== "d1";
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },
   { id: "diagram", label: "Show Diagram", menu: "Tools", when: hasTools, run: () => showDiagram() },
-  { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && !isFile(active!.kind),
+  { id: "processes", label: "Process List", menu: "Tools", keys: ["Mod+Period"], when: () => hasTools() && hasProcesses(active!),
     sep: true, run: () => openProcesses(active!, confirmDialog) },
   { id: "users", label: "Users…", menu: "Tools", when: () => hasTools() && managesUsers(active!), run: () => showUsers() },
   { id: "metrics-board", label: "Metrics Board", menu: "Tools", sep: true, when: hasTools, run: () => openBoard(boardCtx()) },

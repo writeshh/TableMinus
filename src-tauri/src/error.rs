@@ -86,6 +86,9 @@ pub enum Error {
     /// `ClickHouse` answered with an error, in its own words.
     #[error("ClickHouse: {0}")]
     ClickHouse(String),
+    /// A server reached over HTTP (libSQL, Cloudflare D1) answered with an error, or not in its format.
+    #[error("{engine}: {message}")]
+    Server { engine: &'static str, message: String },
     /// A `DuckDB` value Arrow couldn't turn into text.
     #[error("DuckDB: {0}")]
     Arrow(String),

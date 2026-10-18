@@ -6,7 +6,7 @@ import { acceptCompletion, autocompletion, completionKeymap, type CompletionCont
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { MSSQL, MariaSQL, MySQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
 import { highlightCode, tags as t } from "@lezer/highlight";
-import { statementAt, splitStatements, type Dialect, type Statement } from "./statements";
+import { sqlKind, statementAt, splitStatements, type Dialect, type Statement } from "./statements";
 import { clickhouse, formatDialect, mariadb, mysql, postgresql, sqlite, transactsql } from "sql-formatter";
 import { byLine, transformText, type Transform } from "./transforms";
 
@@ -266,6 +266,7 @@ export function createEditor(
     },
     /** Dialect for highlighting, keywords and statement splitting; the schema feeds autocomplete. */
     setDialect(kind: string, tables: Schema) {
+      kind = sqlKind(kind);
       dialect = (kind in DIALECTS ? kind : "postgres") as Dialect;
       schema = tables;
       setLanguage();

@@ -2,7 +2,9 @@
 //! text cells), browse the catalog.
 
 use crate::driver::clickhouse::ClickHouse;
+use crate::driver::d1::D1;
 use crate::driver::duckdb::DuckDb;
+use crate::driver::libsql::Libsql;
 use crate::driver::mssql::SqlServer;
 use crate::driver::mysql::Mysql;
 use crate::driver::postgres::{Postgres, cockroach_version};
@@ -29,6 +31,10 @@ pub enum Engine {
     Duckdb,
     Mssql,
     Clickhouse,
+    /// libSQL (`sqld`, Turso) over HTTP; SQLite underneath.
+    Libsql,
+    /// Cloudflare D1 through Cloudflare's HTTP API; SQLite underneath.
+    D1,
     Redis,
 }
 
@@ -206,6 +212,8 @@ impl Conn {
                 Engine::Sqlite => Box::new(Sqlite::open(url, password)?),
                 Engine::Duckdb => Box::new(DuckDb::open(url)?),
                 Engine::Clickhouse => Box::new(ClickHouse::open(url, password, tls, options, tunnel_port).await?),
+                Engine::Libsql => Box::new(Libsql::open(url, password, tls, options, tunnel_port).await?),
+                Engine::D1 => Box::new(D1::open(url, password, tls).await?),
                 // Boxed: tiberius's connect future is big.
                 Engine::Mssql => Box::new(Box::pin(SqlServer::open(url, password, tls, options, tunnel_port)).await?),
                 Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
@@ -321,7 +329,8 @@ impl Conn {
             }
             Dialect::Lite => {
                 "select m.name, p.name from sqlite_master m join pragma_table_info(m.name) p \
-                 where m.type in ('table', 'view') order by m.name, p.cid"
+                 where m.type in ('table', 'view') and m.name not like '\\_cf\\_%' escape '\\' \
+                 order by m.name, p.cid"
             }
             Dialect::Duck => {
                 "select case when table_schema = 'main' then table_name else table_schema || '.' || table_name end, \
@@ -564,7 +573,11 @@ impl Conn {
             Dialect::My => {
                 "select table_name from information_schema.tables where table_schema = database() order by 1"
             }
-            Dialect::Lite => "select name from sqlite_master where type in ('table', 'view') order by 1",
+            // D1 keeps tables of its own (`_cf_KV`) that it won't let anyone read.
+            Dialect::Lite => {
+                "select name from sqlite_master where type in ('table', 'view') and name not like '\\_cf\\_%' escape '\\' \
+                 order by 1"
+            }
             Dialect::Duck => {
                 "select case when table_schema = 'main' then table_name else table_schema || '.' || table_name end \
                  from information_schema.tables where table_catalog = current_database() \

@@ -1,6 +1,7 @@
 // Editing a table's rows in the grid: staged cell edits with type-aware editors, added, duplicated and deleted
 // rows, paste, undo and redo, and saving (or previewing) everything as one transaction through save_rows.
 
+import { sqlKind } from "./statements";
 import { CANCELLED, guarded, type Approval } from "./safety";
 import { codeOf } from "./ipc";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -47,7 +48,7 @@ let host: GridHost;
 export const initGridEdit = (h: GridHost) => void (host = h);
 
 const pageRows = (tab: EditTab) => tab.result?.rows.length ?? 0;
-const engine = () => host.conn()?.kind ?? "";
+const engine = () => sqlKind(host.conn()?.kind ?? "");
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** Primary-key column names and their positions in the result, or null when rows can't be identified. */

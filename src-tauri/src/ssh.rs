@@ -91,6 +91,8 @@ pub async fn open_for(engine: Engine, url: &str, ssh: &Ssh, secret: Option<&Secr
         Engine::Redis => 6379,
         Engine::Mssql => 1433,
         Engine::Clickhouse => 8123,
+        Engine::Libsql => 443,
+        Engine::D1 => return Err(Error::Invalid("Cloudflare D1 is reached through Cloudflare's API, not over SSH")),
         Engine::Sqlite | Engine::Duckdb => return Err(Error::Invalid("database files can't be opened over SSH")),
     };
     let u = url::Url::parse(url)?;

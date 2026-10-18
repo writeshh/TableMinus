@@ -5,6 +5,9 @@
 export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse";
 export type Statement = { from: number; to: number; text: string };
 
+/** The engine whose SQL a connection kind speaks: libSQL and Cloudflare D1 are SQLite over HTTP. */
+export const sqlKind = (kind: string) => (kind === "libsql" || kind === "d1" ? "sqlite" : kind);
+
 /** The stretches of `sql` that are code: everything except strings, quoted names, comments and dollar quotes. */
 export function codeRanges(sql: string, dialect: Dialect): [number, number][] {
   const mysql = dialect === "mysql" || dialect === "mariadb" || dialect === "clickhouse"; // # comments, backslash escapes

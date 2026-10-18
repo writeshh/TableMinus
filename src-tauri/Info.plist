@@ -19,6 +19,7 @@
         <string>mariadb</string>
         <string>sqlserver</string>
         <string>clickhouse</string>
+        <string>libsql</string>
         <string>mssql</string>
         <string>redis</string>
         <string>rediss</string>

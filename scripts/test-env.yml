@@ -61,6 +61,12 @@ services:
     ulimits: { nofile: { soft: 262144, hard: 262144 } }
     healthcheck: { test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"], interval: 3s, retries: 40 }
 
+  # Reachable directly over HTTP: 127.0.0.1:8080, no auth token (Hrana over HTTP, as Turso serves it).
+  libsql:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    ports: ["127.0.0.1:8080:8080"]
+    networks: [front, back]
+
 networks:
   front: {}
   back: { internal: true }

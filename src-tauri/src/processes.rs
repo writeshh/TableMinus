@@ -49,7 +49,9 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Engine::Postgres if live.saved.flavor == Some(Flavor::Cockroach) => COCKROACH,
         Engine::Postgres => POSTGRES,
         Engine::Mysql | Engine::Mariadb => MYSQL,
-        Engine::Sqlite | Engine::Duckdb => return Err(Error::Invalid("SQLite and DuckDB have no process list")),
+        Engine::Sqlite | Engine::Duckdb | Engine::Libsql | Engine::D1 => {
+            return Err(Error::Invalid("SQLite-based engines and DuckDB have no process list"));
+        }
         Engine::Mssql => MSSQL,
         Engine::Clickhouse => CLICKHOUSE,
         Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),
@@ -117,7 +119,9 @@ pub async fn kill_process(
             // KILL takes no parameters; `id` is a number, so formatting it in can't inject anything.
             live.conn.query(&format!("kill {}", number()?)).await?;
         }
-        Engine::Sqlite | Engine::Duckdb => return Err(Error::Invalid("SQLite and DuckDB have no process list")),
+        Engine::Sqlite | Engine::Duckdb | Engine::Libsql | Engine::D1 => {
+            return Err(Error::Invalid("SQLite-based engines and DuckDB have no process list"));
+        }
         Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),
     }
     Ok(())
