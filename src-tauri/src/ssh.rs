@@ -90,6 +90,7 @@ pub async fn open_for(engine: Engine, url: &str, ssh: &Ssh, secret: Option<&Secr
         Engine::Mysql | Engine::Mariadb => 3306,
         Engine::Redis => 6379,
         Engine::Mssql => 1433,
+        Engine::Clickhouse => 8123,
         Engine::Sqlite | Engine::Duckdb => return Err(Error::Invalid("database files can't be opened over SSH")),
     };
     let u = url::Url::parse(url)?;

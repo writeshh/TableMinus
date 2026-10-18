@@ -140,6 +140,12 @@ const MSSQL: &str = "select 'c', case when c.table_schema = 'dbo' then c.table_n
      join sys.columns rc on rc.object_id = fkc.referenced_object_id and rc.column_id = fkc.referenced_column_id \
      group by ps.name, pt.name, fk.name, rs.name, rt.name";
 
+/// `ClickHouse`: the current database's tables and views with their columns; it has no foreign keys.
+const CLICK: &str = "select 'c', c.table, c.name, c.type, if(c.is_in_primary_key, 'true', 'false'), \
+     if(startsWith(c.type, 'Nullable('), 'true', 'false'), if(t.engine like '%View', 'true', 'false'), \
+     toString(c.position) from system.columns c join system.tables t on t.database = c.database and t.name = c.table \
+     where c.database = currentDatabase()";
+
 fn list(cell: Option<String>) -> Vec<String> {
     cell.map(|c| c.split(SEP).map(String::from).collect()).unwrap_or_default()
 }
@@ -186,6 +192,7 @@ impl Conn {
             Dialect::Lite => self.fetch_with(LITE, &[]).await?,
             Dialect::Duck => self.fetch_with(DUCK, &[]).await?,
             Dialect::Mssql => self.fetch_with(MSSQL, &[]).await?,
+            Dialect::Click => self.fetch_with(CLICK, &[]).await?,
         };
         Ok(assemble(rows))
     }

@@ -1,6 +1,7 @@
 //! One connection type over the supported SQL engines: open (through the engine's [`Driver`]), run SQL (results as
 //! text cells), browse the catalog.
 
+use crate::driver::clickhouse::ClickHouse;
 use crate::driver::duckdb::DuckDb;
 use crate::driver::mssql::SqlServer;
 use crate::driver::mysql::Mysql;
@@ -27,6 +28,7 @@ pub enum Engine {
     Sqlite,
     Duckdb,
     Mssql,
+    Clickhouse,
     Redis,
 }
 
@@ -107,6 +109,7 @@ pub enum Dialect {
     Lite,
     Duck,
     Mssql,
+    Click,
 }
 
 impl Dialect {
@@ -116,6 +119,8 @@ impl Dialect {
         match self {
             Dialect::My => format!("`{}`", name.replace('`', "``")),
             Dialect::Mssql => format!("[{}]", name.replace(']', "]]")),
+            // ClickHouse reads names like strings: a backslash escapes the next character.
+            Dialect::Click => format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\"")),
             _ => format!("\"{}\"", name.replace('"', "\"\"")),
         }
     }
@@ -143,6 +148,8 @@ impl Dialect {
             Dialect::Lite | Dialect::Duck => format!("'{quoted}'"),
             // N'…' keeps characters outside the database's code page; a backslash is only a backslash.
             Dialect::Mssql => format!("N'{quoted}'"),
+            // Backslash escapes, and the quote escaped that way rather than doubled.
+            Dialect::Click => format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'")),
         }
     }
 
@@ -151,6 +158,7 @@ impl Dialect {
         match self {
             Dialect::My => "?".into(),
             Dialect::Mssql => format!("@P{n}"),
+            Dialect::Click => format!("{{p{n}:String}}"),
             _ => format!("${n}"),
         }
     }
@@ -197,6 +205,7 @@ impl Conn {
                 }
                 Engine::Sqlite => Box::new(Sqlite::open(url, password)?),
                 Engine::Duckdb => Box::new(DuckDb::open(url)?),
+                Engine::Clickhouse => Box::new(ClickHouse::open(url, password, tls, options, tunnel_port).await?),
                 // Boxed: tiberius's connect future is big.
                 Engine::Mssql => Box::new(Box::pin(SqlServer::open(url, password, tls, options, tunnel_port)).await?),
                 Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
@@ -248,7 +257,7 @@ impl Conn {
             Dialect::Mssql => self
                 .scalar("select case when encrypt_option = 'TRUE' then 'TLS' end from sys.dm_exec_connections where session_id = @@spid")
                 .await?,
-            Dialect::Lite | Dialect::Duck => None,
+            Dialect::Lite | Dialect::Duck | Dialect::Click => None,
         };
         Ok(cipher.filter(|c| !c.is_empty()))
     }
@@ -324,6 +333,9 @@ impl Conn {
                 "select case when table_schema = 'dbo' then table_name else table_schema + '.' + table_name end, \
                  column_name from information_schema.columns order by table_schema, table_name, ordinal_position"
             }
+            Dialect::Click => {
+                "select table, name from system.columns where database = currentDatabase() order by table, position"
+            }
         };
         let r = self.query(sql).await?;
         Ok(r.rows
@@ -333,6 +345,11 @@ impl Conn {
                 Some((row.pop().flatten()?, column))
             })
             .collect())
+    }
+
+    /// The most bound parameters one statement should carry.
+    pub(crate) fn max_params(&self) -> usize {
+        self.driver.max_params()
     }
 
     /// The placeholder for the `n`th (1-based) bound parameter.
@@ -370,6 +387,10 @@ impl Conn {
             Dialect::Pg => "select datname from pg_database where not datistemplate and datallowconn order by 1",
             Dialect::My => "select schema_name from information_schema.schemata order by 1",
             Dialect::Mssql => "select name from sys.databases where state = 0 and database_id > 4 order by name",
+            Dialect::Click => {
+                "select name from system.databases \
+                 where name not in ('INFORMATION_SCHEMA', 'information_schema', 'system') order by name"
+            }
             Dialect::Lite | Dialect::Duck => return Ok(vec![]),
         };
         Ok(self.query(sql).await?.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
@@ -381,6 +402,7 @@ impl Conn {
             Dialect::Pg => self.scalar("select current_database()").await,
             Dialect::My => self.scalar("select database()").await,
             Dialect::Mssql => self.scalar("select db_name()").await,
+            Dialect::Click => self.scalar("select currentDatabase()").await,
             Dialect::Lite | Dialect::Duck => Ok(None),
         }
     }
@@ -399,6 +421,7 @@ impl Conn {
             Dialect::Lite => ("SQLite", "select sqlite_version()"),
             Dialect::Duck => ("DuckDB", "select version()"),
             Dialect::Mssql => ("SQL Server", "select cast(serverproperty('ProductVersion') as nvarchar(50))"),
+            Dialect::Click => ("ClickHouse", "select version()"),
         };
         let v = self.scalar(sql).await?.unwrap_or_default();
         // MariaDB reports e.g. "11.4.2-MariaDB"; name it after what the server says it is.
@@ -412,6 +435,7 @@ impl Conn {
     /// MySQL switches in place; Postgres cannot change database within a session, so the caller reconnects.
     pub async fn use_database(&mut self, db: &str) -> Result<()> {
         match self.dialect() {
+            Dialect::Click => self.driver.use_database(db).await,
             Dialect::My | Dialect::Mssql => {
                 let sql = format!("use {}", self.ident(db));
                 self.query(&sql).await.map(|_| ())
@@ -467,6 +491,12 @@ impl Conn {
             Dialect::Lite => (
                 "select name, type, case when \"notnull\" then 'NO' else 'YES' end, dflt_value, \
                  case when pk > 0 then 'PRI' else '' end from pragma_table_info($1)",
+                vec![Some(table)],
+            ),
+            Dialect::Click => (
+                "select name, type, if(startsWith(type, 'Nullable('), 'YES', 'NO'), nullIf(default_expression, ''), \
+                 if(is_in_primary_key, 'PRI', '') from system.columns \
+                 where database = currentDatabase() and table = {p1:String} order by position",
                 vec![Some(table)],
             ),
             Dialect::Mssql => {
@@ -545,6 +575,7 @@ impl Conn {
                  from information_schema.tables where table_type in ('BASE TABLE', 'VIEW') \
                  order by case when table_schema = 'dbo' then 0 else 1 end, 1"
             }
+            Dialect::Click => "select name from system.tables where database = currentDatabase() order by name",
         };
         let r = self.query(sql).await?;
         Ok(r.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
@@ -563,6 +594,8 @@ mod tests {
         };
         use sqlparser::parser::Parser;
 
+        // ClickHouse isn't here: sqlparser reads its backslash escapes differently, so a real server checks its quoting
+        // (`local_clickhouse_should_quote_names_and_values_so_the_server_reads_them_back`).
         fn dialects() -> [(Dialect, Box<dyn Parsing>); 5] {
             [
                 (Dialect::Pg, Box::new(PostgreSqlDialect {})),

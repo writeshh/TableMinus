@@ -285,7 +285,7 @@ impl Driver for SqlServer {
     }
 
     fn stopper(&self) -> Stopper {
-        Stopper::Mssql(self.cancel.clone())
+        Stopper::Notify(self.cancel.clone())
     }
 
     fn lost_by(&self, err: &Error) -> bool {
@@ -753,7 +753,7 @@ mod tests {
             let stopper = c.stopper();
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if let Stopper::Mssql(cancel) = stopper {
+                if let Stopper::Notify(cancel) = stopper {
                     cancel.notify_waiters();
                 }
             });

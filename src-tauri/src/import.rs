@@ -19,7 +19,6 @@ const MAX_FIELDS: usize = 4096;
 const MAX_JSON: u64 = 100 * 1024 * 1024;
 /// Rows per INSERT at most; fewer for wide tables, to stay under SQLite's 32,766 bound parameters.
 const BATCH_ROWS: usize = 500;
-const MAX_PARAMS: usize = 30_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -240,6 +239,9 @@ struct Insert {
 impl Insert {
     async fn new(conn: &mut Conn, imp: &Import, columns: &[&str]) -> Result<Insert> {
         let mysql = conn.dialect() == Dialect::My;
+        if conn.dialect() == Dialect::Click && imp.conflict != Conflict::Stop {
+            return Err(Error::Invalid("ClickHouse has no unique keys to skip or update on; import with Stop"));
+        }
         let quoted: Vec<String> = columns.iter().map(|c| conn.ident(c)).collect();
         let set = |value: &dyn Fn(&str) -> String| -> Vec<String> { quoted.iter().map(|q| value(q)).collect() };
         let (verb, tail) = match imp.conflict {
@@ -268,7 +270,7 @@ impl Insert {
         };
         let head = format!("{verb} into {} ({}) values", conn.table_ident(&imp.table), quoted.join(", "));
         let width = columns.len();
-        let rows = (MAX_PARAMS / width).clamp(1, BATCH_ROWS);
+        let rows = (conn.max_params() / width).clamp(1, BATCH_ROWS);
         let mut insert = Insert { head, tail, width, rows, full: String::new() };
         insert.full = insert.sql(conn, rows);
         Ok(insert)
@@ -323,8 +325,12 @@ pub async fn run(conn: &mut Conn, imp: &Import, job: &Job) -> Result<u64> {
         return Err(Error::Invalid("two fields go into the same column"));
     }
     if imp.create {
-        let defs: Vec<String> = columns.iter().map(|c| format!("{} text", conn.ident(c))).collect();
-        conn.execute_with(&format!("create table {} ({})", conn.table_ident(&imp.table), defs.join(", ")), &[]).await?;
+        // ClickHouse has no `text` type, and a table there needs an engine and an order.
+        let click = conn.dialect() == Dialect::Click;
+        let (kind, engine) = if click { ("String", " engine = MergeTree order by tuple()") } else { ("text", "") };
+        let defs: Vec<String> = columns.iter().map(|c| format!("{} {kind}", conn.ident(c))).collect();
+        let create = format!("create table {} ({}){engine}", conn.table_ident(&imp.table), defs.join(", "));
+        conn.execute_with(&create, &[]).await?;
     } else {
         let existing: Vec<String> = conn.columns(&imp.table).await?.into_iter().map(|c| c.name).collect();
         if existing.is_empty() {
@@ -335,19 +341,27 @@ pub async fn run(conn: &mut Conn, imp: &Import, job: &Job) -> Result<u64> {
         }
     }
     let insert = Insert::new(conn, imp, &columns).await?;
-    conn.query(if conn.dialect() == Dialect::My { "start transaction" } else { "begin transaction" }).await?;
+    // ClickHouse has no transactions: rows already sent stay if a later batch fails.
+    let transactional = conn.dialect() != Dialect::Click;
+    if transactional {
+        conn.query(if conn.dialect() == Dialect::My { "start transaction" } else { "begin transaction" }).await?;
+    }
     let result = match &imp.format {
         FileFormat::Csv(f) => import_csv(conn, imp, *f, &picked, &insert, job).await,
         FileFormat::Json => import_json(conn, imp, &picked, &insert, job).await,
     };
     match result {
         Ok(rows) => {
-            conn.query("commit").await?;
+            if transactional {
+                conn.query("commit").await?;
+            }
             Ok(rows)
         }
         Err(e) => {
             // The import's own error is the useful one; a failed rollback ends with the job's connection anyway.
-            let _ = conn.query("rollback").await;
+            if transactional {
+                let _ = conn.query("rollback").await;
+            }
             Err(e)
         }
     }

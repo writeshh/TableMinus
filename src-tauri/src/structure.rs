@@ -219,6 +219,27 @@ fn index_columns(sql: &str) -> Vec<String> {
         .collect()
 }
 
+/// A comma-separated list of columns or expressions, split at the commas outside parentheses and quotes.
+fn split_list(list: &str) -> Vec<String> {
+    let (mut out, mut depth, mut quote, mut start) = (vec![], 0, None, 0);
+    for (i, c) in list.char_indices() {
+        match (c, quote) {
+            ('\'' | '"' | '`', None) => quote = Some(c),
+            (q, Some(open)) if q == open => quote = None,
+            ('(', None) => depth += 1,
+            (')', None) => depth -= 1,
+            (',', None) if depth == 0 => {
+                out.push(list[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(list[start..].trim().to_string());
+    out.retain(|e| !e.is_empty());
+    out
+}
+
 /// Cell `i` of a catalog row, taken out (rows are read once, front to back).
 fn take(row: &mut [Option<String>], i: usize) -> Option<String> {
     row.get_mut(i).and_then(Option::take)
@@ -233,6 +254,7 @@ impl Conn {
             Dialect::Lite => self.lite_structure(table).await?,
             Dialect::Duck => self.duck_structure(table).await?,
             Dialect::Mssql => self.mssql_structure(table).await?,
+            Dialect::Click => self.click_structure(table).await?,
         };
         if s.columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
@@ -584,6 +606,84 @@ impl Conn {
             .map(|sql| crate::ddl::lite_checks(&sql))
             .unwrap_or_default();
         Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment: None, options: None })
+    }
+
+    /// A `ClickHouse` table's structure from `system`. Its keys (primary, order and partition) and data skipping
+    /// indexes show as indexes; there are no foreign keys or triggers, and constraints aren't listed.
+    async fn click_structure(&mut self, table: &str) -> Result<Structure> {
+        let t = [Some(table)];
+        let columns = self
+            .fetch_with(
+                "select name, type, if(startsWith(type, 'Nullable('), 'true', 'false'), nullIf(default_expression, ''), \
+                 nullIf(comment, ''), if(is_in_primary_key, 'true', 'false'), default_kind from system.columns \
+                 where database = currentDatabase() and table = {p1:String} order by position",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| {
+                let (name, data_type) = (take(&mut r, 0).unwrap_or_default(), take(&mut r, 1).unwrap_or_default());
+                let (nullable, default) = (take(&mut r, 2).as_deref() == Some("true"), take(&mut r, 3));
+                let (comment, primary) = (take(&mut r, 4), take(&mut r, 5).as_deref() == Some("true"));
+                // A MATERIALIZED or ALIAS column would turn into a plain one if it were restated.
+                let generated = take(&mut r, 6).is_some_and(|k| matches!(k.as_str(), "MATERIALIZED" | "ALIAS"));
+                ColumnInfo { name, data_type, nullable, default, comment, primary, generated, ..ColumnInfo::default() }
+            })
+            .collect();
+        let facts = self
+            .fetch_with(
+                "select engine, sorting_key, partition_key, primary_key, comment from system.tables \
+                 where database = currentDatabase() and name = {p1:String}",
+                &t,
+            )
+            .await?;
+        let mut facts = facts.into_iter().next().unwrap_or_default();
+        let (engine, sorting, partition, primary, comment) =
+            (take(&mut facts, 0), take(&mut facts, 1), take(&mut facts, 2), take(&mut facts, 3), take(&mut facts, 4));
+        let key = |name: &str, expr: Option<String>, primary: bool, method: Option<String>| {
+            expr.filter(|e| !e.is_empty()).map(|e| IndexInfo {
+                name: name.into(),
+                columns: split_list(&e),
+                unique: false,
+                primary,
+                method,
+                constraint: true,
+            })
+        };
+        let mut indexes: Vec<IndexInfo> = [
+            key("PRIMARY KEY", primary.clone(), true, engine),
+            key("ORDER BY", sorting.filter(|s| Some(s) != primary.as_ref()), false, None),
+            key("PARTITION BY", partition, false, None),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        for mut r in self
+            .fetch_with(
+                "select name, expr, type from system.data_skipping_indices \
+                 where database = currentDatabase() and table = {p1:String} order by name",
+                &t,
+            )
+            .await?
+        {
+            indexes.push(IndexInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                columns: split_list(&take(&mut r, 1).unwrap_or_default()),
+                unique: false,
+                primary: false,
+                method: take(&mut r, 2),
+                constraint: false,
+            });
+        }
+        Ok(Structure {
+            columns,
+            indexes,
+            foreign_keys: vec![],
+            checks: vec![],
+            triggers: vec![],
+            comment: comment.filter(|c| !c.is_empty()),
+            options: None,
+        })
     }
 
     /// A `SQL Server` table's structure from the `sys` views. Triggers are listed by name and definition only: they

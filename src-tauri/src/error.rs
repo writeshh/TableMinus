@@ -83,6 +83,9 @@ pub enum Error {
     DuckDb(#[from] duckdb::Error),
     #[error("SQL Server: {0}")]
     Mssql(#[from] tiberius::error::Error),
+    /// `ClickHouse` answered with an error, in its own words.
+    #[error("ClickHouse: {0}")]
+    ClickHouse(String),
     /// A `DuckDB` value Arrow couldn't turn into text.
     #[error("DuckDB: {0}")]
     Arrow(String),

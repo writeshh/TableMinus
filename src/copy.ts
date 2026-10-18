@@ -2,7 +2,7 @@
 // Pure functions, so they're tested on their own (copy.test.ts).
 
 export type Cells = { columns: string[]; rows: (string | null)[][] };
-export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql";
+export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse";
 
 /** Plain text: one cell as it is; several as tab-separated lines, quoting any value that holds a tab, newline or quote. */
 export function plain(c: Cells): string {
@@ -26,6 +26,7 @@ export function markdown(c: Cells): string {
 
 function ident(name: string, d: Dialect): string {
   if (d === "mssql") return `[${name.replaceAll("]", "]]")}]`;
+  if (d === "clickhouse") return `"${name.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`; // a backslash escapes
   return d === "mysql" || d === "mariadb" ? `\`${name.replaceAll("`", "``")}\`` : `"${name.replaceAll('"', '""')}"`;
 }
 
@@ -34,6 +35,7 @@ function literal(v: string | null, d: Dialect): string {
   if (v === null) return "NULL";
   const s = v.replaceAll("'", "''");
   if (d === "mssql") return `N'${s}'`;
+  if (d === "clickhouse") return `'${v.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
   return `'${d === "mysql" || d === "mariadb" ? s.replaceAll("\\", "\\\\") : s}'`;
 }
 

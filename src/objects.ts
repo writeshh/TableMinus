@@ -193,6 +193,6 @@ export function newMenu(schema: string | null): MenuItem[] {
   return [
     ["New view…", () => newView(false, schema)],
     ...(k === "postgres" ? [["New materialized view…", () => newView(true, schema)] as MenuItem] : []),
-    ...(k !== "sqlite" && k !== "duckdb" && k !== "mssql" ? [["New function…", () => newRoutine("function", schema)], ["New procedure…", () => newRoutine("procedure", schema)]] as MenuItem[] : []),
+    ...(!["sqlite", "duckdb", "mssql", "clickhouse"].includes(k) ? [["New function…", () => newRoutine("function", schema)], ["New procedure…", () => newRoutine("procedure", schema)]] as MenuItem[] : []),
   ];
 }

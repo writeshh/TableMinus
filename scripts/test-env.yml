@@ -52,6 +52,15 @@ services:
       interval: 5s
       retries: 60
 
+  # Reachable directly over HTTP: 127.0.0.1:8123, user tm, password testpass, database app.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment: { CLICKHOUSE_USER: tm, CLICKHOUSE_PASSWORD: testpass, CLICKHOUSE_DB: app, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
+    ports: ["127.0.0.1:8123:8123"]
+    networks: [front, back]
+    ulimits: { nofile: { soft: 262144, hard: 262144 } }
+    healthcheck: { test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"], interval: 3s, retries: 40 }
+
 networks:
   front: {}
   back: { internal: true }

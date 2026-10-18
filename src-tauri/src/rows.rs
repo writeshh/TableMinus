@@ -168,7 +168,7 @@ struct Target<'a> {
 fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: &mut Vec<Part<'a>>) -> Result<()> {
     let Target { key, id, original } = *t;
     if key.is_empty() && id.is_none() && !original.is_empty() {
-        if matches!(d, Dialect::Duck | Dialect::Mssql) {
+        if matches!(d, Dialect::Duck | Dialect::Mssql | Dialect::Click) {
             return Err(Error::Invalid("this engine has no stable row identity; add a primary key to edit this table"));
         }
         if d != Dialect::My {
@@ -206,8 +206,8 @@ fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: 
         let column = match d {
             Dialect::Pg => "ctid",
             Dialect::Lite => "rowid",
-            Dialect::My | Dialect::Duck | Dialect::Mssql => {
-                return Err(Error::Invalid("MySQL, DuckDB and SQL Server rows have no row identity"));
+            Dialect::My | Dialect::Duck | Dialect::Mssql | Dialect::Click => {
+                return Err(Error::Invalid("this engine has no row identity"));
             }
         };
         parts.push(Part::Sql(format!(" where {column} = ")));
@@ -233,6 +233,11 @@ fn plan<'a>(
     changes: &'a Changes,
     types: &HashMap<String, String>,
 ) -> Result<Vec<Statement<'a>>> {
+    if d == Dialect::Click {
+        return Err(Error::Invalid(
+            "ClickHouse changes rows with ALTER TABLE … UPDATE and DELETE; write them in a SQL tab",
+        ));
+    }
     let t = d.table_ident(table);
     let mut plan = Vec::new();
     for row in &changes.deletes {
@@ -466,6 +471,7 @@ impl Conn {
             Dialect::Mssql => {
                 format!("select convert(varchar(max), substring({c}, 1, {HEX_PREVIEW}), 2), datalength({c})")
             }
+            Dialect::Click => format!("select hex(substring({c}, 1, {HEX_PREVIEW})), length({c})"),
             Dialect::Lite => format!("select hex(substr({c}, 1, {HEX_PREVIEW})), length(cast({c} as blob))"),
         };
         let mut parts = vec![Part::Sql(format!("{select} from {}", d.table_ident(table)))];
@@ -513,7 +519,7 @@ impl Conn {
                     }
                 }
             }
-            Dialect::Lite | Dialect::Duck | Dialect::Mssql => {}
+            Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => {}
         }
         Ok(out)
     }

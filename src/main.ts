@@ -106,6 +106,8 @@ const ENGINES: Engine[] = [
   { id: "duckdb", kind: "duckdb", label: "DuckDB", mono: "Dk", color: "var(--accent)" },
   { id: "mssql", kind: "mssql", label: "SQL Server", mono: "Ss", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "1433", user: "sa", database: "" } },
+  { id: "clickhouse", kind: "clickhouse", label: "ClickHouse", mono: "Ch", color: "var(--yellow)",
+    defaults: { host: "127.0.0.1", port: "8123", user: "default", database: "" } },
   { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
@@ -593,7 +595,7 @@ function formToSaved(): Saved {
     const port = field("port").value.trim() || d.port;
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
-    const scheme = editingKind === "postgres" ? "postgres" : editingKind === "redis" ? "redis" : editingKind === "mssql" ? "mssql" : "mysql";
+    const scheme = editingKind === "postgres" ? "postgres" : editingKind === "redis" ? "redis" : editingKind === "mssql" ? "mssql" : editingKind === "clickhouse" ? "clickhouse" : "mysql";
     if (editingKind === "redis" && !/^\d+$/.test(db || "0")) throw "A Redis database is a number, such as 0.";
     url = `${scheme}://${user ? encodeURIComponent(user) + "@" : ""}${host}:${port}${db ? "/" + encodeURIComponent(db) : ""}`;
   }
@@ -3559,8 +3561,9 @@ function anythingItems(): AnythingItem[] {
 
 const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
-const dumps = (c: Saved) => c.flavor !== "cockroach" && c.kind !== "duckdb" && c.kind !== "mssql"; // SQL Server backs up with its own statement
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && c.kind !== "mssql";
+// SQL Server and ClickHouse back up with their own statements.
+const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse"].includes(c.kind);
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && c.kind !== "mssql" && c.kind !== "clickhouse";
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },

@@ -2,7 +2,9 @@
 
 use crate::db::Engine;
 use sqlparser::ast::{Expr, ObjectName, ObjectNamePart, Select, Statement, TableFactor, Visit, Visitor};
-use sqlparser::dialect::{Dialect, DuckDbDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::dialect::{
+    ClickHouseDialect, Dialect, DuckDbDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect,
+};
 use sqlparser::parser::Parser;
 use std::ops::ControlFlow;
 
@@ -76,6 +78,7 @@ pub fn is_read_only(engine: Engine, sql: &str) -> bool {
         Engine::Sqlite => &SQLiteDialect {},
         Engine::Duckdb => &DuckDbDialect {},
         Engine::Mssql => &MsSqlDialect {},
+        Engine::Clickhouse => &ClickHouseDialect {},
         // Redis commands aren't SQL; redis.rs has its own list.
         Engine::Redis => return false,
     };
@@ -182,12 +185,13 @@ mod tests {
         use crate::db::{Dialect, Engine};
         use proptest::prelude::*;
 
-        const ENGINES: [(Engine, Dialect); 5] = [
+        const ENGINES: [(Engine, Dialect); 6] = [
             (Engine::Postgres, Dialect::Pg),
             (Engine::Mysql, Dialect::My),
             (Engine::Sqlite, Dialect::Lite),
             (Engine::Duckdb, Dialect::Duck),
             (Engine::Mssql, Dialect::Mssql),
+            (Engine::Clickhouse, Dialect::Click),
         ];
         const WRITES: [&str; 5] = [
             "DELETE FROM {}",
@@ -215,7 +219,9 @@ mod tests {
 
             #[test]
             fn a_select_of_any_quoted_names_is_read_only(table in "\\PC{1,20}", column in "\\PC{1,20}") {
-                for (engine, d) in ENGINES {
+                // Not ClickHouse: sqlparser doesn't read its backslash escapes, so a name with one fails to parse,
+                // which counts as a write (the safe way to be wrong).
+                for (engine, d) in ENGINES.into_iter().filter(|(e, _)| *e != Engine::Clickhouse) {
                     let sql = format!("SELECT {} FROM {}", d.ident(&column), d.ident(&table));
                     prop_assert!(is_read_only(engine, &sql), "{}", sql);
                 }

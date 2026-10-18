@@ -117,9 +117,20 @@ pub(crate) fn page_clause(d: Dialect, rows: &str, ordered: bool, limit: u32, off
 
 /// A LIKE pattern matching `value` literally, with `!` as the escape character. `!` rather than backslash
 /// because MySQL reads backslashes in string literals differently depending on `sql_mode`.
-fn like_pattern(value: &str, prefix: bool, suffix: bool) -> String {
+fn like_pattern(d: Dialect, value: &str, prefix: bool, suffix: bool) -> String {
+    // `ClickHouse` has no ESCAPE clause: a backslash is its fixed escape character.
+    let esc = if d == Dialect::Click { '\\' } else { '!' };
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '%' | '_') || c == esc {
+            escaped.push(esc);
+        }
+        escaped.push(c);
+    }
     // `[` too: SQL Server reads `[a-z]` in a pattern as a range.
-    let escaped = value.replace('!', "!!").replace('%', "!%").replace('_', "!_").replace('[', "![");
+    if d == Dialect::Mssql {
+        escaped = escaped.replace('[', "![");
+    }
     format!("{}{escaped}{}", if prefix { "%" } else { "" }, if suffix { "%" } else { "" })
 }
 
@@ -133,11 +144,12 @@ impl Conn {
             Dialect::Lite => format!("cast({c} as text)"),
             Dialect::Duck => format!("cast({c} as varchar)"),
             Dialect::Mssql => format!("cast({c} as nvarchar(max))"),
+            Dialect::Click => format!("toString({c})"),
         }
     }
 
     fn like(&self) -> &'static str {
-        if matches!(self.dialect(), Dialect::Pg | Dialect::Duck) { "ilike" } else { "like" }
+        if matches!(self.dialect(), Dialect::Pg | Dialect::Duck | Dialect::Click) { "ilike" } else { "like" }
     }
 
     /// One filter on one column. `as_text` compares the column's text form, for "any column" filters where
@@ -154,7 +166,9 @@ impl Conn {
             }
             Values::Shown => self.dialect().literal(&v),
         };
-        let pattern = |prefix, suffix| like_pattern(&f.value, prefix, suffix);
+        let d = self.dialect();
+        let pattern = |prefix, suffix| like_pattern(d, &f.value, prefix, suffix);
+        let escape = if d == Dialect::Click { "" } else { " escape '!'" };
         Ok(match f.op {
             Op::Eq => format!("{e} = {}", bind(f.value.clone())),
             Op::Ne => format!("{e} <> {}", bind(f.value.clone())),
@@ -162,10 +176,10 @@ impl Conn {
             Op::Le => format!("{e} <= {}", bind(f.value.clone())),
             Op::Gt => format!("{e} > {}", bind(f.value.clone())),
             Op::Ge => format!("{e} >= {}", bind(f.value.clone())),
-            Op::Contains => format!("{text} {like} {} escape '!'", bind(pattern(true, true))),
-            Op::NotContains => format!("{text} not {like} {} escape '!'", bind(pattern(true, true))),
-            Op::StartsWith => format!("{text} {like} {} escape '!'", bind(pattern(false, true))),
-            Op::EndsWith => format!("{text} {like} {} escape '!'", bind(pattern(true, false))),
+            Op::Contains => format!("{text} {like} {}{escape}", bind(pattern(true, true))),
+            Op::NotContains => format!("{text} not {like} {}{escape}", bind(pattern(true, true))),
+            Op::StartsWith => format!("{text} {like} {}{escape}", bind(pattern(false, true))),
+            Op::EndsWith => format!("{text} {like} {}{escape}", bind(pattern(true, false))),
             Op::In | Op::NotIn => {
                 let items: Vec<String> =
                     f.value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(String::from).collect();
@@ -279,7 +293,7 @@ impl Conn {
             Dialect::Pg => "ctid::text",
             Dialect::Lite => "rowid",
             // DuckDB's rowid moves when rows are updated, so it can't name a row to edit later.
-            Dialect::My | Dialect::Duck | Dialect::Mssql => return None,
+            Dialect::My | Dialect::Duck | Dialect::Mssql | Dialect::Click => return None,
         };
         self.fetch_with(&format!("select {expr} from {from} limit 0"), &[]).await.ok().map(|_| expr)
     }

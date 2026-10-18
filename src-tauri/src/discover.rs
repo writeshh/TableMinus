@@ -26,7 +26,8 @@ const HOST: &str = "127.0.0.1";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Inclusive ranges: the usual ports, and the few above them that `DBngin` and a second Homebrew install move to.
-const USUAL_PORTS: [(u16, u16); 5] = [(5432, 5440), (3306, 3310), (6379, 6382), (26257, 26258), (1433, 1434)];
+const USUAL_PORTS: [(u16, u16); 6] =
+    [(5432, 5440), (3306, 3310), (6379, 6382), (26257, 26258), (1433, 1434), (8123, 8124)];
 const COCKROACH_PORT: u16 = 26257;
 /// A busy Docker host publishes a lot; this many are plenty to look at.
 const MAX_DOCKER_PORTS: usize = 100;
@@ -57,6 +58,8 @@ enum Wire {
     /// Whether it wants a password before answering.
     Redis(bool),
     SqlServer,
+    /// Answered `GET /ping` as `ClickHouse` does.
+    ClickHouse,
 }
 
 /// A server found, ready to save under a free name.
@@ -107,7 +110,7 @@ async fn exchange(port: u16, request: Option<&[u8]>, buf: &mut [u8]) -> Option<u
 
 /// What database speaks on `port`, if any. One connection per question, since Postgres drops one that talks nonsense.
 async fn probe(port: u16) -> Option<Wire> {
-    let mut buf = [0u8; 128];
+    let mut buf = [0u8; 512]; // ClickHouse's headers are long enough that its "Ok." comes after 128 bytes
     let n = exchange(port, None, &mut buf).await?;
     if n > 0 {
         return mysql_greeting(&buf[..n]).map(Wire::Mysql);
@@ -115,6 +118,14 @@ async fn probe(port: u16) -> Option<Wire> {
     let n = exchange(port, Some(b"PING\r\n"), &mut buf).await?;
     if let Some(auth) = redis_reply(&buf[..n]) {
         return Some(Wire::Redis(auth));
+    }
+    let n = exchange(port, Some(b"GET /ping HTTP/1.0\r\n\r\n"), &mut buf).await?;
+    let reply = String::from_utf8_lossy(&buf[..n]);
+    if reply.starts_with("HTTP/")
+        && reply.contains(" 200")
+        && (reply.contains("X-ClickHouse") || reply.ends_with("Ok.\n"))
+    {
+        return Some(Wire::ClickHouse);
     }
     let n = exchange(port, Some(&TDS_PRELOGIN), &mut buf).await?;
     if buf[..n].first() == Some(&0x04) {
@@ -167,6 +178,7 @@ fn label(kind: Engine, flavor: Option<Flavor>) -> &'static str {
         (Engine::Sqlite, _) => "SQLite",
         (Engine::Duckdb, _) => "DuckDB",
         (Engine::Mssql, _) => "SQL Server",
+        (Engine::Clickhouse, _) => "ClickHouse",
     }
 }
 
@@ -272,6 +284,7 @@ async fn found_on(port: u16, container: Option<String>) -> Option<Found> {
         }
         Wire::Redis(auth) => try_redis(port, auth).await,
         Wire::SqlServer => try_sql(port, Engine::Mssql, "mssql", &["sa".to_string()]).await,
+        Wire::ClickHouse => try_sql(port, Engine::Clickhouse, "clickhouse", &["default".to_string()]).await,
     };
     let (conn, detail) = tried.ok()?;
     Some(Found { conn: named(conn, port, container.as_deref()), detail })
@@ -292,6 +305,7 @@ fn local_port(c: &Saved) -> Option<u16> {
         Engine::Mysql | Engine::Mariadb => Some(3306),
         Engine::Redis => Some(6379),
         Engine::Mssql => Some(1433),
+        Engine::Clickhouse => Some(8123),
         Engine::Sqlite | Engine::Duckdb => None,
     })
 }
@@ -519,13 +533,30 @@ mod tests {
         let pg = fake_server(vec![], |req| if req == SSL_REQUEST { b"N".to_vec() } else { vec![] });
         let sql_server =
             fake_server(vec![], |req| if req.first() == Some(&0x12) { vec![0x04, 0x01, 0x00, 0x20] } else { vec![] });
+        let clickhouse = fake_server(vec![], |req| {
+            if req.starts_with(b"GET /ping") { b"HTTP/1.0 200 OK\r\n\r\nOk.\n".to_vec() } else { vec![] }
+        });
         let other = fake_server(vec![], |_| b"HTTP/1.1 400 Bad Request\r\n".to_vec());
         let results = tauri::async_runtime::block_on(async {
-            (probe(mysql).await, probe(redis).await, probe(pg).await, probe(sql_server).await, probe(other).await)
+            (
+                probe(mysql).await,
+                probe(redis).await,
+                probe(pg).await,
+                probe(sql_server).await,
+                probe(clickhouse).await,
+                probe(other).await,
+            )
         });
         assert_eq!(
             results,
-            (Some(Wire::Mysql(true)), Some(Wire::Redis(false)), Some(Wire::Postgres), Some(Wire::SqlServer), None)
+            (
+                Some(Wire::Mysql(true)),
+                Some(Wire::Redis(false)),
+                Some(Wire::Postgres),
+                Some(Wire::SqlServer),
+                Some(Wire::ClickHouse),
+                None
+            )
         );
     }
 
@@ -534,7 +565,7 @@ mod tests {
     fn local_servers_should_be_found_and_tried_with_the_defaults() {
         let found = tauri::async_runtime::block_on(async {
             let mut found = vec![];
-            for port in [5432, 3306, 6379, 26257, 1433] {
+            for port in [5432, 3306, 6379, 26257, 1433, 8123] {
                 found.extend(super::found_on(port, None).await);
             }
             found

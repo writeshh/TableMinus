@@ -96,7 +96,7 @@ pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, cre
         Dialect::Pg => Ok(vec![def]),
         Dialect::My if create => Ok(vec![def]),
         Dialect::My => Ok(vec![format!("DROP {what} IF EXISTS {}", d.ident(name)), def]),
-        Dialect::Lite | Dialect::Duck | Dialect::Mssql => Err(NO_ROUTINES),
+        Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => Err(NO_ROUTINES),
     }
 }
 
@@ -112,7 +112,7 @@ pub fn routine_template(d: Dialect, kind: ItemKind, name: &str) -> Result<String
         }
         (Dialect::My, ItemKind::Function) => format!("CREATE FUNCTION {t}()\nRETURNS int\nDETERMINISTIC\nRETURN 1"),
         (Dialect::My, ItemKind::Procedure) => format!("CREATE PROCEDURE {t}()\nBEGIN\n  SELECT 1;\nEND"),
-        (Dialect::Lite | Dialect::Duck | Dialect::Mssql, _) => return Err(NO_ROUTINES),
+        (Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click, _) => return Err(NO_ROUTINES),
         _ => return Err(Error::Invalid("not a function or procedure")),
     })
 }
@@ -257,6 +257,13 @@ impl Conn {
             Dialect::Lite => {
                 self.fetch_with("select sql from sqlite_master where type = 'view' and name = $1", &[Some(view)]).await?
             }
+            Dialect::Click => {
+                self.fetch_with(
+                    "select as_select from system.tables where database = currentDatabase() and name = {p1:String}",
+                    &[Some(view)],
+                )
+                .await?
+            }
             Dialect::Mssql => {
                 let name = self.table_ident(view);
                 self.fetch_with("select definition from sys.sql_modules where object_id = object_id(@P1)", &[Some(&name)])
@@ -311,7 +318,7 @@ impl Conn {
                     .map(|mut r| vec![r.get_mut(2).and_then(Option::take)])
                     .collect()
             }
-            Dialect::Lite | Dialect::Duck | Dialect::Mssql => return Err(NO_ROUTINES),
+            Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
         };
         let pg = self.dialect() == Dialect::Pg;
         let defs: Vec<String> = rows
@@ -387,7 +394,7 @@ impl Conn {
                             .collect()
                     }
                     Dialect::My => vec![format!("DROP {what} {t}")],
-                    Dialect::Lite | Dialect::Duck | Dialect::Mssql => return Err(NO_ROUTINES),
+                    Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
                 }
             }
         })

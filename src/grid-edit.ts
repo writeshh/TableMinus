@@ -64,6 +64,7 @@ const INEXACT = /^(float|json|bit|(var)?binary|(tiny|medium|long)?blob|geometry|
  *  Postgres, rowid on SQLite) or, on MySQL, by every value with LIMIT 1 ("values", only when every column is
  *  shown and can be compared exactly); null when the rows can't be found, and stay read-only. */
 export function findBy(tab: EditTab): "key" | "id" | "values" | null {
+  if (engine() === "clickhouse") return null; // its rows change with ALTER TABLE … UPDATE
   if (keyOf(tab)) return "key";
   const r = tab.result;
   const columns = host.columns(tab.table);
@@ -79,6 +80,7 @@ export function keylessNote(tab: EditTab) {
   const by = findBy(tab);
   if (by === "id") return `No primary key: changes find rows by ${engine() === "postgres" ? "ctid" : "rowid"}`;
   if (by === "values") return "No primary key: changes find each row by all its values (one row at most)";
+  if (engine() === "clickhouse") return "Read-only: ClickHouse changes rows with ALTER TABLE … UPDATE, in a SQL tab";
   return by ? null : "Read-only: no primary key";
 }
 

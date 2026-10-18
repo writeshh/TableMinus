@@ -29,6 +29,10 @@ pub(crate) const MSSQL: &str = "select s.session_id as [Session], s.login_name a
     from sys.dm_exec_sessions s left join sys.dm_exec_requests r on r.session_id = s.session_id \
     outer apply sys.dm_exec_sql_text(r.sql_handle) t \
     where s.is_user_process = 1 and s.session_id <> @@spid order by r.total_elapsed_time desc";
+/// Running queries (`ClickHouse` has no idle sessions to list), minus this one, by their ids.
+pub(crate) const CLICKHOUSE: &str = "select query_id as `Query`, user as `User`, address as `Client`, \
+    current_database as `Database`, round(elapsed, 1) as `Running (s)`, formatReadableSize(memory_usage) as `Memory`, \
+    query as `Text` from system.processes where query_id != queryID() order by elapsed desc";
 /// `SHOW FULL PROCESSLIST`, minus this connection.
 const MYSQL: &str = "select id as `Id`, user as `User`, host as `Host`, db as `Database`, command as `Command`, \
     time as `Time`, state as `State`, info as `Info` from information_schema.processlist \
@@ -47,6 +51,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Engine::Mysql | Engine::Mariadb => MYSQL,
         Engine::Sqlite | Engine::Duckdb => return Err(Error::Invalid("SQLite and DuckDB have no process list")),
         Engine::Mssql => MSSQL,
+        Engine::Clickhouse => CLICKHOUSE,
         Engine::Redis => return Err(Error::Invalid("Redis clients show in the console: CLIENT LIST")),
     };
     let r = live.conn.query(sql).await;
@@ -94,6 +99,16 @@ pub async fn kill_process(
             let id = number()?;
             let sql = if connection { format!("kill {id}") } else { format!("kill query {id}") };
             live.conn.query(&sql).await?;
+        }
+        Engine::Clickhouse => {
+            // A query id is a UUID, or whatever the client named it; refuse anything odd rather than quote it.
+            if id.is_empty()
+                || id.len() > 100
+                || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return Err(Error::Invalid("a ClickHouse query id is letters, digits, - and _"));
+            }
+            live.conn.fetch_with("KILL QUERY WHERE query_id = {p1:String} SYNC", &[Some(&id)]).await?;
         }
         Engine::Mssql => {
             if !connection {

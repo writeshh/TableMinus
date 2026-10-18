@@ -74,12 +74,15 @@ const TYPES: Record<string, string[]> = {
   sqlite: ["INTEGER", "TEXT", "REAL", "NUMERIC", "BLOB"],
   mssql: ["int", "bigint", "smallint", "tinyint", "bit", "nvarchar(255)", "nvarchar(max)", "varchar(255)", "decimal(18,2)", "float", "real",
     "date", "datetime2", "datetimeoffset", "time", "uniqueidentifier", "varbinary(max)", "xml"],
+  clickhouse: ["UInt8", "UInt16", "UInt32", "UInt64", "Int8", "Int16", "Int32", "Int64", "Float32", "Float64", "Decimal(18, 2)", "String",
+    "FixedString(16)", "Date", "DateTime", "DateTime64(3)", "UUID", "Bool", "Array(String)", "Nullable(String)", "LowCardinality(String)",
+    "Map(String, String)", "JSON"],
   duckdb: ["INTEGER", "BIGINT", "SMALLINT", "VARCHAR", "BOOLEAN", "DECIMAL(18,3)", "DOUBLE", "REAL", "DATE", "TIMESTAMP",
     "TIMESTAMPTZ", "TIME", "INTERVAL", "UUID", "JSON", "BLOB"],
 };
 const kind = () => (host.conn()?.kind === "mariadb" ? "mysql" : host.conn()?.kind ?? "postgres");
 /** Index methods to choose from when adding one (`ddl::IndexMethod`); SQLite has none. */
-const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [], duckdb: [], mssql: [] };
+const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [], duckdb: [], mssql: [], clickhouse: [] };
 const blank = (s: string | null | undefined) => (s ?? "").trim() || null;
 const shortName = (table: string) => (kind() === "postgres" ? table.split(".").slice(1).join(".") || table : table);
 
@@ -257,8 +260,8 @@ export async function showStructure(out: HTMLElement, tabId: number, table: stri
         table, create, name: shortName(table), comment: "", engine: "", collation: "",
         columns: [{ ...newColumn(), name: "id", primary: true, nullable: false }], indexes: [], fks: [], checks: [], triggers: [],
       };
-      if (kind() !== "sqlite" && kind() !== "duckdb") d.columns[0].auto_increment = true; // DuckDB has none
-      d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER", duckdb: "BIGINT", mssql: "bigint" }[kind()]!;
+      if (!["sqlite", "duckdb", "clickhouse"].includes(kind())) d.columns[0].auto_increment = true; // these have none
+      d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER", duckdb: "BIGINT", mssql: "bigint", clickhouse: "UInt64" }[kind()]!;
       drafts.set(tabId, d);
       host.pendingChanged(); // the footer was drawn before this draft existed
     } else {
@@ -305,7 +308,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
   // Columns
   const types = el("datalist", { id: `types-${tabId}` }, ...TYPES[kind()].map((t) => el("option", { value: t })));
   // A new table takes the drafted order; MySQL and SQLite can also move an existing table's columns.
-  const movable = d.create || (kind() !== "postgres" && kind() !== "duckdb" && kind() !== "mssql"); // MySQL moves them; SQLite rebuilds the table
+  const movable = d.create || !["postgres", "duckdb", "mssql", "clickhouse"].includes(kind()); // MySQL moves them; SQLite rebuilds the table
   const moveButtons = (c: ColumnDraft) => {
     const shown = d.columns.filter((x) => !x.dropped);
     const i = shown.indexOf(c);
@@ -336,7 +339,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
 
     primary.title = d.create ? "Primary key" : "Primary key: the key's columns change together when saved";
     tr.append(
-      td(input(c.name, set("name"), "Column name")), td(type), td(length), td(check(c.nullable, set("nullable"), "Nullable")),
+      td(input(c.name, set("name"), "Column name")), td(type), td(length), td(nullableCheck(c, set("nullable"))),
       td(input(c.default ?? "", set("default"), "Default (SQL)")), td(check(c.auto_increment, set("auto_increment"), "Auto-increment")),
       td(primary), td(comment), td(...(movable && !c.dropped ? moveButtons(c) : []), dropButton(c, redraw)),
     );
@@ -403,7 +406,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
   const addCheck = addButton("Check", () => (d.checks.push({ name: `${d.name.trim()}_check${d.checks.length + 1}`, definition: "", added: true }), redraw()));
   view.append(section("Checks", ["Name", "Definition", ""], checkRows, addCheck));
 
-  if (kind() !== "duckdb") view.append(triggerSection(d, redraw, touched)); // DuckDB has no triggers
+  if (kind() !== "duckdb" && kind() !== "clickhouse") view.append(triggerSection(d, redraw, touched)); // they have no triggers
 
   out.replaceChildren(view);
 }
@@ -411,7 +414,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
 /** Postgres triggers call a function; MySQL and SQLite run statements (SQLite's go inside BEGIN … END). */
 const TRIGGER_BODY: Record<string, string> = {
   postgres: "Function to call, e.g. audit()", mysql: "Statement, e.g. SET NEW.updated_at = NOW()", sqlite: "Statements, e.g. UPDATE …;",
-  duckdb: "", mssql: "",
+  duckdb: "", mssql: "", clickhouse: "",
 };
 
 /** Triggers: an existing one can be dropped, or edited (dropped, and added again as changed); added ones are forms. */
@@ -463,6 +466,17 @@ function input(value: string, on: (v: string) => void, label: string) {
   i.setAttribute("aria-label", label);
   i.oninput = () => on(i.value);
   return i;
+}
+
+/** The Nullable box; ClickHouse has none, since nullability is part of its type (`Nullable(String)`). */
+function nullableCheck(c: ColumnDraft, on: (v: boolean) => void) {
+  const box = check(c.nullable, on, "Nullable");
+  if (kind() === "clickhouse") {
+    const input = box.querySelector("input") ?? (box as HTMLInputElement);
+    input.disabled = true;
+    input.title = "ClickHouse writes this in the type, e.g. Nullable(String)";
+  }
+  return box;
 }
 
 function check(value: boolean, on: (v: boolean) => void, label: string) {
@@ -725,12 +739,12 @@ export function tableMenu(table: string): MenuItem[] {
       const v = await ask(`Clone ${table}`, [{ key: "to", label: "Name of the copy", value: `${shortName(table)}_copy` }, { key: "data", label: "Copy the rows too", value: true }], "Clone…");
       if (v?.to) runOp(`Clone ${table}`, { op: "clone", table, to: v.to, data: v.data }, "Clone", false);
     }],
-    ...(k === "duckdb" ? [] : [["Reset auto-increment", () => runOp(`Reset auto-increment of ${table}`, { op: "reset_auto_increment", table }, "Reset", false)] as MenuItem]),
+    ...(k === "duckdb" || k === "clickhouse" ? [] : [["Reset auto-increment", () => runOp(`Reset auto-increment of ${table}`, { op: "reset_auto_increment", table }, "Reset", false)] as MenuItem]),
     "-",
     ["Truncate…", async () => {
       const fields: Field[] = k === "postgres"
         ? [{ key: "restart_identity", label: "Restart identity (auto-increment)", value: false }, { key: "cascade", label: "Cascade to tables that reference it", value: false }]
-        : k === "sqlite" ? [{ key: "restart_identity", label: "Reset auto-increment", value: false }] : k === "duckdb" ? [] : fkField;
+        : k === "sqlite" ? [{ key: "restart_identity", label: "Reset auto-increment", value: false }] : k === "duckdb" || k === "clickhouse" ? [] : fkField;
       const v = fields.length ? await ask(`Truncate ${table}`, fields, "Truncate…") : {};
       if (v) runOp(`Truncate ${table}`, { op: "truncate", table, cascade: !!v.cascade, restart_identity: !!v.restart_identity, ignore_fk: !!v.ignore_fk }, "Delete all rows", true);
     }],

@@ -2,12 +2,12 @@
 // outside strings, quoted names, comments and Postgres dollar quotes; and finding the one table a plain SELECT
 // reads. Pure, so it's tested on its own (statements.test.ts).
 
-export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql";
+export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse";
 export type Statement = { from: number; to: number; text: string };
 
 /** The stretches of `sql` that are code: everything except strings, quoted names, comments and dollar quotes. */
 export function codeRanges(sql: string, dialect: Dialect): [number, number][] {
-  const mysql = dialect === "mysql" || dialect === "mariadb";
+  const mysql = dialect === "mysql" || dialect === "mariadb" || dialect === "clickhouse"; // # comments, backslash escapes
   const ranges: [number, number][] = [];
   let start = 0;
   let i = 0;

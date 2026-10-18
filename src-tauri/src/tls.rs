@@ -67,7 +67,7 @@ impl Tls {
     }
 
     /// A native-tls connector that checks what the mode asks, with the CA and client certificate given.
-    fn connector(&self) -> Result<native_tls::TlsConnector> {
+    pub(crate) fn connector(&self) -> Result<native_tls::TlsConnector> {
         let (chain, hostname) = self.checks();
         let mut b = native_tls::TlsConnector::builder();
         b.danger_accept_invalid_certs(!chain).danger_accept_invalid_hostnames(!hostname);

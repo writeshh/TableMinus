@@ -69,6 +69,7 @@ impl IndexMethod {
             (Dialect::Lite, _) => Err(Error::Invalid("SQLite has only one kind of index")),
             (Dialect::Duck, _) => Err(Error::Invalid("DuckDB has only one kind of index")),
             (Dialect::Mssql, _) => Err(Error::Invalid("SQL Server index types aren't chosen here; use a SQL tab")),
+            (Dialect::Click, _) => Err(Error::Invalid(CLICK_CONSTRAINTS)),
         }
     }
 }
@@ -272,7 +273,9 @@ pub struct DbOptions {
 fn create_database_sql(d: Dialect, name: &str, encoding: Option<&str>, collation: Option<&str>) -> Result<String> {
     let name = d.ident(not_blank(name, "the database needs a name")?);
     let clause = |keyword: &str, v: Option<&str>| v.map(|v| format!(" {keyword} {}", d.literal(v))).unwrap_or_default();
-    let options = if d == Dialect::Mssql {
+    let options = if d == Dialect::Click {
+        String::new() // a ClickHouse database has no encoding or collation
+    } else if d == Dialect::Mssql {
         // A collation is a name, not a string; SQL Server's are letters, digits and underscores.
         match collation {
             Some(c) if c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') => format!(" COLLATE {c}"),
@@ -306,6 +309,14 @@ fn idents(d: Dialect, names: &[String]) -> String {
 /// is when MySQL restates it: its ON UPDATE comes along, and its collation while the type stays the same.
 fn column_sql(d: Dialect, c: &ColumnDef, kept: Option<&ColumnInfo>) -> Result<String> {
     let data_type = not_blank(&c.data_type, "every column needs a type")?;
+    if d == Dialect::Click {
+        // Nullability is part of the type (`Nullable(String)`), and the type is written as it is.
+        let name = d.ident(not_blank(&c.name, "every column needs a name")?);
+        let default = blank_is_none(c.default.as_ref()).map(|v| format!(" DEFAULT {v}")).unwrap_or_default();
+        let comment =
+            blank_is_none(c.comment.as_ref()).map(|v| format!(" COMMENT {}", d.literal(v))).unwrap_or_default();
+        return Ok(format!("{name} {data_type}{default}{comment}"));
+    }
     let mut s = format!("{} {data_type}", d.ident(not_blank(&c.name, "every column needs a name")?));
     let collation = kept.filter(|k| k.data_type.eq_ignore_ascii_case(data_type)).and_then(|k| k.collation.as_deref());
     if let (Dialect::My, Some(collation)) = (d, collation) {
@@ -353,6 +364,9 @@ fn index_sql(
 ) -> Result<String> {
     if columns.is_empty() {
         return Err(Error::Invalid("an index needs at least one column"));
+    }
+    if d == Dialect::Click {
+        return Err(Error::Invalid(CLICK_CONSTRAINTS));
     }
     let unique = if unique { "UNIQUE " } else { "" };
     let name = d.ident(not_blank(name, "every index needs a name")?);
@@ -407,6 +421,7 @@ fn trigger_sql(
         Dialect::Mssql => {
             return Err(Error::Invalid("SQL Server triggers read inserted and deleted; write them in a SQL tab"));
         }
+        Dialect::Click => return Err(Error::Invalid("ClickHouse has no triggers")),
     })
 }
 
@@ -425,6 +440,11 @@ fn primary_key_sql(d: Dialect, t: &str, current: &Structure, columns: &[String])
         Dialect::Lite => return Err(Error::SqliteRebuild("change the primary key")),
         Dialect::Duck => {
             return Err(Error::Invalid("DuckDB can't change the primary key of a table; create a new table instead"));
+        }
+        Dialect::Click => {
+            return Err(Error::Invalid(
+                "ClickHouse fixes a table's keys when it is created; create a new table instead",
+            ));
         }
         // One statement, so MySQL (which commits DDL as it goes) never leaves the table without its key.
         Dialect::My => {
@@ -472,6 +492,7 @@ fn foreign_key_sql(d: Dialect, name: &str, columns: &[String], ref_table: &str, 
 
 /// The statements that make `changes` to `table`, whose structure is `current`; with no `current`, the
 /// statements that create it. A rename comes last, so everything before it can use the old name.
+#[expect(clippy::too_many_lines, reason = "one arm per kind of change, each short")]
 pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: &[Change]) -> Result<Vec<String>> {
     let t = d.table_ident(not_blank(table, "the table needs a name")?);
     let Some(current) = current else { return create_sql(d, &t, changes) };
@@ -524,6 +545,9 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 if d == Dialect::Duck {
                     return Err(Error::Invalid(DUCK_CONSTRAINTS));
                 }
+                if d == Dialect::Click {
+                    return Err(Error::Invalid(CLICK_CONSTRAINTS));
+                }
                 if columns.is_empty() || columns.len() != ref_columns.len() {
                     return Err(Error::Invalid("a foreign key needs as many referenced columns as columns"));
                 }
@@ -539,6 +563,7 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 Dialect::My => format!("ALTER TABLE {t} DROP FOREIGN KEY {}", d.ident(name)),
                 Dialect::Lite => return Err(Error::SqliteRebuild("drop a foreign key")),
                 Dialect::Duck => return Err(Error::Invalid(DUCK_CONSTRAINTS)),
+                Dialect::Click => return Err(Error::Invalid(CLICK_CONSTRAINTS)),
             }),
             Change::AddCheck { name, expression } => {
                 if d == Dialect::Lite {
@@ -547,11 +572,15 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 if d == Dialect::Duck {
                     return Err(Error::Invalid(DUCK_CONSTRAINTS));
                 }
+                if d == Dialect::Click {
+                    return Err(Error::Invalid(CLICK_CONSTRAINTS));
+                }
                 out.push(format!("ALTER TABLE {t} ADD {}", check_sql(d, name, expression)?));
             }
             Change::DropCheck { name } => out.push(match d {
                 Dialect::Lite => return Err(Error::SqliteRebuild("drop a check constraint")),
                 Dialect::Duck => return Err(Error::Invalid(DUCK_CONSTRAINTS)),
+                Dialect::Click => return Err(Error::Invalid(CLICK_CONSTRAINTS)),
                 // MariaDB and MySQL 8.0.19+ both read DROP CONSTRAINT; MySQL's own DROP CHECK isn't MariaDB's.
                 _ => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
             }),
@@ -576,6 +605,9 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
     Ok(out)
 }
 
+const CLICK_CONSTRAINTS: &str =
+    "ClickHouse constraints, keys and skipping indexes are changed in a SQL tab; this editor doesn't list them all";
+
 /// `DuckDB` takes constraints only in CREATE TABLE.
 const DUCK_CONSTRAINTS: &str =
     "DuckDB can't add or drop foreign keys and checks on an existing table; create a new table with them instead";
@@ -593,6 +625,7 @@ fn drop_index_sql(d: Dialect, table: &str, t: &str, current: &Structure, name: &
         },
         Dialect::My if index.is_some_and(|i| i.primary) => format!("ALTER TABLE {t} DROP PRIMARY KEY"),
         Dialect::My | Dialect::Mssql => format!("DROP INDEX {} ON {t}", d.ident(name)),
+        Dialect::Click => format!("ALTER TABLE {t} DROP INDEX {}", d.ident(name)),
         Dialect::Lite => format!("DROP INDEX {}", d.ident(name)),
     }
 }
@@ -607,6 +640,7 @@ fn comment_sql(d: Dialect, t: &str, comment: Option<&str>) -> Result<String> {
         Dialect::Mssql => {
             return Err(Error::Invalid("SQL Server comments are extended properties; set them in a SQL tab"));
         }
+        Dialect::Click => format!("ALTER TABLE {t} MODIFY COMMENT {}", d.literal(comment.unwrap_or_default())),
     })
 }
 
@@ -618,7 +652,7 @@ fn rename_sql(d: Dialect, t: &str, to: &str) -> String {
         to
     };
     match d {
-        Dialect::My => format!("RENAME TABLE {t} TO {}", d.ident(to)),
+        Dialect::My | Dialect::Click => format!("RENAME TABLE {t} TO {}", d.ident(to)),
         Dialect::Mssql => format!("EXEC sp_rename {}, {}", d.literal(t), d.literal(to)),
         _ => format!("ALTER TABLE {t} RENAME TO {}", d.ident(to)),
     }
@@ -634,7 +668,7 @@ fn move_clause(d: Dialect, current: &Structure, changes: &[Change], name: &str, 
         return Err(if d == Dialect::Lite {
             Error::SqliteRebuild("reorder columns")
         } else {
-            Error::Invalid("Postgres and DuckDB can't reorder columns")
+            Error::Invalid("this engine can't reorder columns here")
         });
     }
     let added = changes.iter().find_map(|c| match c {
@@ -677,6 +711,7 @@ fn column_def(c: &ColumnInfo) -> ColumnDef {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "one arm per engine")]
 fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) -> Result<Vec<String>> {
     let name = not_blank(&want.name, "every column needs a name")?;
     let data_type = not_blank(&want.data_type, "every column needs a type")?;
@@ -712,6 +747,20 @@ fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) ->
             }
             if renamed {
                 out.push(format!("ALTER TABLE {t} RENAME COLUMN {} TO {col}", d.ident(&cur.name)));
+            }
+        }
+        Dialect::Click => {
+            if cur.generated {
+                return Err(Error::Invalid(GENERATED));
+            }
+            if reincremented {
+                return Err(Error::Invalid("ClickHouse has no auto-increment columns"));
+            }
+            if renamed {
+                out.push(format!("ALTER TABLE {t} RENAME COLUMN {} TO {col}", d.ident(&cur.name)));
+            }
+            if retyped || redefaulted || recommented {
+                out.push(format!("ALTER TABLE {t} MODIFY COLUMN {}", column_sql(d, want, Some(cur))?));
             }
         }
         Dialect::Mssql => {
@@ -833,6 +882,12 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
     if !changes.iter().any(|c| matches!(c, Change::AddColumn { .. })) {
         return Err(Error::Invalid("a new table needs at least one column"));
     }
+    if d == Dialect::Click {
+        // Every ClickHouse table has an engine and an order; the primary key columns give the order.
+        let order = if primary.is_empty() { "tuple()".to_string() } else { format!("({})", idents(d, &primary)) };
+        options.push(format!(" ENGINE = MergeTree ORDER BY {order}"));
+        primary.clear();
+    }
     if !primary.is_empty() {
         // Inserted after the columns, before the foreign keys.
         let n = changes.iter().filter(|c| matches!(c, Change::AddColumn { .. })).count();
@@ -841,6 +896,7 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
     let mut create = format!("CREATE TABLE {t} (\n  {}\n){}", defs.join(",\n  "), options.concat());
     match (d, table_comment) {
         (Dialect::My, Some(c)) => create = format!("{create} COMMENT = {}", d.literal(c)),
+        (Dialect::Click, Some(c)) => create = format!("{create} COMMENT {}", d.literal(c)),
         (Dialect::Pg | Dialect::Duck, Some(c)) => {
             after.insert(0, format!("COMMENT ON TABLE {t} IS {}", d.literal(c)));
         }
@@ -1058,6 +1114,13 @@ impl Conn {
                 .await?
             }
             Dialect::Lite => self.fetch_with("select type from sqlite_master where name = $1", &[Some(table)]).await?,
+            Dialect::Click => {
+                self.fetch_with(
+                    "select engine from system.tables where database = currentDatabase() and name = {p1:String}",
+                    &[Some(table)],
+                )
+                .await?
+            }
             Dialect::Mssql => {
                 let (schema, name) = table.split_once('.').unwrap_or(("dbo", table));
                 self.fetch_with(
@@ -1106,7 +1169,7 @@ impl Conn {
                     )],
                     Dialect::My => without_fk_checks(*ignore_fk, format!("TRUNCATE TABLE {t}")),
                     Dialect::Duck => vec![format!("DELETE FROM {t}")],
-                    Dialect::Mssql => vec![format!("TRUNCATE TABLE {t}")],
+                    Dialect::Mssql | Dialect::Click => vec![format!("TRUNCATE TABLE {t}")],
                     Dialect::Lite => {
                         let mut out = vec![format!("DELETE FROM {t}")];
                         if *restart_identity && self.has_sqlite_sequence().await? {
@@ -1125,7 +1188,7 @@ impl Conn {
                     }
                     Dialect::My => without_fk_checks(*ignore_fk, format!("DROP {kind} {t}")),
                     // Foreign keys aren't enforced on this app's SQLite connections, so nothing to ignore.
-                    Dialect::Lite | Dialect::Mssql => vec![format!("DROP {kind} {t}")],
+                    Dialect::Lite | Dialect::Mssql | Dialect::Click => vec![format!("DROP {kind} {t}")],
                 }
             }
             TableOp::ResetAutoIncrement { table } => self.reset_auto_increment_sql(table).await?,
@@ -1162,6 +1225,8 @@ impl Conn {
                 let to = not_blank(to, "the database needs a name")?;
                 if d == Dialect::Pg {
                     vec![format!("ALTER DATABASE {} RENAME TO {}", d.ident(name), d.ident(to))]
+                } else if d == Dialect::Click {
+                    vec![format!("RENAME DATABASE {} TO {}", d.ident(name), d.ident(to))]
                 } else if d == Dialect::Mssql {
                     vec![format!("ALTER DATABASE {} MODIFY NAME = {}", d.ident(name), d.ident(to))]
                 } else {
@@ -1245,6 +1310,9 @@ impl Conn {
                 "select name from sys.databases where 1 = 0",
                 "select name, '' from sys.fn_helpcollations() order by 1",
             ),
+            Dialect::Click => {
+                ("select name from system.databases where 1 = 0", "select name, '' from system.databases where 1 = 0")
+            }
             Dialect::Lite | Dialect::Duck => {
                 return Err(Error::Invalid("a SQLite or DuckDB file is its only database"));
             }
@@ -1275,6 +1343,8 @@ impl Conn {
             Dialect::Duck => format!("CREATE TABLE {new} AS SELECT * FROM {from} LIMIT 0"),
             // One statement either way: copying an identity column's values later would need IDENTITY_INSERT.
             Dialect::Mssql => format!("SELECT * INTO {new} FROM {from}{}", if data { "" } else { " WHERE 1 = 0" }),
+            // The same engine, keys and columns.
+            Dialect::Click => format!("CREATE TABLE {new} AS {from}"),
             Dialect::Lite => {
                 let sql = self
                     .fetch_with("select sql from sqlite_master where type = 'table' and name = $1", &[Some(table)])
@@ -1322,6 +1392,7 @@ impl Conn {
             // InnoDB raises a value below the largest one to one past it.
             Dialect::My => vec![format!("ALTER TABLE {t} AUTO_INCREMENT = 1")],
             Dialect::Duck => return Err(Error::Invalid("DuckDB has no auto-increment columns")),
+            Dialect::Click => return Err(Error::Invalid("ClickHouse has no auto-increment columns")),
             // RESEED with no value only raises the identity to the largest one, never lowers it, so it's given.
             Dialect::Mssql => {
                 let column = self
@@ -1369,6 +1440,12 @@ impl Conn {
                     .await?;
                 let all: Vec<String> = rows.into_iter().filter_map(|mut r| r.pop().flatten()).collect();
                 if all.is_empty() { Err(Error::Invalid("no such table")) } else { Ok(all.join("\n\n")) }
+            }
+            Dialect::Click => {
+                let rows = self.query(&format!("SHOW CREATE TABLE {}", self.table_ident(table))).await?.rows;
+                first(rows, 0)
+                    .map(|s| format!("{};", s.trim_end().trim_end_matches(';')))
+                    .ok_or(Error::Invalid("no such table"))
             }
             Dialect::Mssql => {
                 if self.is_view(table).await? {
@@ -1453,7 +1530,7 @@ impl Conn {
 
     /// [`Conn::run_ddl`] without the foreign key pragmas around it.
     async fn run_in_transaction(&mut self, statements: &[String]) -> Result<()> {
-        if self.dialect() != Dialect::My && statements.len() > 1 {
+        if !matches!(self.dialect(), Dialect::My | Dialect::Click) && statements.len() > 1 {
             self.query("begin transaction").await?;
             for s in statements {
                 if let Err(e) = self.query(s).await {

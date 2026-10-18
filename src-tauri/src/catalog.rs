@@ -99,6 +99,9 @@ impl Conn {
                  where routine_schema = database() order by 1, 2"
                 .into(),
             Dialect::Lite => "select 'view', name from sqlite_master where type = 'view' order by 2".into(),
+            Dialect::Click => "select 'view', name from system.tables where database = currentDatabase() \
+                 and engine in ('View', 'MaterializedView', 'LiveView', 'WindowView') order by name"
+                .into(),
             // Views only: SQL Server's routines and sequences have no editors here either.
             Dialect::Mssql => "select 'view', case when s.name = 'dbo' then v.name else s.name + '.' + v.name end \
                  from sys.views v join sys.schemas s on s.schema_id = v.schema_id where v.is_ms_shipped = 0 order by 2"
@@ -182,6 +185,18 @@ impl Conn {
                 // InnoDB's table_rows is an estimate too.
                 let innodb = row.get(3).cloned().flatten().is_some_and(|t| t == "BASE TABLE");
                 Ok(Overview { rows: num(0), estimated: innodb, bytes: num(1), created })
+            }
+            Dialect::Click => {
+                let r = self
+                    .fetch_with(
+                        "select total_rows, total_bytes, toString(metadata_modification_time) from system.tables \
+                         where database = currentDatabase() and name = {p1:String}",
+                        &[Some(table)],
+                    )
+                    .await?;
+                let row = r.into_iter().next().ok_or(Error::Invalid("no such table"))?;
+                let num = |i: usize| row.get(i).cloned().flatten().and_then(|n| n.parse::<u64>().ok());
+                Ok(Overview { rows: num(0), estimated: false, bytes: num(1), created: None })
             }
             Dialect::Mssql => {
                 let name = self.table_ident(table);

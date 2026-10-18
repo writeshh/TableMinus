@@ -2,6 +2,7 @@
 //! (catalog queries, DDL) on top of it by the engine's [`Dialect`]. A new SQL engine is a new `Driver`, a `Dialect`
 //! variant, and the arms the compiler then points out where SQL differs.
 
+pub mod clickhouse;
 pub mod duckdb;
 pub mod mssql;
 pub mod mysql;
@@ -119,8 +120,8 @@ pub enum Stopper {
     Lite(rusqlite::InterruptHandle),
     /// Likewise `DuckDB`.
     Duck(std::sync::Arc<::duckdb::InterruptHandle>),
-    /// Wakes the running call, which cancels itself on the server (the connection stays usable).
-    Mssql(std::sync::Arc<tokio::sync::Notify>),
+    /// Wakes the running call, which cancels itself (`SQL Server`'s attention signal; `ClickHouse` closing its request).
+    Notify(std::sync::Arc<tokio::sync::Notify>),
 }
 
 /// Receives a query result as it arrives: the column names once, then each row.
@@ -164,6 +165,17 @@ pub trait Driver: Send {
 
     /// Statements that make the database itself refuse writes, then undo that.
     fn read_only_bounds(&self) -> (&'static str, &'static str);
+
+    /// Makes `db` the database later statements run in. Most engines do that with a `USE` statement, which
+    /// [`crate::db::Conn::use_database`] sends; one that keeps no session says it here.
+    async fn use_database(&mut self, _db: &str) -> Result<()> {
+        Err(Error::Invalid("this engine switches database by reconnecting"))
+    }
+
+    /// The most bound parameters one statement should carry (an import sizes its batches by it).
+    fn max_params(&self) -> usize {
+        30_000
+    }
 
     /// The placeholder for the `n`th (1-based) bound parameter.
     fn param(&self, n: usize) -> String {
