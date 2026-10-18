@@ -2,6 +2,7 @@
 //! (catalog queries, DDL) on top of it by the engine's [`Dialect`]. A new SQL engine is a new `Driver`, a `Dialect`
 //! variant, and the arms the compiler then points out where SQL differs.
 
+pub mod bigquery;
 pub mod clickhouse;
 pub mod d1;
 pub mod duckdb;
@@ -175,6 +176,21 @@ pub trait Driver: Send {
 
     /// Makes `db` the database later statements run in. Most engines do that with a `USE` statement, which
     /// [`crate::db::Conn::use_database`] sends; one that keeps no session says it here.
+    /// The current database, for engines that keep it in the client (BigQuery's default dataset).
+    fn database(&self) -> Option<String> {
+        None
+    }
+
+    /// A table as the engine's API describes it, for engines whose SQL catalog leaves things out (BigQuery).
+    async fn describe(&mut self, _table: &str) -> Result<serde_json::Value> {
+        Err(Error::Invalid("this engine describes tables in SQL"))
+    }
+
+    /// The databases to choose from, for engines that list them outside SQL (BigQuery's datasets).
+    async fn databases(&mut self) -> Result<Vec<String>> {
+        Err(Error::Invalid("this engine lists its databases in SQL"))
+    }
+
     async fn use_database(&mut self, _db: &str) -> Result<()> {
         Err(Error::Invalid("this engine switches database by reconnecting"))
     }

@@ -1,6 +1,7 @@
 //! One connection type over the supported SQL engines: open (through the engine's [`Driver`]), run SQL (results as
 //! text cells), browse the catalog.
 
+use crate::driver::bigquery::BigQuery;
 use crate::driver::clickhouse::ClickHouse;
 use crate::driver::d1::D1;
 use crate::driver::duckdb::DuckDb;
@@ -46,6 +47,7 @@ pub enum Engine {
     /// CQL: opened through `cassandra_connect` (cassandra/mod.rs).
     Cassandra,
     Oracle,
+    Bigquery,
 }
 
 /// Per-connection options beyond host, user and TLS. Engine-specific ones are ignored by other engines.
@@ -128,6 +130,7 @@ pub enum Dialect {
     Mssql,
     Click,
     Ora,
+    Bq,
 }
 
 impl Dialect {
@@ -137,6 +140,8 @@ impl Dialect {
         match self {
             Dialect::My => format!("`{}`", name.replace('`', "``")),
             Dialect::Mssql => format!("[{}]", name.replace(']', "]]")),
+            // BigQuery quotes names in backticks, a backslash escaping the next character.
+            Dialect::Bq => format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`")),
             // ClickHouse reads names like strings: a backslash escapes the next character.
             Dialect::Click => format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\"")),
             _ => format!("\"{}\"", name.replace('"', "\"\"")),
@@ -166,6 +171,11 @@ impl Dialect {
             Dialect::Lite | Dialect::Duck | Dialect::Ora => format!("'{quoted}'"),
             // N'…' keeps characters outside the database's code page; a backslash is only a backslash.
             Dialect::Mssql => format!("N'{quoted}'"),
+            // A quoted string may not hold a line break either.
+            Dialect::Bq => format!(
+                "'{}'",
+                value.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n").replace('\r', "\\r")
+            ),
             // Backslash escapes, and the quote escaped that way rather than doubled.
             Dialect::Click => format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'")),
         }
@@ -178,6 +188,7 @@ impl Dialect {
             Dialect::Mssql => format!("@P{n}"),
             Dialect::Click => format!("{{p{n}:String}}"),
             Dialect::Ora => format!(":{n}"),
+            Dialect::Bq => format!("@p{n}"),
             _ => format!("${n}"),
         }
     }
@@ -228,6 +239,7 @@ impl Conn {
                 Engine::Libsql => Box::new(Libsql::open(url, password, tls, options, tunnel_port).await?),
                 Engine::Oracle => Box::new(Oracle::open(url, password, tls, options, tunnel_port).await?),
                 Engine::D1 => Box::new(D1::open(url, password, tls).await?),
+                Engine::Bigquery => Box::new(BigQuery::open(url, password, tls, tunnel_port).await?),
                 // Boxed: tiberius's connect future is big.
                 Engine::Mssql => Box::new(Box::pin(SqlServer::open(url, password, tls, options, tunnel_port)).await?),
                 Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
@@ -288,7 +300,7 @@ impl Conn {
             Dialect::Ora => self
                 .scalar("select case when sys_context('USERENV', 'NETWORK_PROTOCOL') = 'tcps' then 'TLS' end from dual")
                 .await?,
-            Dialect::Lite | Dialect::Duck | Dialect::Click => None,
+            Dialect::Lite | Dialect::Duck | Dialect::Click | Dialect::Bq => None,
         };
         Ok(cipher.filter(|c| !c.is_empty()))
     }
@@ -372,6 +384,10 @@ impl Conn {
             Dialect::Click => {
                 "select table, name from system.columns where database = currentDatabase() order by table, position"
             }
+            // The default dataset's; INFORMATION_SCHEMA without a dataset reads it.
+            Dialect::Bq => {
+                "select table_name, column_name from INFORMATION_SCHEMA.COLUMNS order by table_name, ordinal_position"
+            }
         };
         let r = self.query(sql).await?;
         Ok(r.rows
@@ -432,6 +448,7 @@ impl Conn {
                 "select username from all_users where oracle_maintained = 'N' \
                  or username = sys_context('USERENV', 'CURRENT_SCHEMA') order by 1"
             }
+            Dialect::Bq => return self.driver.databases().await,
             Dialect::Lite | Dialect::Duck => return Ok(vec![]),
         };
         Ok(self.query(sql).await?.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
@@ -445,6 +462,7 @@ impl Conn {
             Dialect::Mssql => self.scalar("select db_name()").await,
             Dialect::Click => self.scalar("select currentDatabase()").await,
             Dialect::Ora => self.scalar("select sys_context('USERENV', 'CURRENT_SCHEMA') from dual").await,
+            Dialect::Bq => Ok(self.driver.database()),
             Dialect::Lite | Dialect::Duck => Ok(None),
         }
     }
@@ -458,6 +476,7 @@ impl Conn {
             }
         }
         let (label, sql) = match self.dialect() {
+            Dialect::Bq => return Ok("BigQuery".into()), // a service with no version to ask for
             Dialect::Pg => ("PostgreSQL", "show server_version"),
             Dialect::My => ("MySQL", "select version()"),
             Dialect::Lite => ("SQLite", "select sqlite_version()"),
@@ -478,7 +497,7 @@ impl Conn {
     /// MySQL switches in place; Postgres cannot change database within a session, so the caller reconnects.
     pub async fn use_database(&mut self, db: &str) -> Result<()> {
         match self.dialect() {
-            Dialect::Click | Dialect::Ora => self.driver.use_database(db).await,
+            Dialect::Click | Dialect::Ora | Dialect::Bq => self.driver.use_database(db).await,
             Dialect::My | Dialect::Mssql => {
                 let sql = format!("use {}", self.ident(db));
                 self.query(&sql).await.map(|_| ())
@@ -500,10 +519,16 @@ impl Conn {
         self.dialect().table_ident(table)
     }
 
+    /// A table as the engine's API describes it (BigQuery's `tables.get`).
+    pub(crate) async fn describe(&mut self, table: &str) -> Result<serde_json::Value> {
+        self.driver.describe(table).await
+    }
+
     /// Columns of `table` (`schema.table` for Postgres) in definition order.
     #[expect(clippy::too_many_lines, reason = "one catalog query per engine")]
     pub async fn columns(&mut self, table: &str) -> Result<Vec<Column>> {
         let (sql, params) = match self.dialect() {
+            Dialect::Bq => return Ok(crate::driver::bigquery::columns(&self.describe(table).await?)),
             Dialect::Pg => {
                 let (schema, name) = table.split_once('.').unwrap_or(("public", table));
                 (
@@ -645,6 +670,7 @@ impl Conn {
                  and dropped = 'NO' and nested = 'NO' and secondary = 'N' \
                  union select view_name from all_views where owner = sys_context('USERENV', 'CURRENT_SCHEMA') order by 1"
             }
+            Dialect::Bq => "select table_name from INFORMATION_SCHEMA.TABLES order by 1",
         };
         let r = self.query(sql).await?;
         Ok(r.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())

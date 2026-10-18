@@ -2,7 +2,7 @@
 // Pure functions, so they're tested on their own (copy.test.ts).
 
 export type Cells = { columns: string[]; rows: (string | null)[][] };
-export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "oracle";
+export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "oracle" | "bigquery";
 
 /** Plain text: one cell as it is; several as tab-separated lines, quoting any value that holds a tab, newline or quote. */
 export function plain(c: Cells): string {
@@ -27,6 +27,7 @@ export function markdown(c: Cells): string {
 function ident(name: string, d: Dialect): string {
   if (d === "mssql") return `[${name.replaceAll("]", "]]")}]`;
   if (d === "clickhouse") return `"${name.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`; // a backslash escapes
+  if (d === "bigquery") return `\`${name.replaceAll("\\", "\\\\").replaceAll("`", "\\`")}\``;
   return d === "mysql" || d === "mariadb" ? `\`${name.replaceAll("`", "``")}\`` : `"${name.replaceAll('"', '""')}"`;
 }
 
@@ -36,6 +37,8 @@ export function literal(v: string | null, d: Dialect): string {
   const s = v.replaceAll("'", "''");
   if (d === "mssql") return `N'${s}'`;
   if (d === "clickhouse") return `'${v.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+  // A quoted string may not hold a line break either.
+  if (d === "bigquery") return `'${v.replaceAll("\\", "\\\\").replaceAll("'", "\\'").replaceAll("\n", "\\n").replaceAll("\r", "\\r")}'`;
   return `'${d === "mysql" || d === "mariadb" ? s.replaceAll("\\", "\\\\") : s}'`;
 }
 

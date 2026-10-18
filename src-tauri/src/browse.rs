@@ -120,8 +120,8 @@ pub(crate) fn page_clause(d: Dialect, rows: &str, ordered: bool, limit: u32, off
 /// A LIKE pattern matching `value` literally, with `!` as the escape character. `!` rather than backslash
 /// because MySQL reads backslashes in string literals differently depending on `sql_mode`.
 fn like_pattern(d: Dialect, value: &str, prefix: bool, suffix: bool) -> String {
-    // `ClickHouse` has no ESCAPE clause: a backslash is its fixed escape character.
-    let esc = if d == Dialect::Click { '\\' } else { '!' };
+    // `ClickHouse` and BigQuery have no ESCAPE clause: a backslash is their fixed escape character.
+    let esc = if matches!(d, Dialect::Click | Dialect::Bq) { '\\' } else { '!' };
     let mut escaped = String::with_capacity(value.len());
     for c in value.chars() {
         if matches!(c, '%' | '_') || c == esc {
@@ -148,6 +148,8 @@ impl Conn {
             Dialect::Mssql => format!("cast({c} as nvarchar(max))"),
             Dialect::Click => format!("toString({c})"),
             Dialect::Ora => format!("to_char({c})"),
+            // %t writes any type as text, arrays and structs included.
+            Dialect::Bq => format!("format('%t', {c})"),
         }
     }
 
@@ -157,7 +159,15 @@ impl Conn {
 
     /// One filter on one column. `as_text` compares the column's text form, for "any column" filters where
     /// a value typed for one column would be invalid for another's type.
-    fn compare(&self, column: &str, as_text: bool, f: &Filter, params: &mut Values<'_>) -> Result<String> {
+    /// `data_type` is the column's, which BigQuery needs to convert the value to.
+    fn compare(
+        &self,
+        column: &str,
+        as_text: bool,
+        data_type: Option<&str>,
+        f: &Filter,
+        params: &mut Values<'_>,
+    ) -> Result<String> {
         let typed = self.ident(column);
         let text = self.text_expr(column);
         let e = if as_text { &text } else { &typed };
@@ -170,32 +180,38 @@ impl Conn {
             Values::Shown => self.dialect().literal(&v),
         };
         let d = self.dialect();
+        // BigQuery compares a column only with a value of its own type; the value is bound as text.
+        let ty = data_type.filter(|_| d == Dialect::Bq && !as_text);
+        let mut value = |v: String, typed: bool| match ty.filter(|_| typed) {
+            Some(t) => crate::driver::bigquery::from_text(&bind(v), t),
+            None => Ok(bind(v)),
+        };
         let pattern = |prefix, suffix| like_pattern(d, &f.value, prefix, suffix);
-        let escape = if d == Dialect::Click { "" } else { " escape '!'" };
+        let escape = if matches!(d, Dialect::Click | Dialect::Bq) { "" } else { " escape '!'" };
         Ok(match f.op {
-            Op::Eq => format!("{e} = {}", bind(f.value.clone())),
-            Op::Ne => format!("{e} <> {}", bind(f.value.clone())),
-            Op::Lt => format!("{e} < {}", bind(f.value.clone())),
-            Op::Le => format!("{e} <= {}", bind(f.value.clone())),
-            Op::Gt => format!("{e} > {}", bind(f.value.clone())),
-            Op::Ge => format!("{e} >= {}", bind(f.value.clone())),
-            Op::Contains => format!("{text} {like} {}{escape}", bind(pattern(true, true))),
-            Op::NotContains => format!("{text} not {like} {}{escape}", bind(pattern(true, true))),
-            Op::StartsWith => format!("{text} {like} {}{escape}", bind(pattern(false, true))),
-            Op::EndsWith => format!("{text} {like} {}{escape}", bind(pattern(true, false))),
+            Op::Eq => format!("{e} = {}", value(f.value.clone(), true)?),
+            Op::Ne => format!("{e} <> {}", value(f.value.clone(), true)?),
+            Op::Lt => format!("{e} < {}", value(f.value.clone(), true)?),
+            Op::Le => format!("{e} <= {}", value(f.value.clone(), true)?),
+            Op::Gt => format!("{e} > {}", value(f.value.clone(), true)?),
+            Op::Ge => format!("{e} >= {}", value(f.value.clone(), true)?),
+            Op::Contains => format!("{text} {like} {}{escape}", value(pattern(true, true), false)?),
+            Op::NotContains => format!("{text} not {like} {}{escape}", value(pattern(true, true), false)?),
+            Op::StartsWith => format!("{text} {like} {}{escape}", value(pattern(false, true), false)?),
+            Op::EndsWith => format!("{text} {like} {}{escape}", value(pattern(true, false), false)?),
             Op::In | Op::NotIn => {
                 let items: Vec<String> =
                     f.value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(String::from).collect();
                 if items.is_empty() {
                     return Err(Error::Invalid("IN needs at least one value, separated by commas"));
                 }
-                let list: Vec<String> = items.into_iter().map(&mut bind).collect();
+                let list = items.into_iter().map(|v| value(v, true)).collect::<Result<Vec<_>>>()?;
                 let not = if f.op == Op::NotIn { "not " } else { "" };
                 format!("{e} {not}in ({})", list.join(", "))
             }
             Op::Between | Op::NotBetween => {
                 let not = if f.op == Op::NotBetween { "not " } else { "" };
-                format!("{e} {not}between {} and {}", bind(f.value.clone()), bind(f.value2.clone()))
+                format!("{e} {not}between {} and {}", value(f.value.clone(), true)?, value(f.value2.clone(), true)?)
             }
             Op::IsNull => format!("{typed} is null"),
             Op::NotNull => format!("{typed} is not null"),
@@ -205,7 +221,7 @@ impl Conn {
         })
     }
 
-    fn condition(&self, f: &Filter, columns: &[String], params: &mut Values<'_>) -> Result<String> {
+    fn condition(&self, f: &Filter, columns: &[Column], params: &mut Values<'_>) -> Result<String> {
         if f.op == Op::Raw {
             if f.value.trim().is_empty() {
                 return Err(Error::Invalid("a raw SQL filter needs a condition"));
@@ -214,14 +230,16 @@ impl Conn {
             // anything typed in the SQL editor.
             return Ok(format!("({})", f.value));
         }
-        match &f.column {
-            Some(c) if columns.contains(c) => self.compare(c, false, f, params),
-            Some(_) => Err(Error::Invalid("a filter names a column the table doesn't have")),
-            None => {
-                let parts = columns.iter().map(|c| self.compare(c, true, f, params)).collect::<Result<Vec<_>>>()?;
-                Ok(format!("({})", parts.join(" or ")))
-            }
+        if let Some(c) = &f.column {
+            let col = columns
+                .iter()
+                .find(|col| &col.name == c)
+                .ok_or(Error::Invalid("a filter names a column the table doesn't have"))?;
+            return self.compare(c, false, Some(&col.data_type), f, params);
         }
+        // Any column: each compared as text.
+        let parts = columns.iter().map(|c| self.compare(&c.name, true, None, f, params)).collect::<Result<Vec<_>>>()?;
+        Ok(format!("({})", parts.join(" or ")))
     }
 
     /// The table's columns, and the ` where …` and ` order by …` of a browse request; values go into `params`.
@@ -231,7 +249,8 @@ impl Conn {
         if columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
         }
-        let conditions = req.filters.iter().map(|f| self.condition(f, &columns, params)).collect::<Result<Vec<_>>>()?;
+        let conditions =
+            req.filters.iter().map(|f| self.condition(f, &table_columns, params)).collect::<Result<Vec<_>>>()?;
         let filter = if conditions.is_empty() {
             String::new()
         } else {
@@ -297,7 +316,7 @@ impl Conn {
             Dialect::Lite => "rowid",
             Dialect::Ora => "rowidtochar(rowid)",
             // DuckDB's rowid moves when rows are updated, so it can't name a row to edit later.
-            Dialect::My | Dialect::Duck | Dialect::Mssql | Dialect::Click => return None,
+            Dialect::My | Dialect::Duck | Dialect::Mssql | Dialect::Click | Dialect::Bq => return None,
         };
         self.fetch_with(&format!("select {expr} from {from} where 1 = 0"), &[]).await.ok().map(|_| expr)
     }

@@ -2,4 +2,4 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 # Product names, not identifiers, in doc comments.
-doc-valid-idents = ["TableMinus", "OpenAI", "QuickJS", ".."]
+doc-valid-idents = ["TableMinus", "OpenAI", "QuickJS", "BigQuery", ".."]

@@ -371,6 +371,9 @@ fn dump_command(
         Engine::Oracle => {
             return Err(Error::Invalid("Oracle is backed up with Data Pump (expdp) or RMAN, outside the app"));
         }
+        Engine::Bigquery => {
+            return Err(Error::Invalid("BigQuery tables are copied with snapshots or EXPORT DATA, in a SQL tab"));
+        }
         Engine::Dynamodb => {
             return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
         }
@@ -418,6 +421,9 @@ fn restore_command(
         Engine::Cassandra => return Err(Error::Invalid("Cassandra is backed up with nodetool snapshot")),
         Engine::Oracle => {
             return Err(Error::Invalid("Oracle is backed up with Data Pump (expdp) or RMAN, outside the app"));
+        }
+        Engine::Bigquery => {
+            return Err(Error::Invalid("BigQuery tables are copied with snapshots or EXPORT DATA, in a SQL tab"));
         }
         Engine::Dynamodb => {
             return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));

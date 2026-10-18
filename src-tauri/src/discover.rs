@@ -253,6 +253,7 @@ fn label(kind: Engine, flavor: Option<Flavor>) -> &'static str {
         (Engine::Elasticsearch, _) => "Elasticsearch",
         (Engine::Cassandra, _) => "Cassandra",
         (Engine::Oracle, _) => "Oracle",
+        (Engine::Bigquery, _) => "BigQuery",
         (Engine::Sqlite, _) => "SQLite",
         (Engine::Duckdb, _) => "DuckDB",
         (Engine::Mssql, _) => "SQL Server",
@@ -402,6 +403,7 @@ fn local_port(c: &Saved) -> Option<u16> {
         Engine::Elasticsearch => Some(9200),
         Engine::Cassandra => Some(9042),
         Engine::Oracle => Some(1521),
+        Engine::Bigquery => Some(9050), // the emulator
         Engine::Mssql => Some(1433),
         Engine::Clickhouse => Some(8123),
         Engine::Libsql => Some(8080),

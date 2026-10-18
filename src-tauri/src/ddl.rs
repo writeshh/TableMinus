@@ -32,6 +32,13 @@ pub enum Rule {
 
 /// A new foreign key's actions. Oracle has no ON UPDATE, and its ON DELETE is CASCADE or SET NULL or left out.
 fn actions(d: Dialect, on_update: Rule, on_delete: Rule) -> Result<String> {
+    // BigQuery's keys aren't enforced, so they have no actions.
+    if d == Dialect::Bq {
+        if on_update != Rule::NoAction || on_delete != Rule::NoAction {
+            return Err(Error::Invalid("BigQuery's foreign keys aren't enforced, so they have no actions"));
+        }
+        return Ok(" NOT ENFORCED".into());
+    }
     if d != Dialect::Ora {
         return Ok(format!(" ON UPDATE {} ON DELETE {}", on_update.sql(), on_delete.sql()));
     }
@@ -88,6 +95,7 @@ impl IndexMethod {
             (Dialect::Ora, _) => {
                 Err(Error::Invalid("Oracle index types (bitmap, function-based) are made in a SQL tab"))
             }
+            (Dialect::Bq, _) => Err(Error::Invalid(BQ_INDEXES)),
         }
     }
 }
@@ -290,6 +298,9 @@ pub struct DbOptions {
 
 fn create_database_sql(d: Dialect, name: &str, encoding: Option<&str>, collation: Option<&str>) -> Result<String> {
     let name = d.ident(not_blank(name, "the database needs a name")?);
+    if d == Dialect::Bq {
+        return Ok(format!("CREATE SCHEMA {name}")); // a dataset, in the project's default location
+    }
     let clause = |keyword: &str, v: Option<&str>| v.map(|v| format!(" {keyword} {}", d.literal(v))).unwrap_or_default();
     let options = if d == Dialect::Click {
         String::new() // a ClickHouse database has no encoding or collation
@@ -334,6 +345,27 @@ fn column_sql(d: Dialect, c: &ColumnDef, kept: Option<&ColumnInfo>) -> Result<St
         let comment =
             blank_is_none(c.comment.as_ref()).map(|v| format!(" COMMENT {}", d.literal(v))).unwrap_or_default();
         return Ok(format!("{name} {data_type}{default}{comment}"));
+    }
+    if d == Dialect::Bq {
+        if c.auto_increment {
+            return Err(Error::Invalid(
+                "BigQuery has no auto-increment; a default such as GENERATE_UUID() can stand in",
+            ));
+        }
+        let mut s = format!("{} {data_type}", d.ident(not_blank(&c.name, "every column needs a name")?));
+        if let Some(default) = blank_is_none(c.default.as_ref()) {
+            s.push_str(" DEFAULT ");
+            s.push_str(default);
+        }
+        if !c.nullable {
+            s.push_str(" NOT NULL");
+        }
+        if let Some(comment) = blank_is_none(c.comment.as_ref()) {
+            s.push_str(" OPTIONS (description = ");
+            s.push_str(&d.literal(comment));
+            s.push(')');
+        }
+        return Ok(s);
     }
     if d == Dialect::Ora {
         // Oracle's order: type, then DEFAULT or identity, then the NOT NULL constraint.
@@ -400,6 +432,9 @@ fn index_sql(
     if d == Dialect::Click {
         return Err(Error::Invalid(CLICK_CONSTRAINTS));
     }
+    if d == Dialect::Bq {
+        return Err(Error::Invalid(BQ_INDEXES));
+    }
     let unique = if unique { "UNIQUE " } else { "" };
     let name = d.ident(not_blank(name, "every index needs a name")?);
     let cols = idents(d, columns);
@@ -411,6 +446,9 @@ fn index_sql(
 }
 
 fn check_sql(d: Dialect, name: &str, expression: &str) -> Result<String> {
+    if d == Dialect::Bq {
+        return Err(Error::Invalid("BigQuery has no check constraints"));
+    }
     let expression = not_blank(expression, "a check needs an expression")?;
     let named = if name.trim().is_empty() { String::new() } else { format!("CONSTRAINT {} ", d.ident(name.trim())) };
     Ok(format!("{named}CHECK ({expression})"))
@@ -436,6 +474,7 @@ fn trigger_sql(
         _ => None,
     };
     Ok(match d {
+        Dialect::Bq => return Err(Error::Invalid("BigQuery has no triggers")),
         Dialect::Pg => {
             let events = events.iter().map(|e| e.sql()).collect::<Vec<_>>().join(" OR ");
             format!("CREATE TRIGGER {name} {timing} {events} ON {t} FOR EACH ROW EXECUTE FUNCTION {body}")
@@ -493,6 +532,12 @@ fn primary_key_sql(d: Dialect, t: &str, current: &Structure, columns: &[String])
             let parts: Vec<String> = old.map(|_| "DROP PRIMARY KEY".to_string()).into_iter().chain(add).collect();
             if parts.is_empty() { vec![] } else { vec![format!("ALTER TABLE {t} {}", parts.join(", "))] }
         }
+        // BigQuery's keys aren't enforced, and say so.
+        Dialect::Bq => old
+            .map(|_| format!("ALTER TABLE {t} DROP PRIMARY KEY"))
+            .into_iter()
+            .chain(add.map(|a| format!("ALTER TABLE {t} {a} NOT ENFORCED")))
+            .collect(),
         Dialect::Pg | Dialect::Mssql | Dialect::Ora => old
             .map(|i| format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(&i.name)))
             .into_iter()
@@ -602,7 +647,7 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 ));
             }
             Change::DropForeignKey { name } => out.push(match d {
-                Dialect::Pg | Dialect::Mssql | Dialect::Ora => {
+                Dialect::Pg | Dialect::Mssql | Dialect::Ora | Dialect::Bq => {
                     format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name))
                 }
                 Dialect::My => format!("ALTER TABLE {t} DROP FOREIGN KEY {}", d.ident(name)),
@@ -653,6 +698,9 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
 const CLICK_CONSTRAINTS: &str =
     "ClickHouse constraints, keys and skipping indexes are changed in a SQL tab; this editor doesn't list them all";
 
+/// BigQuery's only indexes are search and vector indexes, made in a SQL tab.
+const BQ_INDEXES: &str = "BigQuery has no ordinary indexes; CREATE SEARCH INDEX in a SQL tab";
+
 /// `DuckDB` takes constraints only in CREATE TABLE.
 const DUCK_CONSTRAINTS: &str =
     "DuckDB can't add or drop foreign keys and checks on an existing table; create a new table with them instead";
@@ -674,6 +722,8 @@ fn drop_index_sql(d: Dialect, table: &str, t: &str, current: &Structure, name: &
         Dialect::My | Dialect::Mssql => format!("DROP INDEX {} ON {t}", d.ident(name)),
         Dialect::Click => format!("ALTER TABLE {t} DROP INDEX {}", d.ident(name)),
         Dialect::Lite | Dialect::Ora => format!("DROP INDEX {}", d.ident(name)),
+        Dialect::Bq if index.is_some_and(|i| i.primary) => format!("ALTER TABLE {t} DROP PRIMARY KEY"),
+        Dialect::Bq => format!("DROP SEARCH INDEX {} ON {t}", d.ident(name)),
     }
 }
 
@@ -690,12 +740,18 @@ fn comment_sql(d: Dialect, t: &str, comment: Option<&str>) -> Result<String> {
             return Err(Error::Invalid("SQL Server comments are extended properties; set them in a SQL tab"));
         }
         Dialect::Click => format!("ALTER TABLE {t} MODIFY COMMENT {}", d.literal(comment.unwrap_or_default())),
+        Dialect::Bq => {
+            format!(
+                "ALTER TABLE {t} SET OPTIONS (description = {})",
+                comment.map_or_else(|| "NULL".into(), |c| d.literal(c))
+            )
+        }
     })
 }
 
 fn rename_sql(d: Dialect, t: &str, to: &str) -> String {
     // Postgres renames within the schema, so the new name is never schema-qualified.
-    let to = if matches!(d, Dialect::Pg | Dialect::Duck | Dialect::Mssql | Dialect::Ora) {
+    let to = if matches!(d, Dialect::Pg | Dialect::Duck | Dialect::Mssql | Dialect::Ora | Dialect::Bq) {
         to.rsplit_once('.').map_or(to, |(_, name)| name)
     } else {
         to
@@ -778,6 +834,32 @@ fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) ->
     let col = d.ident(name);
     let mut out = Vec::new();
     match d {
+        // One ALTER COLUMN per change; BigQuery can loosen NOT NULL but not add it.
+        Dialect::Bq => {
+            if reincremented {
+                return Err(Error::Invalid("BigQuery has no auto-increment columns"));
+            }
+            if renulled && !want.nullable {
+                return Err(Error::Invalid("BigQuery can't make an existing column NOT NULL"));
+            }
+            if renamed {
+                out.push(format!("ALTER TABLE {t} RENAME COLUMN {} TO {col}", d.ident(&cur.name)));
+            }
+            let alter = |what: String| format!("ALTER TABLE {t} ALTER COLUMN {col} {what}");
+            if retyped {
+                out.push(alter(format!("SET DATA TYPE {data_type}")));
+            }
+            if renulled {
+                out.push(alter("DROP NOT NULL".into()));
+            }
+            if redefaulted {
+                out.push(alter(default.map_or_else(|| "DROP DEFAULT".into(), |x| format!("SET DEFAULT {x}"))));
+            }
+            if recommented {
+                let is = comment.map_or_else(|| "NULL".into(), |c| d.literal(c));
+                out.push(alter(format!("SET OPTIONS (description = {is})")));
+            }
+        }
         Dialect::My => {
             if renamed || retyped || renulled || redefaulted || recommented || reincremented {
                 if cur.generated {
@@ -1172,6 +1254,10 @@ impl Conn {
 
     pub(crate) async fn is_view(&mut self, table: &str) -> Result<bool> {
         let rows = match self.dialect() {
+            Dialect::Bq => {
+                let kind = self.describe(table).await?["type"].as_str().map(String::from);
+                return Ok(matches!(kind.as_deref(), Some("VIEW" | "MATERIALIZED_VIEW")));
+            }
             Dialect::Pg => {
                 let (schema, name) = table.split_once('.').unwrap_or(("public", table));
                 self.fetch_with(
@@ -1250,7 +1336,7 @@ impl Conn {
                     )],
                     Dialect::My => without_fk_checks(*ignore_fk, format!("TRUNCATE TABLE {t}")),
                     Dialect::Duck => vec![format!("DELETE FROM {t}")],
-                    Dialect::Mssql | Dialect::Click => vec![format!("TRUNCATE TABLE {t}")],
+                    Dialect::Mssql | Dialect::Click | Dialect::Bq => vec![format!("TRUNCATE TABLE {t}")],
                     // An identity starts again only when asked for, as Oracle allows from 12c.
                     Dialect::Ora => vec![format!("TRUNCATE TABLE {t}{}", if *cascade { " CASCADE" } else { "" })],
                     Dialect::Lite => {
@@ -1272,7 +1358,9 @@ impl Conn {
                     Dialect::My => without_fk_checks(*ignore_fk, format!("DROP {kind} {t}")),
                     // Foreign keys aren't enforced on this app's SQLite connections, so nothing to ignore.
                     Dialect::Ora if kind == "TABLE" && *cascade => vec![format!("DROP TABLE {t} CASCADE CONSTRAINTS")],
-                    Dialect::Lite | Dialect::Mssql | Dialect::Click | Dialect::Ora => vec![format!("DROP {kind} {t}")],
+                    Dialect::Lite | Dialect::Mssql | Dialect::Click | Dialect::Ora | Dialect::Bq => {
+                        vec![format!("DROP {kind} {t}")]
+                    }
                 }
             }
             TableOp::ResetAutoIncrement { table } => self.reset_auto_increment_sql(table).await?,
@@ -1313,10 +1401,14 @@ impl Conn {
                     vec![format!("RENAME DATABASE {} TO {}", d.ident(name), d.ident(to))]
                 } else if d == Dialect::Mssql {
                     vec![format!("ALTER DATABASE {} MODIFY NAME = {}", d.ident(name), d.ident(to))]
+                } else if d == Dialect::Bq {
+                    return Err(Error::Invalid("BigQuery datasets can't be renamed; copy the tables to a new one"));
                 } else {
                     self.mysql_rename_database_sql(name, to).await?
                 }
             }
+            // CASCADE: like DROP DATABASE elsewhere, it takes the dataset's tables with it.
+            DbOp::Drop { name } if d == Dialect::Bq => vec![format!("DROP SCHEMA {} CASCADE", d.ident(name))],
             DbOp::Drop { name } => vec![format!("DROP DATABASE {}", d.ident(name))],
         })
     }
@@ -1401,6 +1493,7 @@ impl Conn {
                 return Err(Error::Invalid("a SQLite or DuckDB file is its only database"));
             }
             Dialect::Ora => return Err(Error::Invalid("Oracle schemas are users: CREATE USER in a SQL tab")),
+            Dialect::Bq => return Err(Error::Invalid("BigQuery datasets have no encodings or collations to choose")),
         };
         let encodings = self.fetch_with(encodings, &[]).await?.into_iter().filter_map(|mut r| r.swap_remove(0));
         let collations = self.fetch_with(collations, &[]).await?.into_iter().filter_map(|mut r| {
@@ -1430,6 +1523,9 @@ impl Conn {
             Dialect::Mssql => format!("SELECT * INTO {new} FROM {from}{}", if data { "" } else { " WHERE 1 = 0" }),
             // The same engine, keys and columns.
             Dialect::Click => format!("CREATE TABLE {new} AS {from}"),
+            // The columns and rows, without keys, descriptions or partitioning (CREATE TABLE … COPY keeps them, but
+            // not every BigQuery takes it: the emulator doesn't).
+            Dialect::Bq => format!("CREATE TABLE {new} AS SELECT * FROM {from}{}", if data { "" } else { " LIMIT 0" }),
             // Columns and NOT NULL, not keys or indexes; the rows in the same statement.
             Dialect::Ora => {
                 format!("CREATE TABLE {new} AS SELECT * FROM {from}{}", if data { "" } else { " WHERE 1 = 0" })
@@ -1447,7 +1543,7 @@ impl Conn {
             }
         };
         let mut out = vec![create];
-        if data && !matches!(d, Dialect::Mssql | Dialect::Ora) {
+        if data && !matches!(d, Dialect::Mssql | Dialect::Ora | Dialect::Bq) {
             out.push(format!("INSERT INTO {new} SELECT * FROM {from}"));
         }
         Ok(out)
@@ -1482,6 +1578,7 @@ impl Conn {
             Dialect::My => vec![format!("ALTER TABLE {t} AUTO_INCREMENT = 1")],
             Dialect::Duck => return Err(Error::Invalid("DuckDB has no auto-increment columns")),
             Dialect::Click => return Err(Error::Invalid("ClickHouse has no auto-increment columns")),
+            Dialect::Bq => return Err(Error::Invalid("BigQuery has no auto-increment columns")),
             // START WITH LIMIT VALUE moves an identity past the largest value in the column.
             Dialect::Ora => {
                 let column = self
@@ -1524,10 +1621,21 @@ impl Conn {
     }
 
     /// The CREATE statement of a table or view, with its indexes and triggers where the engine keeps them apart.
+    #[expect(clippy::too_many_lines, reason = "one catalog query per engine")]
     pub async fn ddl(&mut self, table: &str) -> Result<String> {
         let first =
             |rows: Vec<Vec<Option<String>>>, i: usize| rows.into_iter().next().and_then(|mut r| r.get_mut(i)?.take());
         match self.dialect() {
+            // INFORMATION_SCHEMA writes it whole; where it has no `ddl` (the emulator), it's written from the table.
+            Dialect::Bq => {
+                match self
+                    .fetch_with("select ddl from INFORMATION_SCHEMA.TABLES where table_name = @p1", &[Some(table)])
+                    .await
+                {
+                    Ok(rows) => first(rows, 0).ok_or(Error::Invalid("no such table")),
+                    Err(_) => Ok(crate::driver::bigquery::create_sql(table, &self.describe(table).await?)),
+                }
+            }
             Dialect::My => {
                 let sql = format!("show create table {}", self.table_ident(table));
                 let rows = self.query(&sql).await?.rows;
@@ -1651,8 +1759,10 @@ impl Conn {
 
     /// [`Conn::run_ddl`] without the foreign key pragmas around it.
     async fn run_in_transaction(&mut self, statements: &[String]) -> Result<()> {
-        // MySQL and Oracle commit each DDL statement themselves; ClickHouse has no transactions.
-        if !matches!(self.dialect(), Dialect::My | Dialect::Click | Dialect::Ora) && statements.len() > 1 {
+        // MySQL and Oracle commit each DDL statement themselves; ClickHouse has no transactions, and BigQuery's take
+        // no DDL.
+        if !matches!(self.dialect(), Dialect::My | Dialect::Click | Dialect::Ora | Dialect::Bq) && statements.len() > 1
+        {
             self.query("begin transaction").await?;
             for s in statements {
                 if let Err(e) = self.query(s).await {

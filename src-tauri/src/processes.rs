@@ -65,6 +65,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Engine::Elasticsearch => return Err(Error::Invalid("Elasticsearch tasks show in the console: GET /_tasks")),
         Engine::Cassandra => return Err(Error::Invalid("Cassandra has no process list here (nodetool tpstats)")),
         Engine::Oracle => ORACLE,
+        Engine::Bigquery => return Err(Error::Invalid("BigQuery jobs show in INFORMATION_SCHEMA.JOBS, in a SQL tab")),
     };
     let r = live.conn.query(sql).await;
     if r.as_ref().is_err_and(|e| live.conn.lost_by(e)) {
@@ -137,6 +138,7 @@ pub async fn kill_process(
         Engine::Dynamodb => return Err(Error::Invalid("DynamoDB has no process list")),
         Engine::Elasticsearch => return Err(Error::Invalid("Elasticsearch tasks show in the console: GET /_tasks")),
         Engine::Cassandra => return Err(Error::Invalid("Cassandra has no process list here (nodetool tpstats)")),
+        Engine::Bigquery => return Err(Error::Invalid("BigQuery jobs show in INFORMATION_SCHEMA.JOBS, in a SQL tab")),
         Engine::Oracle => {
             if !connection {
                 return Err(Error::Invalid("Oracle can only end a whole session here; use Kill"));

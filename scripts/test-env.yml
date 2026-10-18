@@ -78,6 +78,13 @@ services:
     networks: [front, back]
     healthcheck: { test: ["CMD", "cqlsh", "-e", "describe keyspaces"], interval: 5s, retries: 60 }
 
+  # Reachable directly over HTTP: 127.0.0.1:9050, project tm, dataset app, no key.
+  bigquery:
+    image: ghcr.io/goccy/bigquery-emulator:latest
+    command: ["--project=tm", "--dataset=app"]
+    ports: ["127.0.0.1:9050:9050"]
+    networks: [front, back]
+
   # Reachable directly: 127.0.0.1:1521, service FREEPDB1, user tm, password testpass (system has the same password).
   # The app needs Oracle Instant Client to connect.
   oracle:

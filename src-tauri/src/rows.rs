@@ -156,6 +156,29 @@ impl<'a> From<&'a Value> for Param<'a> {
     }
 }
 
+/// Adds `value` for `column` to `parts`. BigQuery takes a text parameter only where the column is text, so there the
+/// SQL converts it to the column's type (`types`).
+fn push_value<'a>(
+    d: Dialect,
+    parts: &mut Vec<Part<'a>>,
+    types: &HashMap<String, String>,
+    column: &str,
+    value: Param<'a>,
+) -> Result<()> {
+    match (d, value, types.get(column)) {
+        (Dialect::Bq, Param::Text(_), Some(t)) => {
+            // The conversion wraps a marker, which splits it into the SQL before and after the value.
+            let converted = crate::driver::bigquery::from_text("\u{0}", t)?;
+            let (before, after) = converted.split_once('\u{0}').unwrap_or_default();
+            parts.push(Part::Sql(before.into()));
+            parts.push(Part::Param(value));
+            parts.push(Part::Sql(after.into()));
+        }
+        _ => parts.push(Part::Param(value)),
+    }
+    Ok(())
+}
+
 /// How a planned UPDATE or DELETE finds its row.
 struct Target<'a> {
     key: &'a [(String, String)],
@@ -206,7 +229,7 @@ fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: 
         let column = match d {
             Dialect::Pg => "ctid",
             Dialect::Lite | Dialect::Ora => "rowid",
-            Dialect::My | Dialect::Duck | Dialect::Mssql | Dialect::Click => {
+            Dialect::My | Dialect::Duck | Dialect::Mssql | Dialect::Click | Dialect::Bq => {
                 return Err(Error::Invalid("this engine has no row identity"));
             }
         };
@@ -220,7 +243,7 @@ fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: 
     for (i, (column, value)) in key.iter().enumerate() {
         let joint = if i == 0 { " where " } else { " and " };
         parts.push(Part::Sql(format!("{joint}{} = ", d.ident(column))));
-        parts.push(Part::Param(Param::Text(Some(value))));
+        push_value(d, parts, types, column, Param::Text(Some(value)))?;
     }
     Ok(())
 }
@@ -253,7 +276,7 @@ fn plan<'a>(
         for (i, (column, value)) in u.set.iter().enumerate() {
             let comma = if i == 0 { "" } else { ", " };
             parts.push(Part::Sql(format!("{comma}{} = ", d.ident(column))));
-            parts.push(Part::Param(value.into()));
+            push_value(d, &mut parts, types, column, value.into())?;
         }
         find(d, &Target { key: &u.key, id: u.id.as_deref(), original: &u.original }, types, &mut parts)?;
         plan.push(Statement { parts, one_row: true, original: &u.original });
@@ -265,11 +288,11 @@ fn plan<'a>(
         } else {
             let columns: Vec<String> = values.iter().map(|(c, _)| d.ident(c)).collect();
             let mut parts = vec![Part::Sql(format!("insert into {t} ({}) values (", columns.join(", ")))];
-            for (i, (_, value)) in values.iter().enumerate() {
+            for (i, (column, value)) in values.iter().enumerate() {
                 if i > 0 {
                     parts.push(Part::Sql(", ".into()));
                 }
-                parts.push(Part::Param(value.into()));
+                push_value(d, &mut parts, types, column, value.into())?;
             }
             parts.push(Part::Sql(")".into()));
             parts
@@ -328,6 +351,7 @@ impl Statement<'_> {
                     let decode = match d {
                         Dialect::Pg => format!("decode({mark}, 'hex')"),
                         Dialect::Ora => format!("to_blob(hextoraw({mark}))"),
+                        Dialect::Bq => format!("from_hex({mark})"),
                         _ => format!("unhex({mark})"),
                     };
                     (decode, Some(Cow::Borrowed(hex.as_str())))
@@ -454,9 +478,10 @@ impl Conn {
         Ok(plan(d, table, changes, &types)?.iter().map(|s| s.show(d)).collect())
     }
 
-    /// The table's column types when some row is matched on its values; nothing is asked otherwise.
+    /// The table's column types when some row is matched on its values, or on BigQuery (which converts every
+    /// value to its column's type); nothing is asked otherwise.
     async fn match_types(&mut self, table: &str, changes: &Changes) -> Result<HashMap<String, String>> {
-        if !changes.matches_values() {
+        if !changes.matches_values() && self.dialect() != Dialect::Bq {
             return Ok(HashMap::new());
         }
         Ok(self.columns(table).await?.into_iter().map(|c| (c.name, c.data_type)).collect())
@@ -480,10 +505,17 @@ impl Conn {
             // A BLOB's start; RAW columns already show as hex. SQL's RAW holds 2,000 bytes.
             Dialect::Ora => format!("select rawtohex(dbms_lob.substr({c}, 2000, 1)), dbms_lob.getlength({c})"),
             Dialect::Lite => format!("select hex(substr({c}, 1, {HEX_PREVIEW})), length(cast({c} as blob))"),
+            Dialect::Bq => format!("select to_hex(substr({c}, 1, {HEX_PREVIEW})), length({c})"),
         };
         let mut parts = vec![Part::Sql(format!("{select} from {}", d.table_ident(table)))];
+        // BigQuery converts the key's values to their columns' types.
+        let types = if d == Dialect::Bq {
+            self.columns(table).await?.into_iter().map(|c| (c.name, c.data_type)).collect()
+        } else {
+            HashMap::new()
+        };
         // Binary cells can't be matched on, so a row without key or identity never gets here (find refuses).
-        find(d, &Target { key: &row.key, id: row.id.as_deref(), original: &[] }, &HashMap::new(), &mut parts)?;
+        find(d, &Target { key: &row.key, id: row.id.as_deref(), original: &[] }, &types, &mut parts)?;
         let statement = Statement { parts, one_row: true, original: &[] };
         let files = HashMap::new();
         let (sql, params) = statement.bind(d, &files)?;
@@ -526,7 +558,7 @@ impl Conn {
                     }
                 }
             }
-            Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click | Dialect::Ora => {}
+            Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click | Dialect::Ora | Dialect::Bq => {}
         }
         Ok(out)
     }

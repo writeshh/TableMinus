@@ -3,8 +3,8 @@
 use crate::db::Engine;
 use sqlparser::ast::{Expr, ObjectName, ObjectNamePart, Select, Statement, TableFactor, Visit, Visitor};
 use sqlparser::dialect::{
-    ClickHouseDialect, Dialect, DuckDbDialect, MsSqlDialect, MySqlDialect, OracleDialect, PostgreSqlDialect,
-    SQLiteDialect,
+    BigQueryDialect, ClickHouseDialect, Dialect, DuckDbDialect, MsSqlDialect, MySqlDialect, OracleDialect,
+    PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 use std::ops::ControlFlow;
@@ -81,6 +81,7 @@ pub fn is_read_only(engine: Engine, sql: &str) -> bool {
         Engine::Mssql => &MsSqlDialect {},
         Engine::Clickhouse => &ClickHouseDialect {},
         Engine::Oracle => &OracleDialect {},
+        Engine::Bigquery => &BigQueryDialect {},
         // Redis commands aren't SQL; redis.rs has its own list.
         Engine::Redis | Engine::Mongodb | Engine::Dynamodb | Engine::Elasticsearch | Engine::Cassandra => return false,
     };

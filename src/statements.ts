@@ -2,7 +2,7 @@
 // outside strings, quoted names, comments and Postgres dollar quotes; and finding the one table a plain SELECT
 // reads. Pure, so it's tested on its own (statements.test.ts).
 
-export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "oracle";
+export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "oracle" | "bigquery";
 export type Statement = { from: number; to: number; text: string };
 
 /** The engine whose SQL a connection kind speaks: libSQL and Cloudflare D1 are SQLite over HTTP. */
@@ -10,7 +10,8 @@ export const sqlKind = (kind: string) => (kind === "libsql" || kind === "d1" ? "
 
 /** The stretches of `sql` that are code: everything except strings, quoted names, comments and dollar quotes. */
 export function codeRanges(sql: string, dialect: Dialect): [number, number][] {
-  const mysql = dialect === "mysql" || dialect === "mariadb" || dialect === "clickhouse"; // # comments, backslash escapes
+  // # comments, backslash escapes
+  const mysql = dialect === "mysql" || dialect === "mariadb" || dialect === "clickhouse" || dialect === "bigquery";
   const ranges: [number, number][] = [];
   let start = 0;
   let i = 0;

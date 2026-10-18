@@ -72,6 +72,7 @@ impl Conn {
     /// out; functions are kept, so an extension's (unaccent's, say) show as they do in other clients. `system` adds Postgres's catalog schemas.
     pub async fn items(&mut self, system: bool) -> Result<Vec<Item>> {
         let sql = match self.dialect() {
+            Dialect::Bq => return self.bq_items().await,
             Dialect::Pg => {
                 let user = pg_user_schemas(system);
                 let not_extension = "not exists (select 1 from pg_depend d where d.objid = {oid} and d.deptype = 'e')";
@@ -125,6 +126,28 @@ impl Conn {
                 .into(),
         };
         let rows = self.fetch_with(&sql, &[]).await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|mut r| {
+                let name = r.pop().flatten()?;
+                Some(Item { kind: ItemKind::parse(&r.pop().flatten()?)?, name })
+            })
+            .collect())
+    }
+
+    /// BigQuery's views and materialized views in the default dataset, then its routines. The emulator has no
+    /// ROUTINES view, so the routines are left out where it fails.
+    async fn bq_items(&mut self) -> Result<Vec<Item>> {
+        let mut rows = self
+            .fetch_with(
+                "select case table_type when 'VIEW' then 'view' else 'matview' end, table_name \
+                 from INFORMATION_SCHEMA.TABLES where table_type in ('VIEW', 'MATERIALIZED VIEW') order by 1, 2",
+                &[],
+            )
+            .await?;
+        let routines = "select lower(routine_type), routine_name from INFORMATION_SCHEMA.ROUTINES \
+             where routine_type in ('FUNCTION', 'PROCEDURE') order by 1, 2";
+        rows.extend(self.fetch_with(routines, &[]).await.unwrap_or_default());
         Ok(rows
             .into_iter()
             .filter_map(|mut r| {
@@ -239,6 +262,17 @@ impl Conn {
                 let row = r.into_iter().next().ok_or(Error::Invalid("no such table"))?;
                 let rows = row.first().cloned().flatten().and_then(|n| n.parse::<u64>().ok());
                 Ok(Overview { rows, estimated: true, bytes: None, created: row.get(1).cloned().flatten() })
+            }
+            // The table resource's counts; a view has none.
+            Dialect::Bq => {
+                let t = self.describe(table).await?;
+                let num =
+                    |key: &str| t.get(key).and_then(serde_json::Value::as_str).and_then(|n| n.parse::<u64>().ok());
+                let created = num("creationTime")
+                    .and_then(|ms| i64::try_from(ms).ok())
+                    .and_then(chrono::DateTime::from_timestamp_millis)
+                    .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+                Ok(Overview { rows: num("numRows"), estimated: false, bytes: num("numBytes"), created })
             }
             Dialect::Lite | Dialect::Duck => {
                 let count = format!("select count(*) from {}", self.table_ident(table));

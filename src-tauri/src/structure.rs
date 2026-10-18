@@ -269,6 +269,7 @@ impl Conn {
             Dialect::Mssql => self.mssql_structure(table).await?,
             Dialect::Click => self.click_structure(table).await?,
             Dialect::Ora => self.ora_structure(table).await?,
+            Dialect::Bq => crate::driver::bigquery::structure(&self.describe(table).await?),
         };
         if s.columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));

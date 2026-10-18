@@ -115,6 +115,8 @@ const ENGINES: Engine[] = [
     defaults: { host: "127.0.0.1", port: "8123", user: "default", database: "" } },
   { id: "oracle", kind: "oracle", label: "Oracle", mono: "Or", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "1521", user: "system", database: "FREEPDB1" } },
+  { id: "bigquery", kind: "bigquery", label: "BigQuery", mono: "Bq", color: "var(--blue)",
+    defaults: { host: "bigquery.googleapis.com", port: "", user: "", database: "" } },
   { id: "libsql", kind: "libsql", label: "libSQL / Turso", mono: "Ls", color: "var(--ok)",
     defaults: { host: "127.0.0.1", port: "", user: "", database: "" } },
   { id: "d1", kind: "d1", label: "Cloudflare D1", mono: "D1", color: "var(--orange)",
@@ -143,6 +145,14 @@ const FORM_SHAPES: Record<string, { hide: string[]; label?: Record<string, strin
     hide: [],
     label: { user: "Access key ID", password: "Secret access key", database: "Region" },
     placeholder: { host: "dynamodb.us-east-1.amazonaws.com, or localhost for DynamoDB Local", port: "443, or 8000 for DynamoDB Local" },
+  },
+  bigquery: {
+    hide: ["user"],
+    label: { password: "Service account key", database: "Project ID" },
+    placeholder: {
+      host: "bigquery.googleapis.com, or 127.0.0.1 for the emulator", port: "443, or 9050 for the emulator",
+      password: "The key's JSON, pasted whole (none for the emulator)", database: "my-project",
+    },
   },
   oracle: {
     hide: [],
@@ -604,7 +614,8 @@ $("swatches").replaceChildren(...[["", "None"], ...Object.keys(COLORS).map((k) =
 /** The password field says where a typed password goes. */
 function showPasswordMode() {
   const mode = field("password_mode").value;
-  field("password").placeholder = mode === "ask" ? "Asked when connecting (used here for Test)" : mode === "no_password" ? "None" : editing ? "Unchanged (in keychain)" : "None";
+  const fresh = FORM_SHAPES[editingKind]?.placeholder?.password ?? "None"; // what to type, before anything is stored
+  field("password").placeholder = mode === "ask" ? "Asked when connecting (used here for Test)" : mode === "no_password" ? "None" : editing ? "Unchanged (in keychain)" : fresh;
 }
 field("password_mode").addEventListener("change", showPasswordMode);
 /** The keychain-stored secret's input: the login password, or for SQLite the SQLCipher passphrase. */
@@ -689,6 +700,9 @@ function formToSaved(): Saved {
     } else if (editingKind === "dynamodb") {
       if (!user) throw "Enter the access key ID.";
       url = `dynamodb://${encodeURIComponent(user)}@${host}${port ? ":" + port : ""}?region=${encodeURIComponent(db || "us-east-1")}`;
+    } else if (editingKind === "bigquery") {
+      if (!db) throw "Enter the Google Cloud project ID.";
+      url = `bigquery://${host}${port ? ":" + port : ""}/${encodeURIComponent(db)}`; // its first dataset is current
     } else if (editingKind === "libsql") {
       if (!host) throw "Enter the server's host, such as my-db-org.turso.io.";
       url = `libsql://${host}${port ? ":" + port : ""}`; // no port: 443 with SSL, 8080 without
@@ -3600,6 +3614,7 @@ $("run-all").onclick = runAll;
 $("explain").onclick = async () => {
   const sql = editor.current();
   if (!sql.trim() || !active) return;
+  if (active.kind === "bigquery") return status("BigQuery shows a query's plan in the console's Execution details, not through SQL.", "error");
   // SQL Server shows a plan through a session setting, in a batch of its own on each side of the statement; Oracle
   // stores it in its plan table, which DBMS_XPLAN prints.
   const explain = active.kind === "mssql" ? `SET SHOWPLAN_TEXT ON\nGO\n${sql}\nGO\nSET SHOWPLAN_TEXT OFF`
@@ -3756,8 +3771,8 @@ const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
 // SQL Server and ClickHouse back up with their own statements.
 // libSQL and D1 have their own (turso db shell .dump, wrangler d1 export).
-const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "oracle", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "oracle", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
+const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "oracle", "bigquery", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "oracle", "bigquery", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
 /** Engines with sessions to list and stop. */
 const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
 addCommands([

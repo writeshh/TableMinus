@@ -7008,6 +7008,7 @@ dependencies = [
  "postgres-native-tls",
  "postgres-protocol",
  "proptest",
+ "ring",
  "rmcp",
  "robius-authentication",
  "rquickjs",

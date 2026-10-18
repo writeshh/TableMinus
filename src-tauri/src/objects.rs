@@ -97,6 +97,7 @@ pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, cre
     let def = statement(definition, "the definition is empty")?;
     match d {
         Dialect::Pg => Ok(vec![def]),
+        Dialect::Bq => Ok(vec![or_replace(&def)]),
         Dialect::My if create => Ok(vec![def]),
         Dialect::My => Ok(vec![format!("DROP {what} IF EXISTS {}", d.ident(name)), def]),
         // ClickHouse keeps the plain CREATE FUNCTION it was made with; saving replaces it.
@@ -128,12 +129,13 @@ pub fn routine_template(d: Dialect, kind: ItemKind, name: &str) -> Result<String
             format!("CREATE PROCEDURE {t}()\n LANGUAGE plpgsql\nAS $procedure$\nBEGIN\n  NULL;\nEND\n$procedure$")
         }
         (Dialect::My, ItemKind::Function) => format!("CREATE FUNCTION {t}()\nRETURNS int\nDETERMINISTIC\nRETURN 1"),
-        (Dialect::My, ItemKind::Procedure) => format!("CREATE PROCEDURE {t}()\nBEGIN\n  SELECT 1;\nEND"),
+        (Dialect::My | Dialect::Bq, ItemKind::Procedure) => format!("CREATE PROCEDURE {t}()\nBEGIN\n  SELECT 1;\nEND"),
         (Dialect::Click, ItemKind::Function) => format!("CREATE FUNCTION {t} AS (x) -> x + 1"),
         (Dialect::Ora, ItemKind::Function) => {
             format!("CREATE FUNCTION {t}\nRETURN NUMBER IS\nBEGIN\n  RETURN 1;\nEND;")
         }
         (Dialect::Ora, ItemKind::Procedure) => format!("CREATE PROCEDURE {t} IS\nBEGIN\n  NULL;\nEND;"),
+        (Dialect::Bq, ItemKind::Function) => format!("CREATE FUNCTION {t}(x INT64) AS (x + 1)"),
         (Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click, _) => return Err(NO_ROUTINES),
         _ => return Err(Error::Invalid("not a function or procedure")),
     })
@@ -260,6 +262,11 @@ impl Conn {
     /// A view's SELECT (Postgres's materialized views too), without a trailing semicolon.
     pub async fn view_body(&mut self, view: &str) -> Result<String> {
         let body = match self.dialect() {
+            // The table resource holds a view's query as written.
+            Dialect::Bq => {
+                let query = self.describe(view).await?["view"]["query"].as_str().map(String::from);
+                vec![vec![query]]
+            }
             Dialect::Pg => {
                 let (schema, name) = split(view);
                 self.fetch_with(
@@ -364,6 +371,13 @@ impl Conn {
                 )
                 .await?
             }
+            Dialect::Bq => {
+                self.fetch_with(
+                    "select ddl from INFORMATION_SCHEMA.ROUTINES where routine_name = @p1 and routine_type = @p2",
+                    &[Some(name), Some(what)],
+                )
+                .await?
+            }
             Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
         };
         let pg = self.dialect() == Dialect::Pg;
@@ -439,7 +453,7 @@ impl Conn {
                             .map(|mut r| format!("DROP {what} {t}({}){cascade}", r.pop().flatten().unwrap_or_default()))
                             .collect()
                     }
-                    Dialect::My | Dialect::Ora => vec![format!("DROP {what} {t}")],
+                    Dialect::My | Dialect::Ora | Dialect::Bq => vec![format!("DROP {what} {t}")],
                     Dialect::Click if kind == ItemKind::Function => vec![format!("DROP FUNCTION {t}")],
                     Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
                 }

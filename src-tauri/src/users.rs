@@ -412,6 +412,7 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
         }
         Engine::Cassandra => Err(Error::Invalid("Cassandra roles are managed in the console: LIST ROLES, CREATE ROLE")),
         Engine::Oracle => Err(Error::Invalid("Oracle users are managed in a SQL tab: CREATE USER, GRANT")),
+        Engine::Bigquery => Err(Error::Invalid("BigQuery access is managed in Google Cloud IAM")),
     }
 }
 
@@ -738,6 +739,7 @@ pub async fn user_privileges(
         }
         Engine::Cassandra => Err(Error::Invalid("Cassandra roles are managed in the console: LIST ROLES, CREATE ROLE")),
         Engine::Oracle => Err(Error::Invalid("Oracle users are managed in a SQL tab: CREATE USER, GRANT")),
+        Engine::Bigquery => Err(Error::Invalid("BigQuery access is managed in Google Cloud IAM")),
     };
     Ok(grants(live.check(r)?))
 }

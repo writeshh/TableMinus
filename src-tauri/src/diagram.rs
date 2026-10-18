@@ -165,6 +165,13 @@ const ORA: &str = "select 'c', c.table_name, c.column_name, c.data_type, \
        where rc.owner = k.r_owner and rc.constraint_name = k.r_constraint_name), null, '0' \
      from all_constraints k where k.constraint_type = 'R' and k.owner = sys_context('USERENV', 'CURRENT_SCHEMA')";
 
+/// BigQuery: the default dataset's tables and views. Its keys aren't in every `INFORMATION_SCHEMA` (the emulator
+/// has no `TABLE_CONSTRAINTS`), so the diagram has no links.
+const BQ: &str = "select 'c', c.table_name, c.column_name, c.data_type, 'false', \
+     case when c.is_nullable = 'YES' then 'true' else 'false' end, \
+     case when t.table_type = 'BASE TABLE' then 'false' else 'true' end, cast(c.ordinal_position as string) \
+     from INFORMATION_SCHEMA.COLUMNS c join INFORMATION_SCHEMA.TABLES t on t.table_name = c.table_name";
+
 fn list(cell: Option<String>) -> Vec<String> {
     cell.map(|c| c.split(SEP).map(String::from).collect()).unwrap_or_default()
 }
@@ -213,6 +220,7 @@ impl Conn {
             Dialect::Mssql => self.fetch_with(MSSQL, &[]).await?,
             Dialect::Click => self.fetch_with(CLICK, &[]).await?,
             Dialect::Ora => self.fetch_with(ORA, &[]).await?,
+            Dialect::Bq => self.fetch_with(BQ, &[]).await?,
         };
         Ok(assemble(rows))
     }

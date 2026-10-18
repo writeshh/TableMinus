@@ -7,14 +7,14 @@ import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/lang
 import { MSSQL, MariaSQL, MySQL, PLSQL, PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql";
 import { highlightCode, tags as t } from "@lezer/highlight";
 import { sqlKind, statementAt, splitStatements, type Dialect, type Statement } from "./statements";
-import { clickhouse, formatDialect, mariadb, mysql, plsql, postgresql, sqlite, transactsql } from "sql-formatter";
+import { bigquery, clickhouse, formatDialect, mariadb, mysql, plsql, postgresql, sqlite, transactsql } from "sql-formatter";
 import { byLine, transformText, type Transform } from "./transforms";
 
 // DuckDB's SQL follows PostgreSQL's, so it borrows its highlighting and formatting.
-const FORMAT_DIALECTS = { postgres: postgresql, mysql, mariadb, sqlite, duckdb: postgresql, mssql: transactsql, clickhouse, oracle: plsql } as const;
+const FORMAT_DIALECTS = { postgres: postgresql, mysql, mariadb, sqlite, duckdb: postgresql, mssql: transactsql, clickhouse, oracle: plsql, bigquery } as const;
 export type FormatStyle = "standard" | "tabularLeft" | "tabularRight";
 
-const DIALECTS = { postgres: PostgreSQL, mysql: MySQL, mariadb: MariaSQL, sqlite: SQLite, duckdb: PostgreSQL, mssql: MSSQL, clickhouse: StandardSQL, oracle: PLSQL } as const;
+const DIALECTS = { postgres: PostgreSQL, mysql: MySQL, mariadb: MariaSQL, sqlite: SQLite, duckdb: PostgreSQL, mssql: MSSQL, clickhouse: StandardSQL, oracle: PLSQL, bigquery: StandardSQL } as const;
 
 // Colours are CSS variables (see styles.css) so they follow the app's light/dark theme.
 const highlight = HighlightStyle.define([
