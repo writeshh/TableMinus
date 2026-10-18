@@ -1146,8 +1146,9 @@ $("return-workspace").onclick = () => ws && showWorkspace(ws);
 
 // ---------- Split panes: the focused pane is live, the others show a still picture of their tab ----------
 
-// ponytail: an unfocused pane is a copy of its last frame (a query finishing there shows once it has focus);
-// render each pane live once the grid and editor can draw into more than one place.
+// ponytail: an unfocused pane is a copy of a frame, drawn again when its tab changes (redrawPane), not a live view:
+// scrolling or clicking in it focuses it first. Render each pane live once the grid and editor can draw into more
+// than one place.
 const live = () => $("live");
 
 let nextShot = 1;
@@ -1196,6 +1197,43 @@ function focusPane(p: Pane) {
   layoutPanes();
   renderMain();
   renderTables();
+}
+
+/** Draws an unfocused pane's tab again (a query finished there, a table loaded): rendered live for a moment, copied
+ *  into its still picture, then the focused pane drawn back, all before the browser paints. */
+function redrawPane(p: Pane) {
+  if (!ws || p === pane || !ws.panes.includes(p)) return;
+  stashEditor();
+  const back = { pane, selection, out: $("out").scrollTop, editor: editor.view.scrollDOM.scrollTop };
+  Object.assign(pane, { tabs, currentId });
+  pane = p;
+  ({ tabs, currentId } = p);
+  shownId = 0;
+  filtersDrawnFor = 0;
+  renderMain();
+  p.shot = snapshot(p);
+  pane = back.pane;
+  ({ tabs, currentId } = pane);
+  shownId = 0;
+  filtersDrawnFor = 0;
+  selection = back.selection;
+  renderMain();
+  $("out").scrollTop = back.out;
+  editor.view.scrollDOM.scrollTop = back.editor;
+  layoutPanes();
+}
+
+/** Panes waiting to be drawn again, once per frame however many results arrive. */
+const redrawing = new Set<Pane>();
+
+/** After `tab` changed while the user may have moved on: drawn again where it shows, live or in another pane's
+ *  still picture. `draw` is how the live pane draws it (all of it by default). */
+function redraw(tab: Tab, draw: () => void = renderMain) {
+  if (tab.id === currentId) return draw();
+  const p = ws?.panes.find((x) => x !== pane && x.currentId === tab.id);
+  if (!p || redrawing.has(p)) return;
+  redrawing.add(p);
+  requestAnimationFrame(() => (redrawing.delete(p), redrawPane(p)));
 }
 
 function cyclePane(step: number) {
@@ -1995,7 +2033,7 @@ async function loadTable(tab: TableTab) {
   const name = sessionKey(); // the tab's workspace, even if another takes the screen meanwhile
   tab.loading = true;
   tab.error = undefined;
-  if (tab.id === currentId) renderMain();
+  redraw(tab);
   try {
     // Structure view, the filter bar's columns, and the primary key for editing and the default sort.
     const columns = await loadColumns(tab.table);
@@ -2019,7 +2057,7 @@ async function loadTable(tab: TableTab) {
     tab.error = String(e);
   }
   tab.loading = false;
-  if (tab.id === currentId) renderMain(); // the user may have moved to another tab meanwhile
+  redraw(tab); // the user may have moved to another tab, or pane, meanwhile
 }
 
 // ---------- Filters and sorting (table tabs) ----------
@@ -2268,7 +2306,7 @@ async function execute(statements: string[]) {
   const [conn, key] = [active, sessionKey()];
   const say = (text: string, kind: StatusKind) => {
     tab.status = [text, kind];
-    if (tab.id === currentId) status(text, kind);
+    redraw(tab, () => status(text, kind));
   };
   const res: Results = { tabs: (tab.out?.tabs ?? []).filter((r) => r.pinned), messages: [], shown: MESSAGES };
   tab.out = res;
@@ -2291,7 +2329,7 @@ async function execute(statements: string[]) {
         if (table) {
           r.edit = { id: r.id, table, result, staged: new Staged() };
           // The key columns decide whether it's editable; draw again once they're known.
-          loadColumns(table).then(() => tab.id === currentId && showResults(tab), () => {});
+          loadColumns(table).then(() => redraw(tab, () => showResults(tab)), () => {});
         }
         res.tabs.push(r);
         shown = r.id; // the last new result shows, as before there were tabs
@@ -2331,11 +2369,11 @@ async function execute(statements: string[]) {
         break;
       }
     } finally {
-      if (tab.id === currentId) showResults(tab); // results appear as they come
+      redraw(tab, () => showResults(tab)); // results appear as they come
     }
   }
   res.shown = failed ? MESSAGES : shown || MESSAGES;
-  if (tab.id === currentId) showResults(tab);
+  redraw(tab, () => showResults(tab));
   const ms = Math.round(performance.now() - t0);
   const only = res.tabs.find((r) => r.id === shown)?.result;
   if (stopped) say(stopped, failed ? "error" : "");
