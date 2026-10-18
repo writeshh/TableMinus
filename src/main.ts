@@ -31,6 +31,7 @@ import { openScript } from "./scripts";
 import { initPlugins, pluginMenu } from "./plugins"; // also adds Settings › Plugins
 import { forgetRedis, initRedis, syncRedis } from "./redis";
 import { forgetMongo, initMongo, syncMongo } from "./mongo";
+import { forgetDynamo, initDynamo, syncDynamo } from "./dynamo";
 import { checkForUpdates, showReleaseNotes } from "./updates";
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
@@ -116,6 +117,8 @@ const ENGINES: Engine[] = [
     defaults: { host: "", port: "", user: "", database: "" } },
   { id: "mongodb", kind: "mongodb", label: "MongoDB", mono: "Mg", color: "var(--ok)",
     defaults: { host: "127.0.0.1", port: "27017", user: "", database: "" } },
+  { id: "dynamodb", kind: "dynamodb", label: "Amazon DynamoDB", mono: "Dy", color: "var(--blue)",
+    defaults: { host: "dynamodb.us-east-1.amazonaws.com", port: "", user: "", database: "us-east-1" } },
   { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
@@ -127,6 +130,11 @@ const FORM_SHAPES: Record<string, { hide: string[]; label?: Record<string, strin
     hide: ["user", "database"],
     label: { password: "Auth token" },
     placeholder: { host: "127.0.0.1, or my-db-org.turso.io", port: "443, or 8080 for a local server without SSL" },
+  },
+  dynamodb: {
+    hide: [],
+    label: { user: "Access key ID", password: "Secret access key", database: "Region" },
+    placeholder: { host: "dynamodb.us-east-1.amazonaws.com, or localhost for DynamoDB Local", port: "443, or 8000 for DynamoDB Local" },
   },
   d1: {
     hide: ["host", "port", "ssl", "via", "password_mode"],
@@ -554,7 +562,7 @@ function openEditor(id: string, existing?: Saved, fresh = false, password = "") 
       set("host", u.hostname);
       set("port", u.port);
       set("user", decodeURIComponent(kind === "d1" ? u.hostname : u.username));
-      set("database", decodeURIComponent(u.pathname.slice(1)));
+      set("database", kind === "dynamodb" ? u.searchParams.get("region") ?? "" : decodeURIComponent(u.pathname.slice(1)));
 
     }
   }
@@ -655,6 +663,9 @@ function formToSaved(): Saved {
       // A host list (h1:27017,h2:27017) or a seed list name goes as typed; one host takes the port.
       const hosts = srv || /[,:]/.test(host) ? host : `${host}:${port}`;
       url = `mongodb${srv ? "+srv" : ""}://${user ? encodeURIComponent(user) + "@" : ""}${hosts}/${db ? encodeURIComponent(db) : ""}${query ? "?" + query : ""}`;
+    } else if (editingKind === "dynamodb") {
+      if (!user) throw "Enter the access key ID.";
+      url = `dynamodb://${encodeURIComponent(user)}@${host}${port ? ":" + port : ""}?region=${encodeURIComponent(db || "us-east-1")}`;
     } else if (editingKind === "libsql") {
       if (!host) throw "Enter the server's host, such as my-db-org.turso.io.";
       url = `libsql://${host}${port ? ":" + port : ""}`; // no port: 443 with SSL, 8080 without
@@ -777,8 +788,7 @@ async function reconnect() {
     columnsCache.clear();
     renderTables();
     loadSchema();
-    syncRedis(true);
-    syncMongo(true);
+    syncViews(true);
     status(`Reconnected · ${info.server}`, "done");
   } catch (e) {
     status(String(e), "error");
@@ -810,7 +820,7 @@ async function showConnectionInfo() {
   Object.assign(pop.style, { top: `${r.bottom + 6}px`, left: `${Math.max(8, r.right - 340)}px` });
   pop.hidden = false;
   try {
-    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>(isRedis() ? "redis_connection_info" : isMongo() ? "mongo_connection_info" : "connection_info", { name: sessionKey() });
+    const i = await call<{ server: string; driver: string; cipher: string | null; ssh: string | null }>(ownView() ? connectCommand(active.kind).replace("_connect", "_connection_info") : "connection_info", { name: sessionKey() });
     list.replaceChildren(
       ...row("Connection", active.name),
       ...row("Server", i.server),
@@ -886,11 +896,18 @@ async function openWorkspace(c: Saved, database?: string) {
 }
 
 /** The command that opens a session: Redis and MongoDB aren't SQL, and have their own (redis.rs, mongo/mod.rs). */
-const connectCommand = (kind: string) => (kind === "redis" ? "redis_connect" : kind === "mongodb" ? "mongo_connect" : "connect");
+const OWN_CONNECT: Record<string, string> = { redis: "redis_connect", mongodb: "mongo_connect", dynamodb: "dynamo_connect" };
+const connectCommand = (kind: string) => OWN_CONNECT[kind] ?? "connect";
 const isRedis = () => active?.kind === "redis";
 const isMongo = () => active?.kind === "mongodb";
-/** A workspace with a view of its own in place of tables and SQL tabs. */
-const ownView = () => isRedis() || isMongo();
+/** The views that stand in for tables and SQL tabs: each shows itself when the workspace is of its engine. */
+function syncViews(fresh = false) {
+  syncRedis(fresh);
+  syncMongo(fresh);
+  syncDynamo(fresh);
+}
+/** A workspace with a view of its own in place of tables and SQL tabs (redis.ts, docview.ts). */
+const ownView = () => !!active && active.kind in OWN_CONNECT;
 /** A database as the header shows it: Redis numbers its databases. */
 const dbLabel = (database: string) => (isRedis() ? `db${database}` : database);
 
@@ -917,8 +934,7 @@ function applyInfo(i: Info) {
   for (const k of kept) tabs.push({ id: nextId++, kind: "sql", title: k.title, sql: k.sql, path: k.path });
   if (kept.length) select(tabs[0].id);
   renderTables();
-  syncRedis(true);
-  syncMongo(true);
+  syncViews(true);
 }
 
 /** The workspace header, the database button and the sidebar filter for the active connection. */
@@ -982,8 +998,7 @@ function showWorkspace(w: Workspace) {
   renderHistory();
   renderFavorites();
   renderMain();
-  syncRedis();
-  syncMongo();
+  syncViews();
 }
 
 function cycleWorkspace(step: number) {
@@ -3132,12 +3147,14 @@ function showDiagram(table?: string) {
 }
 initDiagram({ call, conn: hostConn, openTable: (t) => openTable(t), menu: contextMenu });
 initRedis({ conn: hostConn, call, confirm: confirmDialog, menu: contextMenu });
-initMongo({
+const docHost = {
   conn: hostConn, call, confirm: confirmDialog, menu: contextMenu,
   collections: () => tables,
   reload: reloadItems,
   limit: () => settings.sqlLimit || 50_000,
-});
+};
+initMongo(docHost);
+initDynamo(docHost);
 initPlugins({
   conn: hostConn,
   insert(sql) {
@@ -3282,6 +3299,7 @@ async function closeWorkspace(next?: Workspace | null) {
     invoke("disconnect", { name: ws.key }).catch(() => {});
     forgetRedis(ws.key);
     forgetMongo(ws.key);
+    forgetDynamo(ws.key);
     // An asked-for password serves every tab of its connection, so it goes with the last one.
     const name = ws.conn.name;
     if (!workspaces.some((w) => w !== ws && w.conn.name === name)) launcher.forgetAskedPassword(name);
@@ -3665,10 +3683,10 @@ const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
 // SQL Server and ClickHouse back up with their own statements.
 // libSQL and D1 have their own (turso db shell .dump, wrangler d1 export).
-const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1", "mongodb"].includes(c.kind);
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1", "mongodb"].includes(c.kind);
+const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb"].includes(c.kind);
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb"].includes(c.kind);
 /** Engines with sessions to list and stop. */
-const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb"].includes(c.kind);
+const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb", "dynamodb"].includes(c.kind);
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },

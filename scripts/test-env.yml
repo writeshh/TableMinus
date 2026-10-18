@@ -70,6 +70,13 @@ services:
     networks: [front, back]
     healthcheck: { test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 })"], interval: 3s, retries: 40 }
 
+  # Reachable directly over HTTP: 127.0.0.1:8001, any access key and secret (DynamoDB Local doesn't check them).
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
+    ports: ["127.0.0.1:8001:8000"]
+    networks: [front, back]
+
   # Reachable directly over HTTP: 127.0.0.1:8080, no auth token (Hrana over HTTP, as Turso serves it).
   libsql:
     image: ghcr.io/tursodatabase/libsql-server:latest

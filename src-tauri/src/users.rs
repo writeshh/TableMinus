@@ -406,6 +406,7 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
         }
         Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
         Engine::Mongodb => Err(Error::Invalid("MongoDB users are managed in the shell: db.createUser(…)")),
+        Engine::Dynamodb => Err(Error::Invalid("DynamoDB access is managed in AWS IAM")),
     }
 }
 
@@ -726,6 +727,7 @@ pub async fn user_privileges(
         }
         Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
         Engine::Mongodb => Err(Error::Invalid("MongoDB users are managed in the shell: db.createUser(…)")),
+        Engine::Dynamodb => Err(Error::Invalid("DynamoDB access is managed in AWS IAM")),
     };
     Ok(grants(live.check(r)?))
 }

@@ -364,6 +364,9 @@ fn dump_command(
         }
         Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
         Engine::Mongodb => return Err(Error::Invalid("MongoDB is backed up with mongodump, outside the app")),
+        Engine::Dynamodb => {
+            return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
+        }
     }
     password_env(&mut cmd, saved.kind, password);
     Ok(cmd)
@@ -402,6 +405,9 @@ fn restore_command(
         }
         Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
         Engine::Mongodb => return Err(Error::Invalid("MongoDB is backed up with mongodump, outside the app")),
+        Engine::Dynamodb => {
+            return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
+        }
     }
     password_env(&mut cmd, saved.kind, password);
     Ok(cmd)

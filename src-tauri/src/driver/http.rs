@@ -52,7 +52,14 @@ impl Endpoint {
         Error::Server { engine: self.engine, message: message.into() }
     }
 
-    /// POSTs `body` (JSON) to `path` and returns the status and up to `max` bytes of the answer.
+    /// The `Host` header's value, which a signature covers.
+    pub fn host_header(&self) -> String {
+        let default_port = if self.tls.is_some() { 443 } else { 80 };
+        if self.port == default_port { self.host.clone() } else { format!("{}:{}", self.host, self.port) }
+    }
+
+    /// POSTs `body` (JSON unless `headers` name another content type) to `path` and returns the status and up to
+    /// `max` bytes of the answer.
     pub async fn post(
         &self,
         path: &str,
@@ -60,13 +67,13 @@ impl Endpoint {
         body: Vec<u8>,
         max: usize,
     ) -> Result<(u16, Bytes)> {
-        let default_port = if self.tls.is_some() { 443 } else { 80 };
-        let host = if self.port == default_port { self.host.clone() } else { format!("{}:{}", self.host, self.port) };
         let mut request = Request::post(path)
-            .header(header::HOST, host)
-            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::HOST, self.host_header())
             .header(header::ACCEPT, "application/json")
             .header(header::CONNECTION, "close");
+        if !headers.iter().any(|(name, _)| name == header::CONTENT_TYPE) {
+            request = request.header(header::CONTENT_TYPE, "application/json");
+        }
         for (name, value) in headers {
             request = request.header(name, value);
         }

@@ -11,6 +11,7 @@ mod ddl;
 mod diagram;
 mod discover;
 mod driver;
+mod dynamo;
 mod error;
 mod export;
 mod import;
@@ -325,6 +326,9 @@ async fn test_connection(
     if conn.kind == Engine::Mongodb {
         return mongo::test(conn, password, ssh_secret).await;
     }
+    if conn.kind == Engine::Dynamodb {
+        return dynamo::test(conn, password, ssh_secret).await;
+    }
     let (mut db, _tunnel) = open_db(&conn, password.as_ref(), ssh_secret).await?;
     let n = db.tables(conn.options.system_schemas).await?.len();
     Ok(format!("Connected · {n} tables"))
@@ -408,10 +412,12 @@ async fn disconnect(
     open: State<'_, Open>,
     redis: State<'_, redis::Sessions>,
     mongo: State<'_, mongo::Sessions>,
+    dynamo: State<'_, dynamo::Sessions>,
     name: String,
 ) -> Result<()> {
     redis.remove(&name).await;
     mongo.remove(&name).await;
+    dynamo.remove(&name).await;
     open.remove(&name).await;
     Ok(())
 }
@@ -555,6 +561,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::D1 => "Cloudflare D1 HTTP API",
                 Engine::Redis => "TableMinus RESP2 client",
                 Engine::Mongodb => "mongodb (official Rust driver)",
+                Engine::Dynamodb => "DynamoDB JSON API",
             },
             cipher: live.conn.tls_cipher().await?,
             ssh: live.saved.ssh.as_ref().map(|s| s.host.clone()),
@@ -803,11 +810,13 @@ async fn run_ddl(
 /// Changes a connection's safe mode level (the toolbar lock). Leaving a Safe level wants the password, or the lock
 /// would be a way around it.
 #[tauri::command]
+#[expect(clippy::too_many_arguments, reason = "a Tauri command's arguments are its states and the request's fields")]
 async fn set_safety(
     app: AppHandle,
     open: State<'_, Open>,
     redis: State<'_, redis::Sessions>,
     mongo: State<'_, mongo::Sessions>,
+    dynamo: State<'_, dynamo::Sessions>,
     name: String,
     safety: safety::Safety,
     unlock: Option<safety::Unlock>,
@@ -827,6 +836,7 @@ async fn set_safety(
     }
     redis.set_safety(&name, safety).await;
     mongo.set_safety(&name, safety).await;
+    dynamo.set_safety(&name, safety).await;
     Ok(())
 }
 
@@ -903,6 +913,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(acp::Agents::default())
         .manage(redis::Sessions::default())
         .manage(mongo::Sessions::default())
+        .manage(dynamo::Sessions::default())
         .manage(updater::Pending::default())
         .manage(launcher::Opened::default())
         .setup(|app| {
@@ -987,6 +998,12 @@ pub fn run() -> tauri::Result<()> {
             mongo::mongo_run,
             mongo::mongo_edit,
             mongo::mongo_connection_info,
+            dynamo::dynamo_connect,
+            dynamo::dynamo_describe,
+            dynamo::dynamo_page,
+            dynamo::dynamo_run,
+            dynamo::dynamo_edit,
+            dynamo::dynamo_connection_info,
             updater::update_check,
             updater::update_install,
             passcode::passcode_set,

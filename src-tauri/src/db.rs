@@ -38,6 +38,8 @@ pub enum Engine {
     Redis,
     /// Not SQL: opened through `mongo_connect` (mongo/mod.rs), as Redis is.
     Mongodb,
+    /// Not SQL: opened through `dynamo_connect` (dynamo/mod.rs).
+    Dynamodb,
 }
 
 /// Per-connection options beyond host, user and TLS. Engine-specific ones are ignored by other engines.
@@ -221,6 +223,7 @@ impl Conn {
                 Engine::Mssql => Box::new(Box::pin(SqlServer::open(url, password, tls, options, tunnel_port)).await?),
                 Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
                 Engine::Mongodb => return Err(Error::Invalid("MongoDB isn't SQL; it opens through mongo_connect")),
+                Engine::Dynamodb => return Err(Error::Invalid("DynamoDB isn't SQL; it opens through dynamo_connect")),
             })
         };
         let driver = tokio::time::timeout(CONNECT_TIMEOUT, open)

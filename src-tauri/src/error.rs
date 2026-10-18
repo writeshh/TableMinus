@@ -89,6 +89,9 @@ pub enum Error {
     /// `MongoDB`'s own error, or a script or value the shell couldn't read.
     #[error("MongoDB: {0}")]
     Mongo(String),
+    /// `DynamoDB`'s own error (its type and message), or a value typed in `PartiQL` that couldn't be read.
+    #[error("DynamoDB: {0}")]
+    Dynamo(String),
     /// Checking for, downloading or installing an update failed.
     #[error("update: {0}")]
     Update(String),
