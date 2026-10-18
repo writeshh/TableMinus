@@ -31,6 +31,11 @@ dialog.metrics-board[open] { display: flex; flex-direction: column; }
 .widget-table th, .widget-table td { padding: 3px 10px; border-bottom: 1px solid var(--grid-line); white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 .widget-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .widget-table td.null { color: var(--grid-null); }
+.widget-table.pickable tbody tr { cursor: pointer; }
+.widget-table.pickable tbody tr:hover { background: var(--hover); }
+.widget-table.pickable tbody tr[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+.widget-table.pickable tbody tr[aria-selected="true"] td.null { color: inherit; opacity: 0.7; }
+.board-targets { display: flex; flex-direction: column; gap: 2px; max-height: 140px; overflow: auto; }
 .score { flex: 1; display: flex; flex-direction: column; justify-content: center; min-width: 0; }
 .score strong { font-size: 36px; font-weight: 600; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .score span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

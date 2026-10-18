@@ -31,7 +31,7 @@ function ident(name: string, d: Dialect): string {
 }
 
 /** A string literal. MySQL also treats backslash as an escape character by default, so it's doubled there. */
-function literal(v: string | null, d: Dialect): string {
+export function literal(v: string | null, d: Dialect): string {
   if (v === null) return "NULL";
   const s = v.replaceAll("'", "''");
   if (d === "mssql") return `N'${s}'`;

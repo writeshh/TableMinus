@@ -1,7 +1,8 @@
 // Metrics boards (Ref: `MetricsBoardWindow`, `Metrics*View`): dashboards of widgets on a grid. Tables, scoreboards
 // and charts show a query's rows; input fields and dropdowns set named query parameters (statements.ts) that the
-// queries use; buttons run a query and refresh the board; exporters and importers move data (importexport.ts); a
-// connection widget picks the open connection the board runs on. Boards are kept per connection in metrics.json
+// queries use, and so does a data table's selected row (`name.column`); buttons run a query and refresh the board or
+// the widgets they name; exporters and importers move data (importexport.ts); a connection widget picks the open
+// connection the board runs on. Boards are kept per connection in metrics.json
 // (locations.ts) and travel as files with a version.
 //
 // Queries go through run_query, so safe mode applies. A widget whose query may change data runs only from its own
@@ -16,6 +17,7 @@ import { fillParams, findParams, type Dialect, type ParamFormat } from "./statem
 import { chartPickers, drawChart } from "./charts";
 import { SLOTS, formatNumber, toNumber, type ChartKind, type ChartSpec } from "./chartdata";
 import { exportDialog, importFile, type Ctx as TransferCtx } from "./importexport";
+import { literal } from "./copy";
 import type { QueryResult } from "./results";
 import "./metrics.css";
 
@@ -30,8 +32,11 @@ export type Widget = {
   sql: string;
   /** Charts: the x column and the series. */
   chart?: { x: string; y: string[] };
-  /** Input fields and dropdowns: the parameter they set, and its value. A connection widget: the connection. */
+  /** Input fields and dropdowns: the parameter they set, and its value. A connection widget: the connection. Data
+   *  tables: the name their selected row's values go under, as `param.column`. */
   param?: string; value?: string;
+  /** Buttons: the widgets they refresh (ids); none or missing: the whole board. */
+  targets?: string[];
   /** Dropdowns: options besides the query's, one per line. */
   options?: string;
   /** Seconds between refreshes, 0 for never; missing: the board's rate. */
@@ -107,6 +112,7 @@ function readWidget(v: any): Widget | null {
     w.chart = { x: str(v.chart.x, 500), y: Array.isArray(v.chart.y) ? v.chart.y.slice(0, SLOTS).map((c: unknown) => str(c, 500)) : [] };
   }
   for (const f of ["param", "value", "options", "table"] as const) if (typeof v[f] === "string") w[f] = str(v[f]);
+  if (Array.isArray(v.targets)) w.targets = v.targets.slice(0, MAX_WIDGETS).map((t: unknown) => str(t, 64)).filter(Boolean);
   if (v.refresh !== undefined) w.refresh = int(v.refresh, 0, 86_400, 0);
   if (v.format === "csv" || v.format === "json" || v.format === "sql") w.format = v.format;
   return w;
@@ -135,7 +141,11 @@ const lastShown = new Map<string, string>();
 
 type Ran = { results: QueryResult[]; read_only: boolean };
 /** What a widget shows besides its settings; not kept. */
-type State = { result?: QueryResult; error?: string; note?: string; busy?: boolean; due: number; node?: HTMLElement };
+type State = {
+  result?: QueryResult; error?: string; note?: string; busy?: boolean; due: number; node?: HTMLElement;
+  /** A data table's selected row: its values by column, as SQL literals, and its place in `result`. */
+  picked?: { values: Record<string, string>; index: number };
+};
 
 const button = (text: string, title = "", className = "ghost") => el("button", { type: "button", textContent: text, title, className });
 const option = (value: string, text: string) => el("option", { value, textContent: text });
@@ -430,7 +440,7 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
       if (!s.error && !s.note) body.append(note("Loading…"));
       return;
     }
-    if (w.kind === "table") return body.append(table(r));
+    if (w.kind === "table") return body.append(table(r, w.param ? s.picked?.index : undefined, w.param ? (i) => pickRow(w, i) : undefined));
     if (w.kind === "score") return body.append(score(r));
     const host = el("div", { className: "widget-chart" });
     body.append(host);
@@ -451,8 +461,31 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
 
   // ---------- Parameters and running ----------
 
-  const params = () =>
-    Object.fromEntries(board.widgets.filter((w) => sets(w.kind) && w.param).map((w) => [w.param!, w.value ?? ""]));
+  const params = () => Object.fromEntries([
+    ...board.widgets.filter((w) => sets(w.kind) && w.param).map((w) => [w.param!, w.value ?? ""]),
+    ...board.widgets.filter((w) => w.kind === "table" && w.param).flatMap((w) =>
+      Object.entries(st(w).picked?.values ?? {}).map(([column, v]) => [`${w.param}.${column}`, v])),
+  ]);
+
+  /** Whether `x`'s query uses a parameter `w` sets: `w.param` itself, or for a data table `w.param.column`. */
+  const uses = (x: Widget, w: Widget) =>
+    findParams(x.sql, session.dialect, ctx.format).some((p) => p.name === w.param || (w.kind === "table" && p.name.startsWith(`${w.param}.`)));
+
+  /** A cell as a parameter value: numbers as they are, anything else a quoted literal. */
+  const asParam = (v: string | null) => (v !== null && /^-?\d+(\.\d+)?$/.test(v) ? v : literal(v, session.dialect));
+
+  const dependents = (w: Widget) => board.widgets.filter((x) => x !== w && shows(x.kind) && uses(x, w));
+
+  /** Selecting a data table's row: its values become `param.column` and the widgets using them load again. */
+  function pickRow(w: Widget, index: number) {
+    const s = st(w);
+    const r = s.result;
+    if (!r || index >= r.rows.length) return;
+    const values = Object.fromEntries(r.columns.map((c, i) => [c, asParam(r.rows[index][i])]));
+    s.picked = { values, index };
+    paint(w);
+    for (const x of dependents(w)) load(x);
+  }
 
   /** `sql` with the board's parameter values in it, or the names that have no value yet. */
   function fill(sql: string): string | { missing: string[] } {
@@ -465,9 +498,7 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
   function setParam(w: Widget, value: string) {
     w.value = value;
     save();
-    for (const x of board.widgets) {
-      if (x !== w && shows(x.kind) && findParams(x.sql, session.dialect, ctx.format).some((p) => p.name === w.param)) load(x);
-    }
+    for (const x of dependents(w)) load(x);
   }
 
   /** Runs `sql` for `w` on the board's connection. One that may change data runs only when `manual`, after asking,
@@ -514,6 +545,7 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
       if (results) {
         s.result = shown(results);
         s.error = "";
+        if (s.picked) s.picked.index = rowIndex(s.result, s.picked.values);
       }
     } catch (e) {
       s.error = String(e);
@@ -527,7 +559,12 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
     say(`Refreshed ${new Date().toLocaleTimeString()} · ${session.label}`);
   }
 
-  /** A button: its query, if it has one (asking first if it may change data), then every widget again. */
+  /** Where the selected row is after a reload: the row with the same values, or none (-1); the values stay. */
+  function rowIndex(r: QueryResult | undefined, values: Record<string, string>) {
+    return r?.rows.findIndex((row) => r.columns.every((c, i) => values[c] === asParam(row[i]))) ?? -1;
+  }
+
+  /** A button: its query, if it has one (asking first if it may change data), then its widgets, or every one. */
   async function press(w: Widget) {
     const sql = fill(w.sql);
     if (typeof sql !== "string") return say(`“${label(w)}” needs a value for ${sql.missing.join(", ")}.`, "error");
@@ -538,7 +575,9 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
         const r = results.at(-1);
         say(`“${label(w)}”: ${r?.columns.length ? `${formatNumber(r.rows.length)} rows` : `${formatNumber(r?.affected ?? 0)} rows affected`}.`, "done");
       }
-      loadAll();
+      const targets = board.widgets.filter((x) => w.targets?.includes(x.id));
+      if (targets.length) for (const x of targets) load(x);
+      else loadAll();
     } catch (e) {
       fail(e);
     }
@@ -573,7 +612,7 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
     const queryHint: Partial<Record<Kind, string>> = {
       score: "Shows the first row's first column, and its second column under it.",
       dropdown: "Optional: options from a query; its first column is the value, the second the label.",
-      button: "Optional: runs when pressed, then the board refreshes.",
+      button: "Optional: runs when pressed, then the widgets ticked below refresh (the whole board when none are).",
       exporter: "Its rows go to a file; the format is chosen when exporting.",
     };
     if (hasQuery(w.kind)) {
@@ -596,6 +635,16 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
       fields.push(row("Parameter", param),
         el("p", { className: "hint", textContent: `Queries use it as ${example(ctx.format, "name")}. Its value goes in as typed: put quotes around text, e.g. 'Ada'.` }));
     }
+    const rowParam = el("input", { value: w.kind === "table" ? w.param ?? "" : "", placeholder: "Optional, e.g. order", pattern: "[A-Za-z_]\\w*" });
+    if (w.kind === "table") {
+      fields.push(row("Selected row", rowParam),
+        el("p", { className: "hint", textContent: `Clicking a row sets a parameter for each column: ${example(ctx.format, "order.id")} is the row's id, quoted as needed. Widgets using them load again.` }));
+    }
+    const targetBoxes = board.widgets.filter((x) => x !== w && shows(x.kind)).map((x) => {
+      const box = el("input", { type: "checkbox", value: x.id, checked: !!w.targets?.includes(x.id) });
+      return el("label", { className: "check" }, box, ` ${label(x)}`);
+    });
+    if (w.kind === "button" && targetBoxes.length) fields.push(row("Refreshes", el("div", { className: "board-targets" }, ...targetBoxes)));
     if (w.kind === "dropdown") fields.push(row("Options", options));
     const refresh = el("select", {}, option("", "The board's rate"), ...RATES.map(([s, l]) => option(String(s), s ? `Every ${l}` : "Never")));
     refresh.value = w.refresh === undefined ? "" : String(w.refresh);
@@ -641,6 +690,17 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
       if (hasQuery(w.kind) && w.sql !== sql.value) (w.sql = sql.value), (st(w).result = undefined); // no stale rows under a new query
       if (CHARTS.includes(w.kind)) (w.kind = spec.kind), (w.chart = { x: spec.x, y: spec.y });
       if (sets(w.kind)) w.param = param.value.trim();
+      if (w.kind === "table") {
+        const name = rowParam.value.trim();
+        if (name !== (w.param ?? "")) delete st(w).picked;
+        if (name) w.param = name;
+        else delete w.param;
+      }
+      if (w.kind === "button") {
+        const ticked = targetBoxes.map((l) => l.querySelector("input")!).filter((b) => b.checked).map((b) => b.value);
+        if (ticked.length) w.targets = ticked;
+        else delete w.targets;
+      }
       if (w.kind === "dropdown") w.options = options.value;
       if (shows(w.kind)) {
         if (refresh.value) w.refresh = Number(refresh.value);
@@ -693,11 +753,21 @@ function example(format: ParamFormat, name: string) {
   return forms[format];
 }
 
-function table(r: QueryResult) {
+/** A data table; with `pick`, clicking a row (or Enter or Space on it) selects it. */
+function table(r: QueryResult, picked?: number, pick?: (index: number) => void) {
   if (!r.columns.length) return el("p", { className: "widget-note", textContent: `${formatNumber(r.affected)} rows affected.` });
-  return el("table", { className: "widget-table" },
+  return el("table", { className: `widget-table${pick ? " pickable" : ""}` },
     el("thead", {}, el("tr", {}, ...r.columns.map((c) => el("th", { textContent: c })))),
-    el("tbody", {}, ...r.rows.map((row) => el("tr", {}, ...row.map((v) => el("td", { textContent: v ?? "NULL", className: v === null ? "null" : toNumber(v) !== null ? "num" : "" }))))));
+    el("tbody", {}, ...r.rows.map((row, i) => {
+      const tr = el("tr", {}, ...row.map((v) => el("td", { textContent: v ?? "NULL", className: v === null ? "null" : toNumber(v) !== null ? "num" : "" })));
+      if (pick) {
+        tr.tabIndex = 0;
+        tr.setAttribute("aria-selected", String(i === picked));
+        tr.onclick = () => pick(i);
+        tr.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), pick(i));
+      }
+      return tr;
+    })));
 }
 
 function score(r: QueryResult) {
