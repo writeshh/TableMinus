@@ -37,6 +37,7 @@ body.overlay-title.full-screen .db-tabs { padding-left: 8px; }
    put while the tabs scroll; there is no workspace behind the launcher, so they hide there. */
 .title-actions { position: sticky; right: 0; margin-left: auto; display: flex; align-items: center; gap: 4px; padding-left: 8px; background: var(--side); white-space: nowrap; }
 body:has(#workspace[hidden]) .title-actions { display: none; }
+.title-actions .pill { flex: 0 1 auto; max-width: 340px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 4px; }
 .db-tabs .add { flex: none; align-self: center; width: 24px; height: 24px; margin-left: 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 16px; line-height: 1; }
 .db-tabs .add:hover { color: var(--fg); background: var(--press); }
 

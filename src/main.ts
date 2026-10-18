@@ -1063,6 +1063,7 @@ function renderDbTabs() {
     // Last, after SQL. Looked up in the container: it is not in the page until the strip is filled, so $ can't find it.
     const assistant = titleActions.querySelector("#assistant-button");
     if (assistant) titleActions.append(assistant);
+    titleActions.prepend($("pill")); // the connection, database and tab, as TablePlus's title bar shows them
   }
   const home = !$("home").hidden;
   const launcherTab = () => {
