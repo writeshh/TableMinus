@@ -32,6 +32,7 @@ import { initPlugins, pluginMenu } from "./plugins"; // also adds Settings › P
 import { forgetRedis, initRedis, syncRedis } from "./redis";
 import { forgetMongo, initMongo, syncMongo } from "./mongo";
 import { forgetDynamo, initDynamo, syncDynamo } from "./dynamo";
+import { forgetElastic, initElastic, syncElastic } from "./elastic";
 import { checkForUpdates, showReleaseNotes } from "./updates";
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
@@ -119,6 +120,8 @@ const ENGINES: Engine[] = [
     defaults: { host: "127.0.0.1", port: "27017", user: "", database: "" } },
   { id: "dynamodb", kind: "dynamodb", label: "Amazon DynamoDB", mono: "Dy", color: "var(--blue)",
     defaults: { host: "dynamodb.us-east-1.amazonaws.com", port: "", user: "", database: "us-east-1" } },
+  { id: "elasticsearch", kind: "elasticsearch", label: "Elasticsearch", mono: "Es", color: "var(--yellow)",
+    defaults: { host: "127.0.0.1", port: "9200", user: "", database: "" } },
   { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
@@ -135,6 +138,11 @@ const FORM_SHAPES: Record<string, { hide: string[]; label?: Record<string, strin
     hide: [],
     label: { user: "Access key ID", password: "Secret access key", database: "Region" },
     placeholder: { host: "dynamodb.us-east-1.amazonaws.com, or localhost for DynamoDB Local", port: "443, or 8000 for DynamoDB Local" },
+  },
+  elasticsearch: {
+    hide: ["database"],
+    label: { password: "Password or API key" },
+    placeholder: { user: "Optional; leave empty to send the password as an API key" },
   },
   d1: {
     hide: ["host", "port", "ssl", "via", "password_mode"],
@@ -652,7 +660,7 @@ function formToSaved(): Saved {
     const port = field("port").value.trim() || d.port;
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
-    const scheme = ["postgres", "redis", "mssql", "clickhouse", "libsql"].includes(editingKind) ? editingKind : "mysql";
+    const scheme = ["postgres", "redis", "mssql", "clickhouse", "libsql", "elasticsearch"].includes(editingKind) ? editingKind : "mysql";
     if (editingKind === "redis" && !/^\d+$/.test(db || "0")) throw "A Redis database is a number, such as 0.";
     if (editingKind === "d1") {
       if (!/^[\w-]+$/.test(user) || !/^[\w-]+$/.test(db)) throw "Enter the Cloudflare account ID and the D1 database ID.";
@@ -896,7 +904,9 @@ async function openWorkspace(c: Saved, database?: string) {
 }
 
 /** The command that opens a session: Redis and MongoDB aren't SQL, and have their own (redis.rs, mongo/mod.rs). */
-const OWN_CONNECT: Record<string, string> = { redis: "redis_connect", mongodb: "mongo_connect", dynamodb: "dynamo_connect" };
+const OWN_CONNECT: Record<string, string> = {
+  redis: "redis_connect", mongodb: "mongo_connect", dynamodb: "dynamo_connect", elasticsearch: "elastic_connect",
+};
 const connectCommand = (kind: string) => OWN_CONNECT[kind] ?? "connect";
 const isRedis = () => active?.kind === "redis";
 const isMongo = () => active?.kind === "mongodb";
@@ -905,6 +915,7 @@ function syncViews(fresh = false) {
   syncRedis(fresh);
   syncMongo(fresh);
   syncDynamo(fresh);
+  syncElastic(fresh);
 }
 /** A workspace with a view of its own in place of tables and SQL tabs (redis.ts, docview.ts). */
 const ownView = () => !!active && active.kind in OWN_CONNECT;
@@ -3194,6 +3205,7 @@ const docHost = {
 };
 initMongo(docHost);
 initDynamo(docHost);
+initElastic(docHost);
 initPlugins({
   conn: hostConn,
   insert(sql) {
@@ -3339,6 +3351,7 @@ async function closeWorkspace(next?: Workspace | null) {
     forgetRedis(ws.key);
     forgetMongo(ws.key);
     forgetDynamo(ws.key);
+    forgetElastic(ws.key);
     // An asked-for password serves every tab of its connection, so it goes with the last one.
     const name = ws.conn.name;
     if (!workspaces.some((w) => w !== ws && w.conn.name === name)) launcher.forgetAskedPassword(name);
@@ -3722,10 +3735,10 @@ const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
 // SQL Server and ClickHouse back up with their own statements.
 // libSQL and D1 have their own (turso db shell .dump, wrangler d1 export).
-const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb"].includes(c.kind);
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb"].includes(c.kind);
+const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch"].includes(c.kind);
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch"].includes(c.kind);
 /** Engines with sessions to list and stop. */
-const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb", "dynamodb"].includes(c.kind);
+const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb", "dynamodb", "elasticsearch"].includes(c.kind);
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },

@@ -70,6 +70,14 @@ services:
     networks: [front, back]
     healthcheck: { test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 })"], interval: 3s, retries: 40 }
 
+  # Reachable directly over HTTP: 127.0.0.1:9200, security off (no user, no TLS).
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    environment: { discovery.type: single-node, xpack.security.enabled: "false", ES_JAVA_OPTS: "-Xms512m -Xmx512m" }
+    ports: ["127.0.0.1:9200:9200"]
+    networks: [front, back]
+    healthcheck: { test: ["CMD", "curl", "-sf", "http://localhost:9200"], interval: 3s, retries: 60 }
+
   # Reachable directly over HTTP: 127.0.0.1:8001, any access key and secret (DynamoDB Local doesn't check them).
   dynamodb:
     image: amazon/dynamodb-local:latest

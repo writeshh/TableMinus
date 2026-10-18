@@ -7,7 +7,8 @@ version in `src-tauri/tauri.conf.json`.
 ## [Unreleased]
 
 - New engines: MongoDB (collections, a document grid with edits, and a shell in mongosh syntax), Amazon DynamoDB
-  (tables, items with edits, and PartiQL), libSQL / Turso, and Cloudflare D1.
+  (tables, items with edits, and PartiQL), Elasticsearch (indices, documents with edits, SQL and Dev Tools-style
+  requests), libSQL / Turso, and Cloudflare D1.
 - In-app updates: TableMinus checks for a new version at startup (Settings › General can turn that off, or take
   beta versions too), shows what changed, and installs it on request. Help › Check for Updates… and Release Notes.
 - Find Local Databases also finds Postgres sockets, MongoDB, and database servers on ports other than the usual.

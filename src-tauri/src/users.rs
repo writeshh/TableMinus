@@ -407,6 +407,9 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
         Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
         Engine::Mongodb => Err(Error::Invalid("MongoDB users are managed in the shell: db.createUser(…)")),
         Engine::Dynamodb => Err(Error::Invalid("DynamoDB access is managed in AWS IAM")),
+        Engine::Elasticsearch => {
+            Err(Error::Invalid("Elasticsearch users are managed in the console: GET /_security/user"))
+        }
     }
 }
 
@@ -728,6 +731,9 @@ pub async fn user_privileges(
         Engine::Redis => Err(Error::Invalid("Redis users are managed with ACL commands in the console")),
         Engine::Mongodb => Err(Error::Invalid("MongoDB users are managed in the shell: db.createUser(…)")),
         Engine::Dynamodb => Err(Error::Invalid("DynamoDB access is managed in AWS IAM")),
+        Engine::Elasticsearch => {
+            Err(Error::Invalid("Elasticsearch users are managed in the console: GET /_security/user"))
+        }
     };
     Ok(grants(live.check(r)?))
 }

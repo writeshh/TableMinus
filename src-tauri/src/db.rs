@@ -40,6 +40,8 @@ pub enum Engine {
     Mongodb,
     /// Not SQL: opened through `dynamo_connect` (dynamo/mod.rs).
     Dynamodb,
+    /// Not SQL underneath: opened through `elastic_connect` (elastic/mod.rs).
+    Elasticsearch,
 }
 
 /// Per-connection options beyond host, user and TLS. Engine-specific ones are ignored by other engines.
@@ -224,6 +226,9 @@ impl Conn {
                 Engine::Redis => return Err(Error::Invalid("Redis isn't SQL; it opens through redis_connect")),
                 Engine::Mongodb => return Err(Error::Invalid("MongoDB isn't SQL; it opens through mongo_connect")),
                 Engine::Dynamodb => return Err(Error::Invalid("DynamoDB isn't SQL; it opens through dynamo_connect")),
+                Engine::Elasticsearch => {
+                    return Err(Error::Invalid("Elasticsearch isn't SQL; it opens through elastic_connect"));
+                }
             })
         };
         let driver = tokio::time::timeout(CONNECT_TIMEOUT, open)

@@ -22,6 +22,8 @@
         <string>libsql</string>
         <string>mongodb</string>
         <string>mongodb+srv</string>
+        <string>elasticsearch</string>
+        <string>elastics</string>
         <string>mssql</string>
         <string>redis</string>
         <string>rediss</string>

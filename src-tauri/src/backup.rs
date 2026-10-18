@@ -364,6 +364,9 @@ fn dump_command(
         }
         Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
         Engine::Mongodb => return Err(Error::Invalid("MongoDB is backed up with mongodump, outside the app")),
+        Engine::Elasticsearch => {
+            return Err(Error::Invalid("Elasticsearch is backed up with snapshots: PUT /_snapshot/…"));
+        }
         Engine::Dynamodb => {
             return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
         }
@@ -405,6 +408,9 @@ fn restore_command(
         }
         Engine::Redis => return Err(Error::Invalid("Redis backups are the server's own (BGSAVE)")),
         Engine::Mongodb => return Err(Error::Invalid("MongoDB is backed up with mongodump, outside the app")),
+        Engine::Elasticsearch => {
+            return Err(Error::Invalid("Elasticsearch is backed up with snapshots: PUT /_snapshot/…"));
+        }
         Engine::Dynamodb => {
             return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
         }

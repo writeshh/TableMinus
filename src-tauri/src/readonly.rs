@@ -80,7 +80,7 @@ pub fn is_read_only(engine: Engine, sql: &str) -> bool {
         Engine::Mssql => &MsSqlDialect {},
         Engine::Clickhouse => &ClickHouseDialect {},
         // Redis commands aren't SQL; redis.rs has its own list.
-        Engine::Redis | Engine::Mongodb | Engine::Dynamodb => return false,
+        Engine::Redis | Engine::Mongodb | Engine::Dynamodb | Engine::Elasticsearch => return false,
     };
     let Ok(stmts) = Parser::parse_sql(dialect, sql) else { return false };
     !stmts.is_empty() && stmts.visit(&mut Writes).is_continue()

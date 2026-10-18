@@ -92,6 +92,9 @@ pub enum Error {
     /// `DynamoDB`'s own error (its type and message), or a value typed in `PartiQL` that couldn't be read.
     #[error("DynamoDB: {0}")]
     Dynamo(String),
+    /// Elasticsearch's own error (its type and reason), or a request typed in the console that couldn't be read.
+    #[error("Elasticsearch: {0}")]
+    Elastic(String),
     /// Checking for, downloading or installing an update failed.
     #[error("update: {0}")]
     Update(String),
