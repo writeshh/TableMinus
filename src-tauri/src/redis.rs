@@ -564,12 +564,16 @@ pub async fn redis_connect(
         .as_deref()
         .map(|d| d.parse::<u32>().map_err(|_| Error::Invalid("a Redis database is a number")))
         .transpose()?;
-    if let Some(existing) = sessions.existing(&name).await {
+    // Switching database opens a new session in place of the old one.
+    let switching = if let Some(existing) = sessions.existing(&name).await {
         let mut s = existing.lock().await;
         if db.is_none_or(|d| d == s.db) {
             return info(&prefs, &mut s).await;
         }
-    }
+        true
+    } else {
+        false
+    };
     let saved_name = name.split_once('\u{1f}').map_or(name.as_str(), |(n, _)| n);
     let saved = store::load(&crate::dir(&app)?)?
         .into_iter()
@@ -587,7 +591,11 @@ pub async fn redis_connect(
         let _ = store::clear_needs_credentials(&crate::dir(&app)?, &badge);
     }
     let r = info(&prefs, &mut s).await;
-    sessions.insert(name, s).await;
+    if switching {
+        sessions.insert(name, s).await;
+    } else {
+        sessions.insert_new(name, s).await;
+    }
     r
 }
 

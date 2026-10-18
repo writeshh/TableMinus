@@ -276,9 +276,15 @@ async fn may_change_safety(old: &store::Saved, new: safety::Safety, unlock: Opti
 
 /// Saves a connection from the form. Changing a Safe level here wants the password, as the toolbar lock does.
 #[tauri::command]
+#[expect(clippy::too_many_arguments, reason = "a Tauri command's arguments are its states and the request's fields")]
 async fn save_connection(
     app: AppHandle,
     open: State<'_, Open>,
+    redis: State<'_, redis::Sessions>,
+    mongo: State<'_, mongo::Sessions>,
+    dynamo: State<'_, dynamo::Sessions>,
+    elastic: State<'_, elastic::Sessions>,
+    cassandra: State<'_, cassandra::Sessions>,
     conn: store::Saved,
     password: Option<SecretString>,
     ssh_password: Option<SecretString>,
@@ -291,9 +297,13 @@ async fn save_connection(
         may_change_safety(&old, conn.safety, unlock.as_ref()).await?;
     }
     // Drop live connections so the next connect uses the new settings.
-    open.remove_all(&conn.name).await;
-    if let Some(old) = &previous {
-        open.remove_all(old).await;
+    for name in std::iter::once(conn.name.as_str()).chain(previous.as_deref()) {
+        open.remove_all(name).await;
+        redis.remove_all(name).await;
+        mongo.remove_all(name).await;
+        dynamo.remove_all(name).await;
+        elastic.remove_all(name).await;
+        cassandra.remove_all(name).await;
     }
     store::save(&dir, conn, password.as_ref(), ssh_password.as_ref(), previous.as_deref())
 }

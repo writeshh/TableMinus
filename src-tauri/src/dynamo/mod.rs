@@ -216,7 +216,7 @@ pub async fn dynamo_connect(
     let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
     let s = open_session(saved, secret, ssh_secret).await?;
     let r = info(&s).await;
-    sessions.insert(name, s).await;
+    sessions.insert_new(name, s).await;
     r
 }
 

@@ -211,7 +211,7 @@ pub async fn mongo_connect(
         let _ = store::clear_needs_credentials(&crate::dir(&app)?, &badge);
     }
     let r = info(&s).await;
-    sessions.insert(name, s).await;
+    sessions.insert_new(name, s).await;
     r
 }
 

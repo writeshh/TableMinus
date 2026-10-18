@@ -229,7 +229,7 @@ pub async fn cassandra_connect(
     let ssh_secret = if saved.ssh.is_some() { store::stored(store::Secret::Ssh, &saved.name)? } else { None };
     let s = open_session(saved, password, ssh_secret, database).await?;
     let r = info(&s).await;
-    sessions.insert(name, s).await;
+    sessions.insert_new(name, s).await;
     r
 }
 
