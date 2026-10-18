@@ -177,7 +177,7 @@ type UrlConn = { kind: string; url: string; name: string; password: string; tls?
 
 // libpq's sslmode values are TLS_MODES' own; MySQL's ssl-mode spells them its way.
 const MYSQL_SSL: Record<string, string> = { disabled: "disable", preferred: "prefer", required: "require", verify_ca: "verify-ca", verify_identity: "verify-full" };
-const SCHEMES: Record<string, string> = { postgres: "postgres", postgresql: "postgres", mysql: "mysql", mariadb: "mariadb", redis: "redis", rediss: "redis", cockroachdb: "postgres", cockroach: "postgres", mssql: "mssql", sqlserver: "mssql", clickhouse: "clickhouse", libsql: "libsql", elasticsearch: "elasticsearch", elastics: "elasticsearch" };
+const SCHEMES: Record<string, string> = { postgres: "postgres", postgresql: "postgres", mysql: "mysql", mariadb: "mariadb", redis: "redis", rediss: "redis", cockroachdb: "postgres", cockroach: "postgres", mssql: "mssql", sqlserver: "mssql", clickhouse: "clickhouse", libsql: "libsql", elasticsearch: "elasticsearch", elastics: "elasticsearch", cassandra: "cassandra" };
 const COCKROACH_SCHEMES = ["cockroachdb:", "cockroach:"];
 
 /** A connection from a URL (postgresql://, postgres://, cockroachdb://, mysql://, mariadb://, redis://, rediss://), or a
@@ -215,7 +215,7 @@ export function parseConnectionUrl(text: string): UrlConn {
   const ssl = u.searchParams.get("sslmode") ?? u.searchParams.get("ssl-mode") ?? u.searchParams.get("ssl_mode");
   // rediss:// is Redis over TLS from the first byte.
   const tls = u.protocol === "rediss:" ? "require" : u.protocol === "elastics:" ? "verify-full" : ssl ? (kind === "postgres" ? ssl.toLowerCase() : MYSQL_SSL[ssl.toLowerCase()]) : undefined;
-  const scheme = ["postgres", "redis", "mssql", "clickhouse", "elasticsearch"].includes(kind) ? kind : "mysql"; // the backend's URL schemes
+  const scheme = ["postgres", "redis", "mssql", "clickhouse", "elasticsearch", "cassandra"].includes(kind) ? kind : "mysql"; // the backend's URL schemes
   // Turso hands out libsql://host?authToken=… links; the token is the password, kept in the keychain.
   if (kind === "libsql") return { kind, url: `libsql://${u.host}`, name: u.hostname, password: u.searchParams.get("authToken") ?? "" };
   const flavor = COCKROACH_SCHEMES.includes(u.protocol) ? "cockroach" : undefined;

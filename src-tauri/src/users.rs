@@ -410,6 +410,7 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
         Engine::Elasticsearch => {
             Err(Error::Invalid("Elasticsearch users are managed in the console: GET /_security/user"))
         }
+        Engine::Cassandra => Err(Error::Invalid("Cassandra roles are managed in the console: LIST ROLES, CREATE ROLE")),
     }
 }
 
@@ -734,6 +735,7 @@ pub async fn user_privileges(
         Engine::Elasticsearch => {
             Err(Error::Invalid("Elasticsearch users are managed in the console: GET /_security/user"))
         }
+        Engine::Cassandra => Err(Error::Invalid("Cassandra roles are managed in the console: LIST ROLES, CREATE ROLE")),
     };
     Ok(grants(live.check(r)?))
 }

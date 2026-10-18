@@ -72,6 +72,10 @@ tiberius = { version = "0.13.0", default-features = false, features = ["tds73", 
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # MongoDB's official driver (bson 2 through compat-3-0-0, rustls with ring as the rest of the app).
 mongodb = "3.9.1"
+# Cassandra (and ScyllaDB) over CQL's native protocol, TLS through rustls as the rest of the app.
+scylla = { version = "1.9", features = ["rustls-023"] }
+# The system's trusted certificates for rustls (Cassandra's TLS); already in the tree through mongodb.
+rustls-native-certs = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 robius-authentication = "0.3.1"

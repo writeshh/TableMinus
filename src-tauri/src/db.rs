@@ -42,6 +42,8 @@ pub enum Engine {
     Dynamodb,
     /// Not SQL underneath: opened through `elastic_connect` (elastic/mod.rs).
     Elasticsearch,
+    /// CQL: opened through `cassandra_connect` (cassandra/mod.rs).
+    Cassandra,
 }
 
 /// Per-connection options beyond host, user and TLS. Engine-specific ones are ignored by other engines.
@@ -229,6 +231,7 @@ impl Conn {
                 Engine::Elasticsearch => {
                     return Err(Error::Invalid("Elasticsearch isn't SQL; it opens through elastic_connect"));
                 }
+                Engine::Cassandra => return Err(Error::Invalid("Cassandra opens through cassandra_connect")),
             })
         };
         let driver = tokio::time::timeout(CONNECT_TIMEOUT, open)

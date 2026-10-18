@@ -33,6 +33,7 @@ import { forgetRedis, initRedis, syncRedis } from "./redis";
 import { forgetMongo, initMongo, syncMongo } from "./mongo";
 import { forgetDynamo, initDynamo, syncDynamo } from "./dynamo";
 import { forgetElastic, initElastic, syncElastic } from "./elastic";
+import { forgetCassandra, initCassandra, syncCassandra } from "./cassandra";
 import { checkForUpdates, showReleaseNotes } from "./updates";
 import { docEntry, docsReady, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
 import { CANCELLED, NOT_APPROVED, approval, fillLevels, guarded, isSafetyStop, showSafety, type Safety } from "./safety";
@@ -122,6 +123,8 @@ const ENGINES: Engine[] = [
     defaults: { host: "dynamodb.us-east-1.amazonaws.com", port: "", user: "", database: "us-east-1" } },
   { id: "elasticsearch", kind: "elasticsearch", label: "Elasticsearch", mono: "Es", color: "var(--yellow)",
     defaults: { host: "127.0.0.1", port: "9200", user: "", database: "" } },
+  { id: "cassandra", kind: "cassandra", label: "Cassandra", mono: "Ca", color: "var(--blue)",
+    defaults: { host: "127.0.0.1", port: "9042", user: "", database: "" } },
   { id: "redis", kind: "redis", label: "Redis", mono: "Rd", color: "var(--danger)",
     defaults: { host: "127.0.0.1", port: "6379", user: "", database: "0" } },
 ];
@@ -138,6 +141,11 @@ const FORM_SHAPES: Record<string, { hide: string[]; label?: Record<string, strin
     hide: [],
     label: { user: "Access key ID", password: "Secret access key", database: "Region" },
     placeholder: { host: "dynamodb.us-east-1.amazonaws.com, or localhost for DynamoDB Local", port: "443, or 8000 for DynamoDB Local" },
+  },
+  cassandra: {
+    hide: [],
+    label: { database: "Keyspace" },
+    placeholder: { user: "Optional", database: "Optional, choose one after connecting" },
   },
   elasticsearch: {
     hide: ["database"],
@@ -660,7 +668,7 @@ function formToSaved(): Saved {
     const port = field("port").value.trim() || d.port;
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
-    const scheme = ["postgres", "redis", "mssql", "clickhouse", "libsql", "elasticsearch"].includes(editingKind) ? editingKind : "mysql";
+    const scheme = ["postgres", "redis", "mssql", "clickhouse", "libsql", "elasticsearch", "cassandra"].includes(editingKind) ? editingKind : "mysql";
     if (editingKind === "redis" && !/^\d+$/.test(db || "0")) throw "A Redis database is a number, such as 0.";
     if (editingKind === "d1") {
       if (!/^[\w-]+$/.test(user) || !/^[\w-]+$/.test(db)) throw "Enter the Cloudflare account ID and the D1 database ID.";
@@ -906,6 +914,7 @@ async function openWorkspace(c: Saved, database?: string) {
 /** The command that opens a session: Redis and MongoDB aren't SQL, and have their own (redis.rs, mongo/mod.rs). */
 const OWN_CONNECT: Record<string, string> = {
   redis: "redis_connect", mongodb: "mongo_connect", dynamodb: "dynamo_connect", elasticsearch: "elastic_connect",
+  cassandra: "cassandra_connect",
 };
 const connectCommand = (kind: string) => OWN_CONNECT[kind] ?? "connect";
 const isRedis = () => active?.kind === "redis";
@@ -916,6 +925,7 @@ function syncViews(fresh = false) {
   syncMongo(fresh);
   syncDynamo(fresh);
   syncElastic(fresh);
+  syncCassandra(fresh);
 }
 /** A workspace with a view of its own in place of tables and SQL tabs (redis.ts, docview.ts). */
 const ownView = () => !!active && active.kind in OWN_CONNECT;
@@ -1391,7 +1401,7 @@ async function loadDbs(pick: string) {
   try {
     databases = isRedis()
       ? (await call<{ index: number; keys: number }[]>("redis_databases", { name: sessionKey() })).map((d) => String(d.index))
-      : await call<string[]>(isMongo() ? "mongo_databases" : "list_databases", { name: sessionKey() });
+      : await call<string[]>(isMongo() ? "mongo_databases" : active?.kind === "cassandra" ? "cassandra_keyspaces" : "list_databases", { name: sessionKey() });
     $<HTMLInputElement>("db-search").value = "";
     dbPick = Math.max(0, databases.indexOf(pick));
     setStatus("db-status", "");
@@ -3206,6 +3216,7 @@ const docHost = {
 initMongo(docHost);
 initDynamo(docHost);
 initElastic(docHost);
+initCassandra(docHost);
 initPlugins({
   conn: hostConn,
   insert(sql) {
@@ -3352,6 +3363,7 @@ async function closeWorkspace(next?: Workspace | null) {
     forgetMongo(ws.key);
     forgetDynamo(ws.key);
     forgetElastic(ws.key);
+    forgetCassandra(ws.key);
     // An asked-for password serves every tab of its connection, so it goes with the last one.
     const name = ws.conn.name;
     if (!workspaces.some((w) => w !== ws && w.conn.name === name)) launcher.forgetAskedPassword(name);
@@ -3735,10 +3747,10 @@ const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
 // SQL Server and ClickHouse back up with their own statements.
 // libSQL and D1 have their own (turso db shell .dump, wrangler d1 export).
-const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch"].includes(c.kind);
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch"].includes(c.kind);
+const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
 /** Engines with sessions to list and stop. */
-const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb", "dynamodb", "elasticsearch"].includes(c.kind);
+const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
 addCommands([
   { id: "backup", label: "Backup…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openBackup(active!, info?.database) },
   { id: "restore", label: "Restore…", menu: "Tools", when: () => hasTools() && dumps(active!), run: () => openRestore(active!, info?.database, confirmDialog) },

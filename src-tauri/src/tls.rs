@@ -81,6 +81,45 @@ impl Tls {
         Ok(b.build()?)
     }
 
+    /// A rustls configuration for drivers that take one (Cassandra's), or None for plain. Like Redis, Prefer means
+    /// plain. Require encrypts without checking the certificate; the verifying modes check it against the system's
+    /// certificates and the CA given (and, rustls can't skip that alone, the host name for Verify CA too).
+    pub(crate) fn rustls(&self) -> Result<Option<std::sync::Arc<rustls::ClientConfig>>> {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+        let failed = |e: &dyn std::fmt::Display| Error::TlsFiles(e.to_string());
+        if matches!(self.mode, TlsMode::Disable | TlsMode::Prefer) {
+            return Ok(None);
+        }
+        crate::db::install_tls_provider();
+        let builder = rustls::ClientConfig::builder();
+        let builder = if self.mode == TlsMode::Require && self.ca.is_empty() {
+            builder.dangerous().with_custom_certificate_verifier(std::sync::Arc::new(NoCheck::default()))
+        } else {
+            let mut roots = rustls::RootCertStore::empty();
+            for cert in rustls_native_certs::load_native_certs().certs {
+                let _ = roots.add(cert); // a system certificate rustls can't read is one it doesn't need
+            }
+            if let Some(ca) = self.ca()? {
+                for cert in CertificateDer::pem_file_iter(&ca).map_err(|e| failed(&e))? {
+                    roots.add(cert.map_err(|e| failed(&e))?).map_err(|e| failed(&e))?;
+                }
+            }
+            builder.with_root_certificates(roots)
+        };
+        let config = match self.client_identity()? {
+            Some((cert, key)) => {
+                let chain = CertificateDer::pem_file_iter(&cert)
+                    .map_err(|e| failed(&e))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|e| failed(&e))?;
+                let key = PrivateKeyDer::from_pem_file(&key).map_err(|e| failed(&e))?;
+                builder.with_client_auth_cert(chain, key).map_err(|e| failed(&e))?
+            }
+            None => builder.with_no_client_auth(),
+        };
+        Ok(Some(std::sync::Arc::new(config)))
+    }
+
     /// Redis has no way to ask for TLS on a plain connection, so Prefer means plain, and Require and up mean TLS from
     /// the first byte.
     pub fn redis(&self) -> Result<Option<native_tls::TlsConnector>> {
@@ -171,5 +210,51 @@ mod tests {
         let tls = Tls { mode: TlsMode::VerifyCa, ca: "/no/such/ca.pem".into(), ..Tls::default() };
         let err = tls.mysql(None).err().unwrap();
         assert!(err.to_string().starts_with("can't read /no/such/ca.pem:"), "{err}");
+    }
+}
+
+/// Require's certificate check for rustls: none, as libpq's `require` (the signature is still checked, so the
+/// connection is encrypted to whoever holds the certificate's key).
+#[derive(Debug)]
+struct NoCheck(std::sync::Arc<rustls::crypto::CryptoProvider>);
+
+impl Default for NoCheck {
+    fn default() -> Self {
+        NoCheck(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for NoCheck {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
     }
 }

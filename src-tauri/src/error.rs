@@ -92,6 +92,9 @@ pub enum Error {
     /// `DynamoDB`'s own error (its type and message), or a value typed in `PartiQL` that couldn't be read.
     #[error("DynamoDB: {0}")]
     Dynamo(String),
+    /// Cassandra's own error, or the driver's.
+    #[error("Cassandra: {0}")]
+    Cassandra(String),
     /// Elasticsearch's own error (its type and reason), or a request typed in the console that couldn't be read.
     #[error("Elasticsearch: {0}")]
     Elastic(String),
@@ -106,6 +109,9 @@ pub enum Error {
     Arrow(String),
     #[error("TLS: {0}")]
     Tls(#[from] native_tls::Error),
+    /// A CA, certificate or key file rustls couldn't read.
+    #[error("TLS: {0}")]
+    TlsFiles(String),
     #[error("keychain: {0}")]
     Keychain(#[from] keyring::Error),
     /// Secrets live in the vault file on this computer (no keychain), and it isn't unlocked yet. The UI asks for the

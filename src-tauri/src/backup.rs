@@ -367,6 +367,7 @@ fn dump_command(
         Engine::Elasticsearch => {
             return Err(Error::Invalid("Elasticsearch is backed up with snapshots: PUT /_snapshot/…"));
         }
+        Engine::Cassandra => return Err(Error::Invalid("Cassandra is backed up with nodetool snapshot")),
         Engine::Dynamodb => {
             return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
         }
@@ -411,6 +412,7 @@ fn restore_command(
         Engine::Elasticsearch => {
             return Err(Error::Invalid("Elasticsearch is backed up with snapshots: PUT /_snapshot/…"));
         }
+        Engine::Cassandra => return Err(Error::Invalid("Cassandra is backed up with nodetool snapshot")),
         Engine::Dynamodb => {
             return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
         }

@@ -4,6 +4,7 @@ mod acp;
 mod ai;
 mod backup;
 mod browse;
+mod cassandra;
 mod catalog;
 mod console;
 mod db;
@@ -334,6 +335,9 @@ async fn test_connection(
     if conn.kind == Engine::Elasticsearch {
         return elastic::test(conn, password, ssh_secret).await;
     }
+    if conn.kind == Engine::Cassandra {
+        return cassandra::test(conn, password, ssh_secret).await;
+    }
     let (mut db, _tunnel) = open_db(&conn, password.as_ref(), ssh_secret).await?;
     let n = db.tables(conn.options.system_schemas).await?.len();
     Ok(format!("Connected · {n} tables"))
@@ -419,12 +423,14 @@ async fn disconnect(
     mongo: State<'_, mongo::Sessions>,
     dynamo: State<'_, dynamo::Sessions>,
     elastic: State<'_, elastic::Sessions>,
+    cassandra: State<'_, cassandra::Sessions>,
     name: String,
 ) -> Result<()> {
     redis.remove(&name).await;
     mongo.remove(&name).await;
     dynamo.remove(&name).await;
     elastic.remove(&name).await;
+    cassandra.remove(&name).await;
     open.remove(&name).await;
     Ok(())
 }
@@ -570,6 +576,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::Mongodb => "mongodb (official Rust driver)",
                 Engine::Dynamodb => "DynamoDB JSON API",
                 Engine::Elasticsearch => "Elasticsearch REST API",
+                Engine::Cassandra => "scylla (CQL native protocol)",
             },
             cipher: live.conn.tls_cipher().await?,
             ssh: live.saved.ssh.as_ref().map(|s| s.host.clone()),
@@ -826,6 +833,7 @@ async fn set_safety(
     mongo: State<'_, mongo::Sessions>,
     dynamo: State<'_, dynamo::Sessions>,
     elastic: State<'_, elastic::Sessions>,
+    cassandra: State<'_, cassandra::Sessions>,
     name: String,
     safety: safety::Safety,
     unlock: Option<safety::Unlock>,
@@ -847,6 +855,7 @@ async fn set_safety(
     mongo.set_safety(&name, safety).await;
     dynamo.set_safety(&name, safety).await;
     elastic.set_safety(&name, safety).await;
+    cassandra.set_safety(&name, safety).await;
     Ok(())
 }
 
@@ -925,6 +934,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(mongo::Sessions::default())
         .manage(dynamo::Sessions::default())
         .manage(elastic::Sessions::default())
+        .manage(cassandra::Sessions::default())
         .manage(updater::Pending::default())
         .manage(launcher::Opened::default())
         .setup(|app| {
@@ -1020,6 +1030,13 @@ pub fn run() -> tauri::Result<()> {
             elastic::elastic_run,
             elastic::elastic_edit,
             elastic::elastic_connection_info,
+            cassandra::cassandra_connect,
+            cassandra::cassandra_keyspaces,
+            cassandra::cassandra_describe,
+            cassandra::cassandra_page,
+            cassandra::cassandra_run,
+            cassandra::cassandra_edit,
+            cassandra::cassandra_connection_info,
             updater::update_check,
             updater::update_install,
             passcode::passcode_set,

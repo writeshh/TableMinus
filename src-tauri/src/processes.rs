@@ -58,6 +58,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Engine::Mongodb => return Err(Error::Invalid("MongoDB operations show in the shell: db.currentOp()")),
         Engine::Dynamodb => return Err(Error::Invalid("DynamoDB has no process list")),
         Engine::Elasticsearch => return Err(Error::Invalid("Elasticsearch tasks show in the console: GET /_tasks")),
+        Engine::Cassandra => return Err(Error::Invalid("Cassandra has no process list here (nodetool tpstats)")),
     };
     let r = live.conn.query(sql).await;
     if r.as_ref().is_err_and(|e| live.conn.lost_by(e)) {
@@ -129,6 +130,7 @@ pub async fn kill_process(
         Engine::Mongodb => return Err(Error::Invalid("MongoDB operations show in the shell: db.currentOp()")),
         Engine::Dynamodb => return Err(Error::Invalid("DynamoDB has no process list")),
         Engine::Elasticsearch => return Err(Error::Invalid("Elasticsearch tasks show in the console: GET /_tasks")),
+        Engine::Cassandra => return Err(Error::Invalid("Cassandra has no process list here (nodetool tpstats)")),
     }
     Ok(())
 }
