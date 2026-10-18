@@ -2,7 +2,7 @@
 // outside strings, quoted names, comments and Postgres dollar quotes; and finding the one table a plain SELECT
 // reads. Pure, so it's tested on its own (statements.test.ts).
 
-export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse";
+export type Dialect = "postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "oracle";
 export type Statement = { from: number; to: number; text: string };
 
 /** The engine whose SQL a connection kind speaks: libSQL and Cloudflare D1 are SQLite over HTTP. */
@@ -32,9 +32,11 @@ export function codeRanges(sql: string, dialect: Dialect): [number, number][] {
   return ranges;
 }
 
-/** Every non-empty statement, with offsets into `sql` (trailing semicolon excluded, whitespace trimmed). */
+/** Every non-empty statement, with offsets into `sql` (trailing semicolon excluded, whitespace trimmed). On Oracle a
+ *  PL/SQL block keeps its semicolons, its last one included, and ends at a line holding only `/`, as SQL*Plus has it. */
 export function splitStatements(sql: string, dialect: Dialect): Statement[] {
   const mysql = dialect === "mysql" || dialect === "mariadb";
+  const oracle = dialect === "oracle";
   const out: Statement[] = [];
   let start = 0;
   const push = (end: number) => {
@@ -44,13 +46,34 @@ export function splitStatements(sql: string, dialect: Dialect): Statement[] {
     if (text && !isOnlyComments(text, mysql)) out.push({ from: start + lead, to: start + lead + text.length, text });
   };
   for (const [from, to] of codeRanges(sql, dialect)) {
-    for (let i = sql.indexOf(";", from); i >= 0 && i < to; i = sql.indexOf(";", i + 1)) {
-      push(i);
-      start = i + 1;
+    for (let i = from; i < to; i++) {
+      const ends = sql[i] === ";" ? !(oracle && plsqlBlock(sql.slice(start, i))) : oracle && sql[i] === "/" && slashLine(sql, i);
+      if (ends) {
+        push(i);
+        start = i + 1;
+      }
     }
   }
   push(sql.length);
   return out;
+}
+
+/** Whether Oracle SQL starts a PL/SQL block: an anonymous one, or CREATE of a procedure, function, package, trigger or
+ *  type. `src-tauri/src/driver/oracle.rs` splits scripts the same way. */
+function plsqlBlock(sql: string): boolean {
+  const w = sql.slice(0, 200).trim().toLowerCase().split(/\s+/);
+  if (w[0] === "begin" || w[0] === "declare") return w[1] !== "transaction";
+  if (w[0] !== "create") return false;
+  let k = w[1] === "or" && w[2] === "replace" ? 3 : 1;
+  if (w[k] === "editionable" || w[k] === "noneditionable") k++;
+  return ["procedure", "function", "package", "trigger", "type"].includes(w[k]);
+}
+
+/** Whether the `/` at `at` is alone on its line. */
+function slashLine(sql: string, at: number): boolean {
+  const lineStart = sql.lastIndexOf("\n", at - 1) + 1;
+  const end = sql.indexOf("\n", at);
+  return sql.slice(lineStart, end < 0 ? sql.length : end).trim() === "/";
 }
 
 /** The statement the cursor is in; between statements, the one just before the cursor (else the next one). */

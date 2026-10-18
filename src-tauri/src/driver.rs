@@ -9,6 +9,7 @@ pub mod http;
 pub mod libsql;
 pub mod mssql;
 pub mod mysql;
+pub mod oracle;
 pub mod postgres;
 pub mod sqlite;
 
@@ -126,6 +127,8 @@ pub enum Stopper {
     /// Wakes the running call, which cancels itself (`SQL Server`'s attention signal; the HTTP engines closing their
     /// request).
     Notify(std::sync::Arc<tokio::sync::Notify>),
+    /// Oracle's break, sent on the connection from another thread; the call ends with ORA-01013.
+    Ora(std::sync::Arc<::oracle::Connection>),
 }
 
 /// Receives a query result as it arrives: the column names once, then each row.

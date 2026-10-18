@@ -78,6 +78,15 @@ services:
     networks: [front, back]
     healthcheck: { test: ["CMD", "cqlsh", "-e", "describe keyspaces"], interval: 5s, retries: 60 }
 
+  # Reachable directly: 127.0.0.1:1521, service FREEPDB1, user tm, password testpass (system has the same password).
+  # The app needs Oracle Instant Client to connect.
+  oracle:
+    image: gvenzl/oracle-free:23-slim-faststart
+    environment: { ORACLE_PASSWORD: testpass, APP_USER: tm, APP_USER_PASSWORD: testpass }
+    ports: ["127.0.0.1:1521:1521"]
+    networks: [front, back]
+    healthcheck: { test: ["CMD", "healthcheck.sh"], interval: 5s, retries: 60 }
+
   # Reachable directly over HTTP: 127.0.0.1:9200, security off (no user, no TLS).
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3

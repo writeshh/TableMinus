@@ -30,6 +30,11 @@ pub(crate) const MSSQL: &str = "select s.session_id as [Session], s.login_name a
     outer apply sys.dm_exec_sql_text(r.sql_handle) t \
     where s.is_user_process = 1 and s.session_id <> @@spid order by r.total_elapsed_time desc";
 /// Running queries (`ClickHouse` has no idle sessions to list), minus this one, by their ids.
+/// Oracle's sessions, as `sid,serial#` (what KILL SESSION takes). Needs SELECT on `v$session`.
+const ORACLE: &str = "select sid || ',' || serial# as \"Session\", username as \"User\", machine as \"Host\", \
+    program as \"Program\", status as \"Status\", last_call_et as \"Running (s)\", event as \"Waiting on\", \
+    sql_id as \"SQL ID\" from v$session where type = 'USER' and sid <> sys_context('USERENV', 'SID') \
+    order by last_call_et desc";
 pub(crate) const CLICKHOUSE: &str = "select query_id as `Query`, user as `User`, address as `Client`, \
     current_database as `Database`, round(elapsed, 1) as `Running (s)`, formatReadableSize(memory_usage) as `Memory`, \
     query as `Text` from system.processes where query_id != queryID() order by elapsed desc";
@@ -59,6 +64,7 @@ pub async fn processes(app: AppHandle, sessions: State<'_, Sessions>, name: Stri
         Engine::Dynamodb => return Err(Error::Invalid("DynamoDB has no process list")),
         Engine::Elasticsearch => return Err(Error::Invalid("Elasticsearch tasks show in the console: GET /_tasks")),
         Engine::Cassandra => return Err(Error::Invalid("Cassandra has no process list here (nodetool tpstats)")),
+        Engine::Oracle => ORACLE,
     };
     let r = live.conn.query(sql).await;
     if r.as_ref().is_err_and(|e| live.conn.lost_by(e)) {
@@ -131,6 +137,22 @@ pub async fn kill_process(
         Engine::Dynamodb => return Err(Error::Invalid("DynamoDB has no process list")),
         Engine::Elasticsearch => return Err(Error::Invalid("Elasticsearch tasks show in the console: GET /_tasks")),
         Engine::Cassandra => return Err(Error::Invalid("Cassandra has no process list here (nodetool tpstats)")),
+        Engine::Oracle => {
+            if !connection {
+                return Err(Error::Invalid("Oracle can only end a whole session here; use Kill"));
+            }
+            // KILL SESSION takes no parameters; `id` is two numbers, so formatting it in can't inject anything.
+            let numbers = id.split_once(',').filter(|(a, b)| {
+                !a.is_empty()
+                    && !b.is_empty()
+                    && a.bytes().chain(b.bytes()).all(|c| c.is_ascii_digit())
+                    && id.len() < 24
+            });
+            if numbers.is_none() {
+                return Err(Error::Invalid("an Oracle session is sid,serial#"));
+            }
+            live.conn.query(&format!("alter system kill session '{id}' immediate")).await?;
+        }
     }
     Ok(())
 }

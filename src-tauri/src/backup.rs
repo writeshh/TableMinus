@@ -368,6 +368,9 @@ fn dump_command(
             return Err(Error::Invalid("Elasticsearch is backed up with snapshots: PUT /_snapshot/…"));
         }
         Engine::Cassandra => return Err(Error::Invalid("Cassandra is backed up with nodetool snapshot")),
+        Engine::Oracle => {
+            return Err(Error::Invalid("Oracle is backed up with Data Pump (expdp) or RMAN, outside the app"));
+        }
         Engine::Dynamodb => {
             return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
         }
@@ -413,6 +416,9 @@ fn restore_command(
             return Err(Error::Invalid("Elasticsearch is backed up with snapshots: PUT /_snapshot/…"));
         }
         Engine::Cassandra => return Err(Error::Invalid("Cassandra is backed up with nodetool snapshot")),
+        Engine::Oracle => {
+            return Err(Error::Invalid("Oracle is backed up with Data Pump (expdp) or RMAN, outside the app"));
+        }
         Engine::Dynamodb => {
             return Err(Error::Invalid("DynamoDB is backed up with AWS Backup or point-in-time recovery"));
         }

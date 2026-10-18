@@ -240,6 +240,19 @@ fn split_list(list: &str) -> Vec<String> {
     out
 }
 
+/// What an Oracle row trigger runs: the PL/SQL after `FOR EACH ROW`, without the `BEGIN … END;` around a plain
+/// block, so the structure editor shows and restates it as `trigger_sql` writes it.
+fn ora_trigger_body(definition: &str) -> Option<String> {
+    // ASCII upper-casing keeps byte offsets, so positions found in `upper` hold in `definition`.
+    let upper = definition.to_ascii_uppercase();
+    let start = upper.find("FOR EACH ROW")? + "FOR EACH ROW".len();
+    let end = upper.find("ALTER TRIGGER").unwrap_or(upper.len());
+    let block = definition.get(start..end)?.trim().trim_end_matches('/').trim_end();
+    let plain = block.get(..5).is_some_and(|b| b.eq_ignore_ascii_case("begin"));
+    let inner = plain.then(|| block.get(5..block.to_ascii_uppercase().rfind("END")?).map(str::trim)).flatten();
+    Some(inner.unwrap_or(block).to_string())
+}
+
 /// Cell `i` of a catalog row, taken out (rows are read once, front to back).
 fn take(row: &mut [Option<String>], i: usize) -> Option<String> {
     row.get_mut(i).and_then(Option::take)
@@ -255,6 +268,7 @@ impl Conn {
             Dialect::Duck => self.duck_structure(table).await?,
             Dialect::Mssql => self.mssql_structure(table).await?,
             Dialect::Click => self.click_structure(table).await?,
+            Dialect::Ora => self.ora_structure(table).await?,
         };
         if s.columns.is_empty() {
             return Err(Error::Invalid("no such table, or it has no columns"));
@@ -921,6 +935,136 @@ impl Conn {
             .next()
             .and_then(|mut r| take(&mut r, 0));
         Ok(Structure { columns, indexes, foreign_keys, checks, triggers: vec![], comment, options: None })
+    }
+
+    /// Oracle, in the current schema. Defaults and check conditions come from the `_vc` columns (12.2 and later):
+    /// the originals are LONGs.
+    #[expect(clippy::too_many_lines, reason = "one catalog query per part of the structure")]
+    async fn ora_structure(&mut self, table: &str) -> Result<Structure> {
+        let t = [Some(table)];
+        let columns = self
+            .fetch_with(
+                "select c.column_name, c.data_type || case \
+                 when c.data_type in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR') then '(' || c.char_length || ')' \
+                 when c.data_type = 'RAW' then '(' || c.data_length || ')' \
+                 when c.data_type = 'NUMBER' and c.data_precision is not null \
+                   then '(' || c.data_precision || ',' || c.data_scale || ')' end, \
+                 case when c.nullable = 'Y' then 'true' else 'false' end, \
+                 case when c.identity_column = 'NO' then trim(c.data_default_vc) end, m.comments, \
+                 case when c.identity_column = 'YES' then 'true' else 'false' end, \
+                 case when exists (select 1 from all_constraints k join all_cons_columns kc \
+                   on kc.owner = k.owner and kc.constraint_name = k.constraint_name \
+                   where k.constraint_type = 'P' and k.owner = c.owner and k.table_name = c.table_name \
+                   and kc.column_name = c.column_name) then 'true' else 'false' end \
+                 from all_tab_columns c left join all_col_comments m on m.owner = c.owner \
+                   and m.table_name = c.table_name and m.column_name = c.column_name \
+                 where c.owner = sys_context('USERENV', 'CURRENT_SCHEMA') and c.table_name = :1 order by c.column_id",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| ColumnInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                data_type: take(&mut r, 1).unwrap_or_default(),
+                nullable: take(&mut r, 2).as_deref() == Some("true"),
+                default: take(&mut r, 3).filter(|d| !d.is_empty()),
+                comment: take(&mut r, 4),
+                auto_increment: take(&mut r, 5).as_deref() == Some("true"),
+                primary: take(&mut r, 6).as_deref() == Some("true"),
+                ..ColumnInfo::default()
+            })
+            .collect();
+        let indexes = self
+            .fetch_with(
+                "select i.index_name, (select listagg(ic.column_name, chr(31)) within group (order by ic.column_position) \
+                   from all_ind_columns ic where ic.index_owner = i.owner and ic.index_name = i.index_name), \
+                 case when i.uniqueness = 'UNIQUE' then '1' else '0' end, \
+                 case when exists (select 1 from all_constraints k where k.owner = i.table_owner \
+                   and k.index_name = i.index_name and k.constraint_type = 'P') then '1' else '0' end, i.index_type, \
+                 case when exists (select 1 from all_constraints k where k.owner = i.table_owner \
+                   and k.index_name = i.index_name and k.constraint_type in ('P', 'U')) then '1' else '0' end \
+                 from all_indexes i where i.table_owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 and i.table_name = :1 and i.index_type <> 'LOB' order by i.index_name",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| IndexInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                columns: list(take(&mut r, 1)),
+                unique: take(&mut r, 2).as_deref() == Some("1"),
+                primary: take(&mut r, 3).as_deref() == Some("1"),
+                method: take(&mut r, 4),
+                constraint: take(&mut r, 5).as_deref() == Some("1"),
+            })
+            .collect();
+        let foreign_keys = self
+            .fetch_with(
+                "select k.constraint_name, (select listagg(kc.column_name, chr(31)) within group (order by kc.position) \
+                   from all_cons_columns kc where kc.owner = k.owner and kc.constraint_name = k.constraint_name), \
+                 r.table_name, (select listagg(rc.column_name, chr(31)) within group (order by rc.position) \
+                   from all_cons_columns rc where rc.owner = r.owner and rc.constraint_name = r.constraint_name), \
+                 k.delete_rule \
+                 from all_constraints k join all_constraints r on r.owner = k.r_owner \
+                   and r.constraint_name = k.r_constraint_name \
+                 where k.constraint_type = 'R' and k.owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 and k.table_name = :1 order by k.constraint_name",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| ForeignKeyInfo {
+                name: take(&mut r, 0).unwrap_or_default(),
+                columns: list(take(&mut r, 1)),
+                ref_table: take(&mut r, 2).unwrap_or_default(),
+                ref_columns: list(take(&mut r, 3)),
+                // Oracle has no ON UPDATE actions.
+                on_update: "NO ACTION".into(),
+                on_delete: take(&mut r, 4).unwrap_or_else(|| "NO ACTION".into()),
+            })
+            .collect();
+        // NOT NULL is a check constraint too; the column's flag shows it.
+        let checks = self
+            .named(
+                "select constraint_name, search_condition_vc from all_constraints \
+                 where owner = sys_context('USERENV', 'CURRENT_SCHEMA') and table_name = :1 and constraint_type = 'C' \
+                 and not (generated = 'GENERATED NAME' and search_condition_vc like '\"%\" IS NOT NULL') \
+                 order by constraint_name",
+                &t,
+            )
+            .await?;
+        let triggers = self
+            .fetch_with(
+                "select trigger_name, dbms_metadata.get_ddl('TRIGGER', trigger_name, owner), \
+                 case when trigger_type in ('BEFORE EACH ROW', 'AFTER EACH ROW') and when_clause is null \
+                   then substr(trigger_type, 1, instr(trigger_type, ' ') - 1) end, \
+                 replace(triggering_event, ' OR ', chr(31)), null \
+                 from all_triggers where table_owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 and table_name = :1 and base_object_type = 'TABLE' order by trigger_name",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .map(|mut r| {
+                // The body is a LONG; it's read back from the definition, between the row clause and the end.
+                let body = r.get(1).cloned().flatten().and_then(|d| ora_trigger_body(&d));
+                if let Some(cell) = r.get_mut(4) {
+                    *cell = body;
+                }
+                trigger(r)
+            })
+            .collect();
+        let comment = self
+            .fetch_with(
+                "select comments from all_tab_comments where owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 and table_name = :1",
+                &t,
+            )
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|mut r| take(&mut r, 0));
+        Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment, options: None })
     }
 
     async fn named(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<NamedDef>> {

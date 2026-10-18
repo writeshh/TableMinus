@@ -19,6 +19,7 @@
         <string>mariadb</string>
         <string>sqlserver</string>
         <string>clickhouse</string>
+        <string>oracle</string>
         <string>libsql</string>
         <string>mongodb</string>
         <string>mongodb+srv</string>

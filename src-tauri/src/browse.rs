@@ -110,6 +110,8 @@ pub(crate) fn page_clause(d: Dialect, rows: &str, ordered: bool, limit: u32, off
     if d == Dialect::Mssql {
         let order = if ordered { "" } else { " order by (select null)" };
         format!("{rows}{order} offset {offset} rows fetch next {limit} rows only")
+    } else if d == Dialect::Ora {
+        format!("{rows} offset {offset} rows fetch next {limit} rows only")
     } else {
         format!("{rows} limit {limit} offset {offset}")
     }
@@ -145,6 +147,7 @@ impl Conn {
             Dialect::Duck => format!("cast({c} as varchar)"),
             Dialect::Mssql => format!("cast({c} as nvarchar(max))"),
             Dialect::Click => format!("toString({c})"),
+            Dialect::Ora => format!("to_char({c})"),
         }
     }
 
@@ -292,10 +295,11 @@ impl Conn {
         let expr = match self.dialect() {
             Dialect::Pg => "ctid::text",
             Dialect::Lite => "rowid",
+            Dialect::Ora => "rowidtochar(rowid)",
             // DuckDB's rowid moves when rows are updated, so it can't name a row to edit later.
             Dialect::My | Dialect::Duck | Dialect::Mssql | Dialect::Click => return None,
         };
-        self.fetch_with(&format!("select {expr} from {from} limit 0"), &[]).await.ok().map(|_| expr)
+        self.fetch_with(&format!("select {expr} from {from} where 1 = 0"), &[]).await.ok().map(|_| expr)
     }
 
     /// The total from a [`Select::count`] query.

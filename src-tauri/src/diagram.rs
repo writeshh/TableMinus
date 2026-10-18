@@ -146,6 +146,25 @@ const CLICK: &str = "select 'c', c.table, c.name, c.type, if(c.is_in_primary_key
      toString(c.position) from system.columns c join system.tables t on t.database = c.database and t.name = c.table \
      where c.database = currentDatabase()";
 
+/// Oracle: the current schema's tables and views, then its foreign keys, columns joined by `SEP`.
+const ORA: &str = "select 'c', c.table_name, c.column_name, c.data_type, \
+     case when exists (select 1 from all_constraints k join all_cons_columns kc \
+       on kc.owner = k.owner and kc.constraint_name = k.constraint_name \
+       where k.constraint_type = 'P' and k.owner = c.owner and k.table_name = c.table_name \
+       and kc.column_name = c.column_name) then 'true' else 'false' end, \
+     case when c.nullable = 'Y' then 'true' else 'false' end, \
+     case when exists (select 1 from all_views v where v.owner = c.owner and v.view_name = c.table_name) \
+       then 'true' else 'false' end, to_char(c.column_id) \
+     from all_tab_columns c where c.owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+       and c.table_name not like 'BIN$%' \
+     union all select 'f', k.table_name, k.constraint_name, \
+     (select listagg(kc.column_name, chr(31)) within group (order by kc.position) from all_cons_columns kc \
+       where kc.owner = k.owner and kc.constraint_name = k.constraint_name), \
+     (select r.table_name from all_constraints r where r.owner = k.r_owner and r.constraint_name = k.r_constraint_name), \
+     (select listagg(rc.column_name, chr(31)) within group (order by rc.position) from all_cons_columns rc \
+       where rc.owner = k.r_owner and rc.constraint_name = k.r_constraint_name), null, '0' \
+     from all_constraints k where k.constraint_type = 'R' and k.owner = sys_context('USERENV', 'CURRENT_SCHEMA')";
+
 fn list(cell: Option<String>) -> Vec<String> {
     cell.map(|c| c.split(SEP).map(String::from).collect()).unwrap_or_default()
 }
@@ -193,6 +212,7 @@ impl Conn {
             Dialect::Duck => self.fetch_with(DUCK, &[]).await?,
             Dialect::Mssql => self.fetch_with(MSSQL, &[]).await?,
             Dialect::Click => self.fetch_with(CLICK, &[]).await?,
+            Dialect::Ora => self.fetch_with(ORA, &[]).await?,
         };
         Ok(assemble(rows))
     }

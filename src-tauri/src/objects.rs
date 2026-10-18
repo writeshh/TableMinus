@@ -91,6 +91,9 @@ fn or_replace(def: &str) -> String {
 
 pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, create: bool) -> Result<Vec<String>> {
     let what = routine_word(kind)?;
+    if d == Dialect::Ora {
+        return Ok(vec![plsql(definition)?]);
+    }
     let def = statement(definition, "the definition is empty")?;
     match d {
         Dialect::Pg => Ok(vec![def]),
@@ -98,8 +101,20 @@ pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, cre
         Dialect::My => Ok(vec![format!("DROP {what} IF EXISTS {}", d.ident(name)), def]),
         // ClickHouse keeps the plain CREATE FUNCTION it was made with; saving replaces it.
         Dialect::Click if kind == ItemKind::Function => Ok(vec![if create { def } else { or_replace(&def) }]),
-        Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => Err(NO_ROUTINES),
+        Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click | Dialect::Ora => Err(NO_ROUTINES),
     }
+}
+
+/// An Oracle routine as one CREATE OR REPLACE: PL/SQL keeps the semicolon after its END, and loses the `/` line
+/// SQL*Plus ends it with.
+fn plsql(definition: &str) -> Result<String> {
+    let def = definition.trim();
+    let def = def.strip_suffix('/').unwrap_or(def).trim_end();
+    if def.is_empty() {
+        return Err(Error::Invalid("the definition is empty"));
+    }
+    let def = or_replace(def);
+    Ok(if def.ends_with(';') { def } else { format!("{def};") })
 }
 
 /// The starting text for a new function or procedure.
@@ -115,6 +130,10 @@ pub fn routine_template(d: Dialect, kind: ItemKind, name: &str) -> Result<String
         (Dialect::My, ItemKind::Function) => format!("CREATE FUNCTION {t}()\nRETURNS int\nDETERMINISTIC\nRETURN 1"),
         (Dialect::My, ItemKind::Procedure) => format!("CREATE PROCEDURE {t}()\nBEGIN\n  SELECT 1;\nEND"),
         (Dialect::Click, ItemKind::Function) => format!("CREATE FUNCTION {t} AS (x) -> x + 1"),
+        (Dialect::Ora, ItemKind::Function) => {
+            format!("CREATE FUNCTION {t}\nRETURN NUMBER IS\nBEGIN\n  RETURN 1;\nEND;")
+        }
+        (Dialect::Ora, ItemKind::Procedure) => format!("CREATE PROCEDURE {t} IS\nBEGIN\n  NULL;\nEND;"),
         (Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click, _) => return Err(NO_ROUTINES),
         _ => return Err(Error::Invalid("not a function or procedure")),
     })
@@ -281,10 +300,20 @@ impl Conn {
                 )
                 .await?
             }
+            // all_views keeps the text as a LONG; DBMS_METADATA writes the whole statement as a CLOB.
+            Dialect::Ora => {
+                self.fetch_with(
+                    "select dbms_metadata.get_ddl(object_type, object_name, owner) from all_objects \
+                     where owner = sys_context('USERENV', 'CURRENT_SCHEMA') and object_name = :1 \
+                     and object_type in ('VIEW', 'MATERIALIZED VIEW')",
+                    &[Some(view)],
+                )
+                .await?
+            }
         };
         let text = body.into_iter().next().and_then(|mut r| r.pop().flatten()).ok_or(Error::Invalid("no such view"))?;
-        // SQLite, DuckDB and SQL Server keep the whole CREATE VIEW statement.
-        let text = if matches!(self.dialect(), Dialect::Lite | Dialect::Duck | Dialect::Mssql) {
+        // SQLite, DuckDB, SQL Server and Oracle keep the whole CREATE VIEW statement.
+        let text = if matches!(self.dialect(), Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Ora) {
             sqlite_view_body(&text).ok_or(Error::Invalid("can't find the SELECT in this view's definition"))?
         } else {
             &text
@@ -325,6 +354,13 @@ impl Conn {
                 self.fetch_with(
                     "select create_query from system.functions where origin = 'SQLUserDefined' and name = {p1:String}",
                     &[Some(name)],
+                )
+                .await?
+            }
+            Dialect::Ora => {
+                self.fetch_with(
+                    "select dbms_metadata.get_ddl(:1, :2, sys_context('USERENV', 'CURRENT_SCHEMA')) from dual",
+                    &[Some(what), Some(name)],
                 )
                 .await?
             }
@@ -403,7 +439,7 @@ impl Conn {
                             .map(|mut r| format!("DROP {what} {t}({}){cascade}", r.pop().flatten().unwrap_or_default()))
                             .collect()
                     }
-                    Dialect::My => vec![format!("DROP {what} {t}")],
+                    Dialect::My | Dialect::Ora => vec![format!("DROP {what} {t}")],
                     Dialect::Click if kind == ItemKind::Function => vec![format!("DROP FUNCTION {t}")],
                     Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
                 }

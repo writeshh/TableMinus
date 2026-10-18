@@ -92,6 +92,9 @@ pub enum Error {
     /// `DynamoDB`'s own error (its type and message), or a value typed in `PartiQL` that couldn't be read.
     #[error("DynamoDB: {0}")]
     Dynamo(String),
+    /// Oracle's own error (`ORA-…`), or the driver's.
+    #[error("Oracle: {0}")]
+    Oracle(String),
     /// Cassandra's own error, or the driver's.
     #[error("Cassandra: {0}")]
     Cassandra(String),

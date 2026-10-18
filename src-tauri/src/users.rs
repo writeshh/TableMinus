@@ -411,6 +411,7 @@ async fn load(conn: &mut Conn, engine: Engine) -> Result<Accounts> {
             Err(Error::Invalid("Elasticsearch users are managed in the console: GET /_security/user"))
         }
         Engine::Cassandra => Err(Error::Invalid("Cassandra roles are managed in the console: LIST ROLES, CREATE ROLE")),
+        Engine::Oracle => Err(Error::Invalid("Oracle users are managed in a SQL tab: CREATE USER, GRANT")),
     }
 }
 
@@ -736,6 +737,7 @@ pub async fn user_privileges(
             Err(Error::Invalid("Elasticsearch users are managed in the console: GET /_security/user"))
         }
         Engine::Cassandra => Err(Error::Invalid("Cassandra roles are managed in the console: LIST ROLES, CREATE ROLE")),
+        Engine::Oracle => Err(Error::Invalid("Oracle users are managed in a SQL tab: CREATE USER, GRANT")),
     };
     Ok(grants(live.check(r)?))
 }

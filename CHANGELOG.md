@@ -6,7 +6,8 @@ version in `src-tauri/tauri.conf.json`.
 
 ## [Unreleased]
 
-- New engines: MongoDB (collections, a document grid with edits, and a shell in mongosh syntax), Amazon DynamoDB
+- New engines: Oracle (through Oracle Instant Client, which you install: tables, views, functions and procedures,
+  structure editing, PL/SQL scripts, Explain), MongoDB (collections, a document grid with edits, and a shell in mongosh syntax), Amazon DynamoDB
   (tables, items with edits, and PartiQL), Elasticsearch (indices, documents with edits, SQL and Dev Tools-style
   requests), Cassandra (keyspaces, rows as JSON with edits, and CQL), libSQL / Turso, and Cloudflare D1.
 - In-app updates: TableMinus checks for a new version at startup (Settings › General can turn that off, or take

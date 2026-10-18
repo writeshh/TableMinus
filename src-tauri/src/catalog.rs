@@ -105,6 +105,15 @@ impl Conn {
                  and engine in ('View', 'MaterializedView', 'LiveView', 'WindowView') \
                  union all select 'function', name from system.functions where origin = 'SQLUserDefined' order by 1, 2"
                 .into(),
+            Dialect::Ora => "select 'view', view_name from all_views where owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 union all select 'matview', mview_name from all_mviews where owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 union all select 'sequence', sequence_name from all_sequences \
+                   where sequence_owner = sys_context('USERENV', 'CURRENT_SCHEMA') and sequence_name not like 'ISEQ$$%' \
+                 union all select lower(object_type), object_name from all_objects \
+                   where owner = sys_context('USERENV', 'CURRENT_SCHEMA') and object_type in ('FUNCTION', 'PROCEDURE') \
+                 union all select 'type', type_name from all_types where owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 order by 1, 2"
+                .into(),
             // Views only: SQL Server's routines and sequences have no editors here either.
             Dialect::Mssql => "select 'view', case when s.name = 'dbo' then v.name else s.name + '.' + v.name end \
                  from sys.views v join sys.schemas s on s.schema_id = v.schema_id where v.is_ms_shipped = 0 order by 2"
@@ -216,6 +225,20 @@ impl Conn {
                 let row = r.into_iter().next().ok_or(Error::Invalid("no such table"))?;
                 let num = |i: usize| row.get(i).cloned().flatten().and_then(|n| n.parse::<u64>().ok());
                 Ok(Overview { rows: num(0), estimated: false, bytes: num(1), created: row.get(2).cloned().flatten() })
+            }
+            // Oracle's count is the statistics' (refreshed by its jobs, or DBMS_STATS); the size needs DBA views.
+            Dialect::Ora => {
+                let r = self
+                    .fetch_with(
+                        "select t.num_rows, to_char(o.created, 'YYYY-MM-DD HH24:MI:SS') from all_tables t \
+                         join all_objects o on o.owner = t.owner and o.object_name = t.table_name and o.object_type = 'TABLE' \
+                         where t.owner = sys_context('USERENV', 'CURRENT_SCHEMA') and t.table_name = :1",
+                        &[Some(table)],
+                    )
+                    .await?;
+                let row = r.into_iter().next().ok_or(Error::Invalid("no such table"))?;
+                let rows = row.first().cloned().flatten().and_then(|n| n.parse::<u64>().ok());
+                Ok(Overview { rows, estimated: true, bytes: None, created: row.get(1).cloned().flatten() })
             }
             Dialect::Lite | Dialect::Duck => {
                 let count = format!("select count(*) from {}", self.table_ident(table));

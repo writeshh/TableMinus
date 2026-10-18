@@ -113,6 +113,8 @@ const ENGINES: Engine[] = [
     defaults: { host: "127.0.0.1", port: "1433", user: "sa", database: "" } },
   { id: "clickhouse", kind: "clickhouse", label: "ClickHouse", mono: "Ch", color: "var(--yellow)",
     defaults: { host: "127.0.0.1", port: "8123", user: "default", database: "" } },
+  { id: "oracle", kind: "oracle", label: "Oracle", mono: "Or", color: "var(--danger)",
+    defaults: { host: "127.0.0.1", port: "1521", user: "system", database: "FREEPDB1" } },
   { id: "libsql", kind: "libsql", label: "libSQL / Turso", mono: "Ls", color: "var(--ok)",
     defaults: { host: "127.0.0.1", port: "", user: "", database: "" } },
   { id: "d1", kind: "d1", label: "Cloudflare D1", mono: "D1", color: "var(--orange)",
@@ -141,6 +143,11 @@ const FORM_SHAPES: Record<string, { hide: string[]; label?: Record<string, strin
     hide: [],
     label: { user: "Access key ID", password: "Secret access key", database: "Region" },
     placeholder: { host: "dynamodb.us-east-1.amazonaws.com, or localhost for DynamoDB Local", port: "443, or 8000 for DynamoDB Local" },
+  },
+  oracle: {
+    hide: [],
+    label: { database: "Service name" },
+    placeholder: { database: "FREEPDB1, ORCLPDB1 or XEPDB1" },
   },
   cassandra: {
     hide: [],
@@ -668,7 +675,7 @@ function formToSaved(): Saved {
     const port = field("port").value.trim() || d.port;
     const user = field("user").value.trim() || d.user;
     const db = field("database").value.trim() || d.database;
-    const scheme = ["postgres", "redis", "mssql", "clickhouse", "libsql", "elasticsearch", "cassandra"].includes(editingKind) ? editingKind : "mysql";
+    const scheme = ["postgres", "redis", "mssql", "clickhouse", "oracle", "libsql", "elasticsearch", "cassandra"].includes(editingKind) ? editingKind : "mysql";
     if (editingKind === "redis" && !/^\d+$/.test(db || "0")) throw "A Redis database is a number, such as 0.";
     if (editingKind === "d1") {
       if (!/^[\w-]+$/.test(user) || !/^[\w-]+$/.test(db)) throw "Enter the Cloudflare account ID and the D1 database ID.";
@@ -3593,8 +3600,10 @@ $("run-all").onclick = runAll;
 $("explain").onclick = async () => {
   const sql = editor.current();
   if (!sql.trim() || !active) return;
-  // SQL Server shows a plan through a session setting, in a batch of its own on each side of the statement.
+  // SQL Server shows a plan through a session setting, in a batch of its own on each side of the statement; Oracle
+  // stores it in its plan table, which DBMS_XPLAN prints.
   const explain = active.kind === "mssql" ? `SET SHOWPLAN_TEXT ON\nGO\n${sql}\nGO\nSET SHOWPLAN_TEXT OFF`
+    : active.kind === "oracle" ? `EXPLAIN PLAN FOR ${sql.trim().replace(/;$/, "")};\nSELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY())`
     : (sqlKind(active.kind) === "sqlite" ? "explain query plan " : "explain ") + sql;
   const filled = await withParams([explain]);
   if (filled) execute(filled);
@@ -3747,8 +3756,8 @@ const hasTools = () => inWorkspace() && !!active;
 // CockroachDB has no pg_dump or pg_restore, and its roles take other attributes than Postgres's.
 // SQL Server and ClickHouse back up with their own statements.
 // libSQL and D1 have their own (turso db shell .dump, wrangler d1 export).
-const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
-const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
+const dumps = (c: Saved) => c.flavor !== "cockroach" && !["duckdb", "mssql", "clickhouse", "oracle", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
+const managesUsers = (c: Saved) => !isFile(c.kind) && c.flavor !== "cockroach" && !["mssql", "clickhouse", "oracle", "libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
 /** Engines with sessions to list and stop. */
 const hasProcesses = (c: Saved) => !isFile(c.kind) && !["libsql", "d1", "mongodb", "dynamodb", "elasticsearch", "cassandra"].includes(c.kind);
 addCommands([

@@ -205,7 +205,7 @@ fn find<'a>(d: Dialect, t: &Target<'a>, types: &HashMap<String, String>, parts: 
     if let Some(id) = id {
         let column = match d {
             Dialect::Pg => "ctid",
-            Dialect::Lite => "rowid",
+            Dialect::Lite | Dialect::Ora => "rowid",
             Dialect::My | Dialect::Duck | Dialect::Mssql | Dialect::Click => {
                 return Err(Error::Invalid("this engine has no row identity"));
             }
@@ -320,11 +320,16 @@ impl Statement<'_> {
                 Param::Text(v) => (mark, v.map(Cow::Borrowed)),
                 // SQLite compares a text parameter with rowid as text, which never matches.
                 Param::RowId(v) if d == Dialect::Lite => (format!("cast({mark} as integer)"), Some(Cow::Borrowed(v))),
+                Param::RowId(v) if d == Dialect::Ora => (format!("chartorowid({mark})"), Some(Cow::Borrowed(v))),
                 Param::RowId(v) => (mark, Some(Cow::Borrowed(v))),
                 Param::File(path) => {
                     let hex = files.get(path).ok_or(Error::Invalid("a file was not read before saving"))?;
-                    let decode =
-                        if d == Dialect::Pg { format!("decode({mark}, 'hex')") } else { format!("unhex({mark})") };
+                    // ponytail: Oracle's hextoraw holds 2,000 bytes in SQL; a bigger file needs a LOB write.
+                    let decode = match d {
+                        Dialect::Pg => format!("decode({mark}, 'hex')"),
+                        Dialect::Ora => format!("to_blob(hextoraw({mark}))"),
+                        _ => format!("unhex({mark})"),
+                    };
                     (decode, Some(Cow::Borrowed(hex.as_str())))
                 }
             };
@@ -472,6 +477,8 @@ impl Conn {
                 format!("select convert(varchar(max), substring({c}, 1, {HEX_PREVIEW}), 2), datalength({c})")
             }
             Dialect::Click => format!("select hex(substring({c}, 1, {HEX_PREVIEW})), length({c})"),
+            // A BLOB's start; RAW columns already show as hex. SQL's RAW holds 2,000 bytes.
+            Dialect::Ora => format!("select rawtohex(dbms_lob.substr({c}, 2000, 1)), dbms_lob.getlength({c})"),
             Dialect::Lite => format!("select hex(substr({c}, 1, {HEX_PREVIEW})), length(cast({c} as blob))"),
         };
         let mut parts = vec![Part::Sql(format!("{select} from {}", d.table_ident(table)))];
@@ -519,7 +526,7 @@ impl Conn {
                     }
                 }
             }
-            Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => {}
+            Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click | Dialect::Ora => {}
         }
         Ok(out)
     }

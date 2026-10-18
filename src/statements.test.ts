@@ -74,3 +74,13 @@ test("sourceTable refuses what doesn't map onto one table's rows", () => {
   assert.equal(sourceTable("select * from unknown", tables), null);
   assert.equal(sourceTable("update people set a = 1", tables), null);
 });
+
+test("keeps an Oracle PL/SQL block whole, its last semicolon included, until its slash", () => {
+  const sql = "create table t (a number);\nCREATE OR REPLACE PROCEDURE p AS\nBEGIN\n  NULL;\nEND;\n/\nselect 1 / 2 from dual;\nbegin\n  null;\nend;";
+  assert.deepEqual(splitStatements(sql, "oracle").map((s) => s.text), [
+    "create table t (a number)",
+    "CREATE OR REPLACE PROCEDURE p AS\nBEGIN\n  NULL;\nEND;",
+    "select 1 / 2 from dual",
+    "begin\n  null;\nend;",
+  ]);
+});

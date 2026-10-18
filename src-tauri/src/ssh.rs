@@ -92,6 +92,7 @@ pub async fn open_for(engine: Engine, url: &str, ssh: &Ssh, secret: Option<&Secr
         Engine::Mongodb => 27017,
         Engine::Elasticsearch => 9200,
         Engine::Cassandra => 9042,
+        Engine::Oracle => 1521,
         Engine::Mssql => 1433,
         Engine::Clickhouse => 8123,
         Engine::Libsql | Engine::Dynamodb => 443,

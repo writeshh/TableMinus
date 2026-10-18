@@ -18,7 +18,7 @@ npm run bundle           # check, audit, MCP bridge, then .app/.dmg on macOS (.d
 
 `npm run bundle -- --skip-checks` skips the checks; `-- --target <triple>` cross-builds. Bundles land in `src-tauri/target/release/bundle/` (`target/<triple>/release/bundle/` when cross-building), with the `tableminus-mcp` bridge next to the app's executable.
 
-Rust comes from `rustup`, Node from anywhere, at 22.12 or later (Vite's bundler needs it). On Linux, Tauri also needs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `librsvg2-dev`, and `libdbus-1-dev` for the keychain.
+Rust comes from `rustup`, Node from anywhere, at 22.12 or later (Vite's bundler needs it). Oracle connections need [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client.html) (Basic or Basic Light, 19 or later), at run time only: the app loads it from `ORACLE_CLIENT_LIB_DIR` when set, else from an `instantclient_*` folder in Downloads (where its installer puts it), your home folder, `/opt/oracle` or `/usr/local/lib`, else from the system's library path. On Linux, Tauri also needs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `librsvg2-dev`, and `libdbus-1-dev` for the keychain.
 
 ## Release
 

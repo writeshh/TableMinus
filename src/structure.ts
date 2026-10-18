@@ -78,12 +78,14 @@ const TYPES: Record<string, string[]> = {
   clickhouse: ["UInt8", "UInt16", "UInt32", "UInt64", "Int8", "Int16", "Int32", "Int64", "Float32", "Float64", "Decimal(18, 2)", "String",
     "FixedString(16)", "Date", "DateTime", "DateTime64(3)", "UUID", "Bool", "Array(String)", "Nullable(String)", "LowCardinality(String)",
     "Map(String, String)", "JSON"],
+  oracle: ["NUMBER(10)", "NUMBER(19)", "NUMBER(10,2)", "NUMBER", "VARCHAR2(255)", "VARCHAR2(4000)", "NVARCHAR2(255)", "CHAR(1)",
+    "CLOB", "BLOB", "RAW(16)", "DATE", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "BINARY_DOUBLE", "BOOLEAN", "JSON"],
   duckdb: ["INTEGER", "BIGINT", "SMALLINT", "VARCHAR", "BOOLEAN", "DECIMAL(18,3)", "DOUBLE", "REAL", "DATE", "TIMESTAMP",
     "TIMESTAMPTZ", "TIME", "INTERVAL", "UUID", "JSON", "BLOB"],
 };
 const kind = () => (host.conn()?.kind === "mariadb" ? "mysql" : sqlKind(host.conn()?.kind ?? "postgres"));
 /** Index methods to choose from when adding one (`ddl::IndexMethod`); SQLite has none. */
-const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [], duckdb: [], mssql: [], clickhouse: [] };
+const METHODS: Record<string, string[]> = { postgres: ["btree", "hash", "gist", "gin", "brin", "spgist"], mysql: ["btree", "hash"], sqlite: [], duckdb: [], mssql: [], clickhouse: [], oracle: [] };
 const blank = (s: string | null | undefined) => (s ?? "").trim() || null;
 const shortName = (table: string) => (kind() === "postgres" ? table.split(".").slice(1).join(".") || table : table);
 
@@ -262,7 +264,7 @@ export async function showStructure(out: HTMLElement, tabId: number, table: stri
         columns: [{ ...newColumn(), name: "id", primary: true, nullable: false }], indexes: [], fks: [], checks: [], triggers: [],
       };
       if (!["sqlite", "duckdb", "clickhouse"].includes(kind())) d.columns[0].auto_increment = true; // these have none
-      d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER", duckdb: "BIGINT", mssql: "bigint", clickhouse: "UInt64" }[kind()]!;
+      d.columns[0].data_type = { postgres: "bigint", mysql: "bigint", sqlite: "INTEGER", duckdb: "BIGINT", mssql: "bigint", clickhouse: "UInt64", oracle: "NUMBER(19)" }[kind()]!;
       drafts.set(tabId, d);
       host.pendingChanged(); // the footer was drawn before this draft existed
     } else {
@@ -309,7 +311,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
   // Columns
   const types = el("datalist", { id: `types-${tabId}` }, ...TYPES[kind()].map((t) => el("option", { value: t })));
   // A new table takes the drafted order; MySQL and SQLite can also move an existing table's columns.
-  const movable = d.create || !["postgres", "duckdb", "mssql", "clickhouse"].includes(kind()); // MySQL moves them; SQLite rebuilds the table
+  const movable = d.create || !["postgres", "duckdb", "mssql", "clickhouse", "oracle"].includes(kind()); // MySQL moves them; SQLite rebuilds the table
   const moveButtons = (c: ColumnDraft) => {
     const shown = d.columns.filter((x) => !x.dropped);
     const i = shown.indexOf(c);
@@ -415,7 +417,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
 /** Postgres triggers call a function; MySQL and SQLite run statements (SQLite's go inside BEGIN … END). */
 const TRIGGER_BODY: Record<string, string> = {
   postgres: "Function to call, e.g. audit()", mysql: "Statement, e.g. SET NEW.updated_at = NOW()", sqlite: "Statements, e.g. UPDATE …;",
-  duckdb: "", mssql: "", clickhouse: "",
+  duckdb: "", mssql: "", clickhouse: "", oracle: "PL/SQL, e.g. :new.updated_at := SYSDATE;",
 };
 
 /** Triggers: an existing one can be dropped, or edited (dropped, and added again as changed); added ones are forms. */
@@ -745,12 +747,14 @@ export function tableMenu(table: string): MenuItem[] {
     ["Truncate…", async () => {
       const fields: Field[] = k === "postgres"
         ? [{ key: "restart_identity", label: "Restart identity (auto-increment)", value: false }, { key: "cascade", label: "Cascade to tables that reference it", value: false }]
-        : k === "sqlite" ? [{ key: "restart_identity", label: "Reset auto-increment", value: false }] : k === "duckdb" || k === "clickhouse" ? [] : fkField;
+        : k === "sqlite" ? [{ key: "restart_identity", label: "Reset auto-increment", value: false }] : k === "duckdb" || k === "clickhouse" ? []
+        : k === "oracle" ? [{ key: "cascade", label: "Cascade to tables whose keys say ON DELETE CASCADE", value: false }] : fkField;
       const v = fields.length ? await ask(`Truncate ${table}`, fields, "Truncate…") : {};
       if (v) runOp(`Truncate ${table}`, { op: "truncate", table, cascade: !!v.cascade, restart_identity: !!v.restart_identity, ignore_fk: !!v.ignore_fk }, "Delete all rows", true);
     }],
     ["Drop…", async () => {
-      const fields: Field[] = k === "postgres" ? [{ key: "cascade", label: "Cascade: also drop what depends on it", value: false }] : fkField;
+      const fields: Field[] = k === "postgres" ? [{ key: "cascade", label: "Cascade: also drop what depends on it", value: false }]
+        : k === "oracle" ? [{ key: "cascade", label: "Cascade constraints: also drop the foreign keys that reference it", value: false }] : fkField;
       const v = fields.length ? await ask(`Drop ${table}`, fields, "Drop…") : {};
       if (v) runOp(`Drop ${table}`, { op: "drop", table, cascade: !!v.cascade, ignore_fk: !!v.ignore_fk }, "Drop", true, () => host.forgetTable(table));
     }],

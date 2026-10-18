@@ -7,6 +7,7 @@ use crate::driver::duckdb::DuckDb;
 use crate::driver::libsql::Libsql;
 use crate::driver::mssql::SqlServer;
 use crate::driver::mysql::Mysql;
+use crate::driver::oracle::Oracle;
 use crate::driver::postgres::{Postgres, cockroach_version};
 use crate::driver::sqlite::Sqlite;
 use crate::driver::{Driver, Results};
@@ -44,6 +45,7 @@ pub enum Engine {
     Elasticsearch,
     /// CQL: opened through `cassandra_connect` (cassandra/mod.rs).
     Cassandra,
+    Oracle,
 }
 
 /// Per-connection options beyond host, user and TLS. Engine-specific ones are ignored by other engines.
@@ -125,6 +127,7 @@ pub enum Dialect {
     Duck,
     Mssql,
     Click,
+    Ora,
 }
 
 impl Dialect {
@@ -160,7 +163,7 @@ impl Dialect {
         match self {
             Dialect::Pg => format!("E'{}'", quoted.replace('\\', "\\\\")),
             Dialect::My => format!("'{}'", quoted.replace('\\', "\\\\")),
-            Dialect::Lite | Dialect::Duck => format!("'{quoted}'"),
+            Dialect::Lite | Dialect::Duck | Dialect::Ora => format!("'{quoted}'"),
             // N'…' keeps characters outside the database's code page; a backslash is only a backslash.
             Dialect::Mssql => format!("N'{quoted}'"),
             // Backslash escapes, and the quote escaped that way rather than doubled.
@@ -174,6 +177,7 @@ impl Dialect {
             Dialect::My => "?".into(),
             Dialect::Mssql => format!("@P{n}"),
             Dialect::Click => format!("{{p{n}:String}}"),
+            Dialect::Ora => format!(":{n}"),
             _ => format!("${n}"),
         }
     }
@@ -222,6 +226,7 @@ impl Conn {
                 Engine::Duckdb => Box::new(DuckDb::open(url)?),
                 Engine::Clickhouse => Box::new(ClickHouse::open(url, password, tls, options, tunnel_port).await?),
                 Engine::Libsql => Box::new(Libsql::open(url, password, tls, options, tunnel_port).await?),
+                Engine::Oracle => Box::new(Oracle::open(url, password, tls, options, tunnel_port).await?),
                 Engine::D1 => Box::new(D1::open(url, password, tls).await?),
                 // Boxed: tiberius's connect future is big.
                 Engine::Mssql => Box::new(Box::pin(SqlServer::open(url, password, tls, options, tunnel_port)).await?),
@@ -279,6 +284,9 @@ impl Conn {
             }
             Dialect::Mssql => self
                 .scalar("select case when encrypt_option = 'TRUE' then 'TLS' end from sys.dm_exec_connections where session_id = @@spid")
+                .await?,
+            Dialect::Ora => self
+                .scalar("select case when sys_context('USERENV', 'NETWORK_PROTOCOL') = 'tcps' then 'TLS' end from dual")
                 .await?,
             Dialect::Lite | Dialect::Duck | Dialect::Click => None,
         };
@@ -357,6 +365,10 @@ impl Conn {
                 "select case when table_schema = 'dbo' then table_name else table_schema + '.' + table_name end, \
                  column_name from information_schema.columns order by table_schema, table_name, ordinal_position"
             }
+            Dialect::Ora => {
+                "select table_name, column_name from all_tab_columns \
+                 where owner = sys_context('USERENV', 'CURRENT_SCHEMA') order by table_name, column_id"
+            }
             Dialect::Click => {
                 "select table, name from system.columns where database = currentDatabase() order by table, position"
             }
@@ -415,6 +427,11 @@ impl Conn {
                 "select name from system.databases \
                  where name not in ('INFORMATION_SCHEMA', 'information_schema', 'system') order by name"
             }
+            // Oracle's schemas, those holding the users' own objects, stand in for databases.
+            Dialect::Ora => {
+                "select username from all_users where oracle_maintained = 'N' \
+                 or username = sys_context('USERENV', 'CURRENT_SCHEMA') order by 1"
+            }
             Dialect::Lite | Dialect::Duck => return Ok(vec![]),
         };
         Ok(self.query(sql).await?.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())
@@ -427,6 +444,7 @@ impl Conn {
             Dialect::My => self.scalar("select database()").await,
             Dialect::Mssql => self.scalar("select db_name()").await,
             Dialect::Click => self.scalar("select currentDatabase()").await,
+            Dialect::Ora => self.scalar("select sys_context('USERENV', 'CURRENT_SCHEMA') from dual").await,
             Dialect::Lite | Dialect::Duck => Ok(None),
         }
     }
@@ -446,6 +464,7 @@ impl Conn {
             Dialect::Duck => ("DuckDB", "select version()"),
             Dialect::Mssql => ("SQL Server", "select cast(serverproperty('ProductVersion') as nvarchar(50))"),
             Dialect::Click => ("ClickHouse", "select version()"),
+            Dialect::Ora => ("Oracle", "select version_full from product_component_version where rownum = 1"),
         };
         let v = self.scalar(sql).await?.unwrap_or_default();
         // MariaDB reports e.g. "11.4.2-MariaDB"; name it after what the server says it is.
@@ -459,7 +478,7 @@ impl Conn {
     /// MySQL switches in place; Postgres cannot change database within a session, so the caller reconnects.
     pub async fn use_database(&mut self, db: &str) -> Result<()> {
         match self.dialect() {
-            Dialect::Click => self.driver.use_database(db).await,
+            Dialect::Click | Dialect::Ora => self.driver.use_database(db).await,
             Dialect::My | Dialect::Mssql => {
                 let sql = format!("use {}", self.ident(db));
                 self.query(&sql).await.map(|_| ())
@@ -482,6 +501,7 @@ impl Conn {
     }
 
     /// Columns of `table` (`schema.table` for Postgres) in definition order.
+    #[expect(clippy::too_many_lines, reason = "one catalog query per engine")]
     pub async fn columns(&mut self, table: &str) -> Result<Vec<Column>> {
         let (sql, params) = match self.dialect() {
             Dialect::Pg => {
@@ -515,6 +535,21 @@ impl Conn {
             Dialect::Lite => (
                 "select name, type, case when \"notnull\" then 'NO' else 'YES' end, dflt_value, \
                  case when pk > 0 then 'PRI' else '' end from pragma_table_info($1)",
+                vec![Some(table)],
+            ),
+            Dialect::Ora => (
+                "select c.column_name, c.data_type || case \
+                 when c.data_type in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR') then '(' || c.char_length || ')' \
+                 when c.data_type = 'RAW' then '(' || c.data_length || ')' \
+                 when c.data_type = 'NUMBER' and c.data_precision is not null \
+                   then '(' || c.data_precision || ',' || c.data_scale || ')' end, \
+                 case when c.nullable = 'Y' then 'YES' else 'NO' end, null, \
+                 case when exists (select 1 from all_constraints k join all_cons_columns kc \
+                   on kc.owner = k.owner and kc.constraint_name = k.constraint_name \
+                   where k.constraint_type = 'P' and k.owner = c.owner and k.table_name = c.table_name \
+                   and kc.column_name = c.column_name) then 'PRI' end \
+                 from all_tab_columns c where c.owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 and c.table_name = :1 order by c.column_id",
                 vec![Some(table)],
             ),
             Dialect::Click => (
@@ -604,6 +639,12 @@ impl Conn {
                  order by case when table_schema = 'dbo' then 0 else 1 end, 1"
             }
             Dialect::Click => "select name from system.tables where database = currentDatabase() order by name",
+            // The recycle bin's dropped tables (BIN$…) stay out.
+            Dialect::Ora => {
+                "select table_name from all_tables where owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
+                 and dropped = 'NO' and nested = 'NO' and secondary = 'N' \
+                 union select view_name from all_views where owner = sys_context('USERENV', 'CURRENT_SCHEMA') order by 1"
+            }
         };
         let r = self.query(sql).await?;
         Ok(r.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())

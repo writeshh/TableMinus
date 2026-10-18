@@ -263,7 +263,7 @@ async fn structure(conn: &mut Conn, table: &str) -> Result<String> {
             Ok(format!("{};\n", sql.ok_or(Error::Invalid("no such table"))?))
         }
         // SQL Server and DuckDB have the statement written (SQL Server) or kept (DuckDB), with the indexes, by `ddl`.
-        Dialect::Duck | Dialect::Mssql | Dialect::Click => Ok(format!("{}\n", conn.ddl(table).await?)),
+        Dialect::Duck | Dialect::Mssql | Dialect::Click | Dialect::Ora => Ok(format!("{}\n", conn.ddl(table).await?)),
         // ponytail: Postgres has no SHOW CREATE TABLE, so this is rebuilt from the columns: types, NOT NULL,
         // defaults and the primary key, without other constraints or indexes. Backups (pg_dump) copy everything.
         Dialect::Pg => {

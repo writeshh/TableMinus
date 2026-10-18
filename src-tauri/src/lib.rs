@@ -545,6 +545,10 @@ async fn stop_query(
             cancel.notify_waiters();
             Ok(())
         }
+        db::Stopper::Ora(conn) => tokio::task::spawn_blocking(move || conn.break_execution())
+            .await
+            .map_err(|e| Error::Oracle(e.to_string()))?
+            .map_err(|e| Error::Oracle(e.to_string())),
     }
 }
 
@@ -577,6 +581,7 @@ async fn connection_info(open: State<'_, Open>, name: String) -> Result<Connecti
                 Engine::Dynamodb => "DynamoDB JSON API",
                 Engine::Elasticsearch => "Elasticsearch REST API",
                 Engine::Cassandra => "scylla (CQL native protocol)",
+                Engine::Oracle => "oracle-rs (TNS, in Rust)",
             },
             cipher: live.conn.tls_cipher().await?,
             ssh: live.saved.ssh.as_ref().map(|s| s.host.clone()),
