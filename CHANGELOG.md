@@ -4,7 +4,7 @@ What changed in each version of TableMinus. The app shows a version's section wh
 `scripts/latest-json.mjs` copies it into the release's `latest.json`: before a release, rename Unreleased to the
 version in `src-tauri/tauri.conf.json`.
 
-## [Unreleased]
+## 1.0.0
 
 - New engines: Oracle (through Oracle Instant Client, which you install: tables, views, functions and procedures,
   structure editing, PL/SQL scripts, Explain), Google BigQuery (a service account's key; datasets, tables with
