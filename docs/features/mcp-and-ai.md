@@ -1,10 +1,10 @@
 # MCP server and AI assistant
 
-**Purpose:** let AI agents read the user's databases safely (MCP, TODO §20, like TablePlus's `tableplus-mcp`), and offer an in-app assistant that writes SQL with the schema as context (TODO §19).
+**Purpose:** let AI agents read the user's databases safely (MCP, like TablePlus's `tableplus-mcp`), and offer an in-app assistant that writes SQL with the schema as context.
 
-**Status:** MCP done except remote access (deferred: REQ-R02). Assistant done for Anthropic, OpenAI-compatible endpoints and local ACP agents. GitHub Copilot isn't done. The proxy setting wasn't tried in the app window.
+**Status:** MCP done except remote access (deferred). Assistant done for Anthropic, OpenAI-compatible endpoints and local ACP agents. GitHub Copilot isn't done. The proxy setting wasn't tried in the app window.
 
-## MCP server (`src-tauri/src/mcp/`)
+## MCP server (`src-tauri/src/assistant/mcp/`)
 
 - Streamable HTTP on **127.0.0.1 only** (rmcp, stateless, no MCP sessions), on a preferred port with fallback to a free one.
 - **Tools:** `list_connections` (never shows URLs), `list_tables`, `describe_table`, `run_query` (row limit and query timeout apply).
@@ -27,5 +27,5 @@ Tests: `assistant/mcp/tests.rs` runs a real server on a free port against SQLite
 
 ## Constraints
 
-- The MCP server stays loopback-only until the owner decides otherwise (REQ-R02).
+- The MCP server stays loopback-only.
 - Don't give an agent a read-write path by default. Read-only tokens are the default for ACP agents.

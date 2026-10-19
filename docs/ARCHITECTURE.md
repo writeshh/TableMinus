@@ -1,6 +1,6 @@
 # Architecture
 
-How the code fits together, as of `12be348` (2026-10-18). Module-level detail is in each file's `//!` (Rust) or top comment (TypeScript); this page is the map.
+How the code fits together, as of version 1.0.0. Module-level detail is in each file's `//!` (Rust) or top comment (TypeScript); this page is the map.
 
 ## Shape
 
@@ -55,7 +55,7 @@ A new engine goes in `sql/driver/` or, when it isn't SQL, in `nosql/` (see [feat
 ## The backend boundary
 
 - **`lib.rs` is the only surface the UI can call.** Every `#[tauri::command]` is registered in one `generate_handler!` list. The webview runs with `withGlobalTauri: false` and a strict CSP (`tauri.conf.json`); capabilities are limited to window close/drag and the open/save dialogs (`capabilities/default.json`).
-- **Errors** are one `error::Error` enum (thiserror). They serialize as `{ code, message }`; `code` is set only for the errors the UI acts on (`confirm`, `password`, `disconnected`, `vault_locked`…). `src/ipc.ts` turns them into `AppError`, and the UI branches on `codeOf(e)`, never on message text (DEC-012).
+- **Errors** are one `error::Error` enum (thiserror). They serialize as `{ code, message }`; `code` is set only for the errors the UI acts on (`confirm`, `password`, `disconnected`, `vault_locked`…). `src/ipc.ts` turns them into `AppError`, and the UI branches on `codeOf(e)`, never on message text.
 - **Events** go from Rust to the UI for long work: `job-progress`/`job-done` (imports, exports), `backup-progress`/`backup-done`, `connection-lost` (keep-alive), `acp` (agent streaming), `mcp` (approvals and activity), `opened` (files and links the OS hands the app).
 
 ## SQL engines: `Conn`, `Driver`, `Dialect`
@@ -76,15 +76,15 @@ flowchart TB
   Driver --> BQ[bigquery.rs]
 ```
 
-- A driver only runs SQL and returns **every cell as text** (`Option<String>`). Everything above it (catalog queries, browse SQL with filters and paging, DDL generation, staged-row saves, export, import, diagram, users, processes) is written once in `sql/db.rs`, `sql/browse.rs`, `sql/ddl.rs`, `sql/rows.rs`, `sql/structure.rs`, `sql/catalog.rs`, `sql/objects.rs`… and matches on `Dialect` where SQL differs (DEC-005).
+- A driver only runs SQL and returns **every cell as text** (`Option<String>`). Everything above it (catalog queries, browse SQL with filters and paging, DDL generation, staged-row saves, export, import, diagram, users, processes) is written once in `sql/db.rs`, `sql/browse.rs`, `sql/ddl.rs`, `sql/rows.rs`, `sql/structure.rs`, `sql/catalog.rs`, `sql/objects.rs`… and matches on `Dialect` where SQL differs.
 - libSQL and D1 are SQLite underneath and use `Dialect::Lite`, so table rebuilds, structure editing and the grid come for free. CockroachDB is a Postgres connection with `flavor: "cockroach"`.
 - Adding an engine: [features/engines.md](features/engines.md).
 
 ## Sessions
 
-- **SQL:** `Open` holds `HashMap<session key, Arc<Mutex<Live>>>`. A `Live` is the saved connection, the URL in use, the password, the `Conn` and its SSH tunnel (the tunnel lives exactly as long as the connection). One lock per connection, so a slow query blocks only its own connection (DEC-007). The map lock is released before waiting on a connection's lock.
+- **SQL:** `Open` holds `HashMap<session key, Arc<Mutex<Live>>>`. A `Live` is the saved connection, the URL in use, the password, the `Conn` and its SSH tunnel (the tunnel lives exactly as long as the connection). One lock per connection, so a slow query blocks only its own connection. The map lock is released before waiting on a connection's lock.
 - **Session keys:** a workspace's first tab uses the saved connection's name; another database of the same connection in its own tab is `name\u{1f}n`. The MCP server uses the plain name, so it shares the first session.
-- **Not SQL:** Redis, MongoDB, DynamoDB, Elasticsearch and Cassandra each have their own session type and commands (`redis_*`, `mongo_*`…), kept in a generic `sessions::Sessions<S>` under the same keys (`nosql/sessions.rs`, commit `d164f67`).
+- **Not SQL:** Redis, MongoDB, DynamoDB, Elasticsearch and Cassandra each have their own session type and commands (`redis_*`, `mongo_*`…), kept in a generic `sessions::Sessions<S>` under the same keys (`nosql/sessions.rs`).
 - **Passcode lock:** `Open.locked`; while set, `Open::get` and the other session maps refuse every request, the MCP server's included. The app starts locked until it knows whether a passcode is set.
 - **Keep-alive:** a 30 s loop pings idle connections and emits `connection-lost` for ones that don't answer. Busy connections are skipped.
 - **Background jobs** (exports, imports, backups, the process list) open a **connection of their own**, so the workspace stays usable and a job can be cancelled independently.
@@ -122,7 +122,7 @@ Details: [features/safe-mode.md](features/safe-mode.md).
 - **Document view:** `nosql/docview.ts` is one grid-and-console view shared by MongoDB, DynamoDB, Elasticsearch and Cassandra through a small engine adapter each (`nosql/mongo.ts`, `nosql/dynamo.ts`, `nosql/elastic.ts`, `nosql/cassandra.ts`). Redis has its own view (`nosql/redis.ts`).
 - **Pure logic is kept out of DOM code** in `*-text.ts`, `editor/statements.ts`, `grid/staging.ts`, `metrics/chartdata.ts`, `database/diagram-layout.ts`… so `node --test` can test it.
 - **Grid:** `grid/vgrid.ts` renders only rows near the viewport; `grid/staging.ts` holds staged edits with undo/redo; saves go to `rows::save_rows` as one transaction.
-- **Settings** live in `settings.json` through `shell/prefs.ts`; localStorage only keeps a copy for a fast start, and the file wins (DEC-014).
+- **Settings** live in `settings.json` through `shell/prefs.ts`; localStorage only keeps a copy for a fast start, and the file wins.
 
 ## Sandboxes for user code
 
@@ -147,5 +147,5 @@ Details: [features/safe-mode.md](features/safe-mode.md).
 
 ## Where the code differs from the intent
 
-- `README.md`'s Layout table and `Cargo.toml`'s description still describe the three-engine app (ISSUE-001).
-- Some engines rest on the SQL parse alone for read-only safety because the server can't enforce it: SQL Server, libSQL, D1 (TODO §24, ISSUE-010).
+- `README.md`'s Layout table and `Cargo.toml`'s description still describe the three-engine app.
+- Some engines rest on the SQL parse alone for read-only safety because the server can't enforce it: SQL Server, libSQL, D1.

@@ -2,7 +2,7 @@
 
 Personal database client for macOS and Linux: Tauri 2, a Rust core, a plain TypeScript UI.
 
-- Engines: PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite (and SQLCipher), DuckDB, SQL Server, ClickHouse, libSQL/Turso, Cloudflare D1, Oracle, Redis, MongoDB, DynamoDB, Elasticsearch and Cassandra. Their depth varies; [TODO.md](TODO.md) §24 says what each does.
+- Engines: PostgreSQL, CockroachDB, MySQL, MariaDB, SQLite (and SQLCipher), DuckDB, SQL Server, ClickHouse, libSQL/Turso, Cloudflare D1, Oracle, Redis, MongoDB, DynamoDB, Elasticsearch and Cassandra. Their depth varies; [docs/features/engines.md](docs/features/engines.md) explains how engines are built.
 - Connections live in `connections.json` in the app config folder; passwords live in the OS keychain (macOS Keychain, Linux Secret Service), never in the file.
 - Safe mode: any query that `sqlparser` can't prove read-only asks for confirmation before it runs.
 
@@ -32,6 +32,10 @@ Rust comes from `rustup`, Node from anywhere, at 22.12 or later (Vite's bundler 
 4. Make a GitHub release tagged `v<version>` with the `.dmg`, the update file, its `.sig` and `latest.json`. The app
    checks `releases/latest/download/latest.json`; beta versions go to a release tagged `beta`.
 
-## Layout and documentation
+## Documentation
 
-How the code fits together is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); start with [docs/README.md](docs/README.md) for everything else (requirements, decisions, current state, tasks). Roadmap and feature status: [TODO.md](TODO.md). Coding rules: [docs/CONVENTIONS.md](docs/CONVENTIONS.md). AI agents start at [AGENTS.md](AGENTS.md).
+How the code fits together is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); [docs/README.md](docs/README.md) lists the rest.
+
+## Contributing
+
+Read [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for the coding rules and the commit message format (Conventional Commits), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for setup and tests. `npm run check` must pass before you open a pull request. Report bugs and ask for features through the [issue templates](.github/ISSUE_TEMPLATE); the pull request template lists what a change needs.

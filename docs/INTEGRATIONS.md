@@ -1,6 +1,6 @@
 # Integrations
 
-Everything outside the app that TableMinus talks to. Per-engine feature depth and test history are in [../TODO.md](../TODO.md) §24; this page covers how each connection works, its limits and how to test it locally. No credentials appear here. Test-server credentials are printed by `scripts/test-env.sh up` and live only in `scripts/test-env.yml`.
+Everything outside the app that TableMinus talks to. This page covers how each connection works, its limits and how to test it locally. No credentials appear here. Test-server credentials are printed by `scripts/test-env.sh up` and live only in `scripts/test-env.yml`.
 
 ## Database engines
 
@@ -25,13 +25,13 @@ All connections can go through an SSH tunnel (`connect/ssh.rs`, russh; known_hos
 | Elasticsearch, OpenSearch | own HTTP client | Basic auth or API key; TLS | Request class (SQL, GET, HEAD, search endpoints read) | compose 8.15 on 9200, security off |
 | Cassandra, ScyllaDB | scylla | CQL native protocol, password, TLS through rustls | Statement class (SELECT, DESCRIBE, LIST read) | compose Cassandra 5 on 9042 |
 
-Notable failure modes, all from TODO.md and commit history:
+Notable failure modes:
 
-- **Postgres over SSH** once failed with "invalid number of ports"; fixed in `3df5abd`, found through the Docker sshd.
+- **Postgres over SSH** once failed with "invalid number of ports"; found through the Docker sshd and fixed.
 - **MySQL over a Unix socket** with a TLS setting failed with "Packets out of sync"; a socket connection now ignores TLS.
 - **MySQL `LOAD DATA LOCAL INFILE`:** the server picks the file, so the client sends only the file the statement itself names, once.
 - **ClickHouse** holds a session's lock until the server notices a hang-up, so the next request may wait a few seconds after a cancelled one.
-- **Oracle** needs Instant Client 19 or later on the user's machine; without it the connection explains where to get it. Bundling it with the app is open (TASK-011).
+- **Oracle** needs Instant Client 19 or later on the user's machine; without it the connection explains where to get it. Bundling it with the app is open.
 - **BigQuery** compares a column only with a value of its own type, and the app binds every value as text, so the SQL casts each to its column's type. A transaction exists only inside a script, so it's queued and sent at commit, as D1's is. Sign-in to Google is unit-tested only (the emulator needs no key).
 - **D1** refuses `BEGIN`, so the driver queues a transaction's statements and sends them as one batch at commit.
 - **Cassandra in Docker or through a tunnel:** every node address is replaced by the one dialled (address translation), or the driver would try the containers' internal addresses.
@@ -55,7 +55,7 @@ Notable failure modes, all from TODO.md and commit history:
 - API keys and the proxy password are in the keychain (`dev.ritesh.tableminus.ai`).
 - An optional HTTP proxy (CONNECT tunnel) with Basic credentials.
 - The model sees the schema (tables, columns, types, foreign keys) and has one tool, `run_query`, which runs only on the user's approval, only when read-only, at most 50 rows.
-- Not done: GitHub Copilot (TODO §19).
+- Not done: GitHub Copilot.
 
 ## MCP clients
 

@@ -1,6 +1,6 @@
 # Feature documents
 
-Deep dives for features that cut across many files or carry safety rules. Most features don't need one: [../../TODO.md](../../TODO.md) describes each feature, its status and what was tried, and each module's top comment explains its code.
+Deep dives for features that cut across many files or carry safety rules. Most features don't need one: each module's top comment explains its code.
 
 | Document | Covers |
 | --- | --- |

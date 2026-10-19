@@ -1,8 +1,8 @@
 # Safe mode
 
-**Purpose:** keep the user from changing a database by accident: a write against production, a "read" that calls `nextval`, an AI agent's query. TablePlus's five levels, set per connection, enforced in Rust wherever SQL or a command runs. REQ-011, REQ-016.
+**Purpose:** keep the user from changing a database by accident: a write against production, a "read" that calls `nextval`, an AI agent's query. TablePlus's five levels, set per connection, enforced in Rust wherever SQL or a command runs.
 
-**Status:** done for every engine (TODO §18, §26). Live-tested on Postgres, MySQL and SQLite; the other engines by their own unit and live tests.
+**Status:** done for every engine. Live-tested on Postgres, MySQL and SQLite; the other engines by their own unit and live tests.
 
 ## Levels (`src-tauri/src/safety.rs`)
 
@@ -21,7 +21,7 @@ A default for new connections is in Settings › Security. Leaving a Safe level,
 1. **Is it read-only?** `readonly::is_read_only(engine, sql)` parses with sqlparser in the engine's dialect. Anything it can't prove read-only counts as a write. SELECTs calling a side-effect built-in (`nextval`, `pg_terminate_backend`, `lo_unlink`, `dblink`, advisory locks, MySQL `GET_LOCK`, `load_extension`…; the `SIDE_EFFECTS` list) and `SELECT … INTO` count as writes. Non-SQL engines classify their own commands: Redis by command name, MongoDB by the operations a shell script recorded (`$out`/`$merge` are writes), DynamoDB, Elasticsearch and Cassandra by statement or request type.
 2. **Does the level ask?** `safety::check(level, read_only, confirmed, unlock, stored_password)`. It returns `ConfirmRequired` (code `confirm`) or `PasswordRequired` (code `password`) when the UI must ask.
 3. **The UI asks and resends** (`src/shell/safety.ts`, `guarded`): with `confirmed: true`, or an `Unlock` (`password`, `touch_id`, or a batch `grant`). The password is compared as SHA-256 digests in constant time.
-4. **The database enforces it too** at Alert 2 and Safe 2: SQL the parse called read-only runs inside the driver's `read_only_bounds` (`begin read only`, `start transaction read only`, `pragma query_only = on`, ClickHouse `readonly=1`, Oracle `SET TRANSACTION READ ONLY`). A user-defined function that writes is then refused by the server and asked about like any write. SQL Server, libSQL and D1 can't do this, so they rest on the parse (ISSUE-010).
+4. **The database enforces it too** at Alert 2 and Safe 2: SQL the parse called read-only runs inside the driver's `read_only_bounds` (`begin read only`, `start transaction read only`, `pragma query_only = on`, ClickHouse `readonly=1`, Oracle `SET TRANSACTION READ ONLY`). A user-defined function that writes is then refused by the server and asked about like any write. SQL Server, libSQL and D1 can't do this, so they rest on the parse.
 
 The connection's lock is released before the check, because Touch ID waits for the user (`lib.rs::guard`).
 
@@ -46,6 +46,6 @@ Run All at a Safe level asks once. `batch_grant` prompts for Touch ID and return
 
 ## Edge cases to keep
 
-- Postgres still lets a function write to temporary tables inside a read-only transaction (TODO §26).
-- A Safe-level connection whose password mode is "Ask every time" has no saved password to check against (TODO §1).
+- Postgres still lets a function write to temporary tables inside a read-only transaction.
+- A Safe-level connection whose password mode is "Ask every time" has no saved password to check against.
 - Don't move any of these checks into the UI only. The backend check is the guarantee, the UI is the prompt.

@@ -25,7 +25,7 @@ Versions are what `Cargo.lock` and `package-lock.json` held on 2026-10-18. The m
 | ClickHouse, libSQL, D1, DynamoDB, Elasticsearch | hyper 1 + the app's own small HTTP client (`sql/driver/http.rs`) | DynamoDB's SigV4 signing is hand-written (`nosql/dynamo/sigv4.rs`) instead of the AWS SDK |
 | MongoDB | mongodb 3.9.1 | Needs MongoDB 4.0 or later |
 | Cassandra, ScyllaDB | scylla 1.9 (rustls) | |
-| Oracle | oracle 0.6.3 (ODPI-C) | Needs Oracle Instant Client at run time, not at build time (DEC-009) |
+| Oracle | oracle 0.6.3 (ODPI-C) | Needs Oracle Instant Client at run time, not at build time |
 | BigQuery | the HTTP client above + ring 0.17 | RS256 signatures for service account sign-in; ring was already in the tree |
 | Redis | none: a RESP2 client in `nosql/redis.rs` | |
 | SQL parsing | sqlparser 0.63 (`visitor`) | Safe mode's read-only check, SQLite table rebuilds |
@@ -46,7 +46,7 @@ Versions are what `Cargo.lock` and `package-lock.json` held on 2026-10-18. The m
 | `@replit/codemirror-vim` | 6.3.0, pinned | Vim key binding, loaded only when chosen |
 | sql-formatter | 15.9.0, pinned | Format SQL (⌘I) |
 
-Charts (plain SVG), the ER diagram's layout, the virtualized grid, fuzzy search and the JSON tree are hand-written, with no library (DEC-016).
+Charts (plain SVG), the ER diagram's layout, the virtualized grid, fuzzy search and the JSON tree are hand-written, with no library.
 
 ## Tooling
 
@@ -61,6 +61,6 @@ Charts (plain SVG), the ER diagram's layout, the virtualized grid, fuzzy search 
 ## Not used, on purpose
 
 - No UI framework (React, Vue…). **Inferred** from the scaffold; never discussed.
-- No Tailwind: asked about on 2026-10-17, advised against, not decided (DEC-020).
-- No AWS SDK, no chart library, no diagram-layout library (DEC-016).
-- `oracle-rs` (pure Rust): tried and dropped (DEC-009).
+- No Tailwind: asked about on 2026-10-17, advised against, not decided.
+- No AWS SDK, no chart library, no diagram-layout library.
+- `oracle-rs` (pure Rust): tried and dropped.

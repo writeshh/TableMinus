@@ -16,12 +16,12 @@ The config folder is Tauri's `app_config_dir` for the identifier `dev.ritesh.dbm
 | `ai-chats.json` | Assistant chats per connection | History folder |
 | `settings.json` | Settings, themes, column layouts, other remembered UI choices | Settings folder |
 | `locations.json` | Which of the folders above are moved, e.g. to iCloud Drive or Dropbox | Always the config folder |
-| `mcp.json` | MCP server settings, access tokens (as SHA-256 hashes), activity | Always the config folder: tokens belong to one machine (DEC-015) |
+| `mcp.json` | MCP server settings, access tokens (as SHA-256 hashes), activity | Always the config folder: tokens belong to one machine |
 | `mcp-bridge.json` | The port and token the stdio bridge uses; mode 0600; written while the server runs | Always the config folder |
 | `plugins.json`, `plugins/<id>/` | Installed plugins and their files | Always the config folder |
 | `secrets.vault` | Linux only, when there is no Secret Service: every secret, sealed (below) | Always the config folder |
 
-All of these are written to a temporary file and renamed into place, and a file that fails to load is never overwritten (`locations::write` refuses; REQ-012).
+All of these are written to a temporary file and renamed into place, and a file that fails to load is never overwritten (`locations::write` refuses).
 
 ## A saved connection (`store::Saved`)
 
@@ -52,7 +52,7 @@ All of these are written to a temporary file and renamed into place, and a file 
 | `dev.ritesh.dbmanager.passcode` | fixed account | argon2 hash of the app passcode |
 | `dev.ritesh.tableminus.ai` | provider | AI provider API keys, proxy password |
 
-The `dev.ritesh.dbmanager` names predate the TableMinus name and must stay: renaming them would orphan every saved password (DEC-018).
+The `dev.ritesh.dbmanager` names predate the TableMinus name and must stay: renaming them would orphan every saved password.
 
 **Linux without a Secret Service:** the same entries go into `secrets.vault`, one JSON map sealed with AES-256-GCM under a key from argon2id and a master password, typed once per session. Until then reads and writes fail with `vault_locked`, and the UI asks (`src/shell/vault.ts`). "Forgot master password?" starts a new vault and keeps the old file renamed.
 
