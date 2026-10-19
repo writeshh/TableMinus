@@ -13,11 +13,12 @@ All connections can go through an SSH tunnel (`ssh.rs`, russh; known_hosts accep
 | MySQL, MariaDB | mysql_async | Wire protocol; socket; SNI; cleartext plugin opt-in | Yes | DBngin on 3306; compose MySQL 8.0 behind sshd |
 | SQLite, SQLCipher | rusqlite | A file; passphrase or raw key in the keychain | Yes (`query_only`) | none needed |
 | DuckDB | duckdb (bundled) | A file or `:memory:` | Yes (read-only transaction) | none needed |
-| SQL Server | tiberius | TDS, SQL login only | **No**: rests on the SQL parse | compose 2022 (amd64, emulated on Apple silicon) |
+| SQL Server | tiberius | TDS, SQL login only; a named instance's port from SQL Browser (UDP 1434) | **No**: rests on the SQL parse | compose 2022 (amd64, emulated on Apple silicon) |
 | ClickHouse | own HTTP client | HTTP(S) 8123/8443, one `session_id` per connection | Yes (`readonly=1` per request) | compose 24.8 |
 | libSQL / Turso | own HTTP client | Hrana 3 over HTTP, bearer token | **No** (`sqld` refuses `query_only`) | compose `sqld` on 8080 |
 | Cloudflare D1 | own HTTP client | Cloudflare API with an API token, account and database IDs | **No** | none: tested against a fake server only |
 | Oracle | oracle (ODPI-C) | Easy Connect Plus; `tcps` with system certificates or a wallet | Yes (`SET TRANSACTION READ ONLY`) | compose Oracle 23 Free; Instant Client needed on the host |
+| BigQuery | own HTTP client + `ring` | REST (`jobs.query`, `getQueryResults`); a service account's JSON key signs an OAuth token request; the emulator takes none | **No**: rests on the SQL parse | compose BigQuery emulator on 9050 (no key) |
 | Redis | own RESP2 client | TCP or TLS, AUTH with an ACL user | Command list (`redis::is_read_only`) | local Redis on 6379 |
 | MongoDB | mongodb | `mongodb://` and `+srv`, TLS with CA and client PEM | Operation kinds from the shell recording | compose 8.0 on 27018 |
 | DynamoDB | own HTTP client + SigV4 | Access key and secret, region; DynamoDB Local over plain HTTP | Statement class (only SELECT reads) | compose DynamoDB Local on 8001 |
@@ -31,6 +32,7 @@ Notable failure modes, all from TODO.md and commit history:
 - **MySQL `LOAD DATA LOCAL INFILE`:** the server picks the file, so the client sends only the file the statement itself names, once.
 - **ClickHouse** holds a session's lock until the server notices a hang-up, so the next request may wait a few seconds after a cancelled one.
 - **Oracle** needs Instant Client 19 or later on the user's machine; without it the connection explains where to get it. Bundling it with the app is open (TASK-011).
+- **BigQuery** compares a column only with a value of its own type, and the app binds every value as text, so the SQL casts each to its column's type. A transaction exists only inside a script, so it's queued and sent at commit, as D1's is. Sign-in to Google is unit-tested only (the emulator needs no key).
 - **D1** refuses `BEGIN`, so the driver queues a transaction's statements and sends them as one batch at commit.
 - **Cassandra in Docker or through a tunnel:** every node address is replaced by the one dialled (address translation), or the driver would try the containers' internal addresses.
 

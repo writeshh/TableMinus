@@ -4,7 +4,7 @@
 
 ## Two kinds
 
-**SQL engines** sit on the `Driver` trait (`src-tauri/src/driver.rs`), held by `db::Conn`: Postgres (and CockroachDB), MySQL/MariaDB, SQLite/SQLCipher, DuckDB, SQL Server, ClickHouse, libSQL, D1, Oracle. They share the grid, filters, structure view and editor, DDL, export, import, the diagram, Copy Script As, Explain and safe mode. Engine differences are `match`es on `Dialect`.
+**SQL engines** sit on the `Driver` trait (`src-tauri/src/driver.rs`), held by `db::Conn`: Postgres (and CockroachDB), MySQL/MariaDB, SQLite/SQLCipher, DuckDB, SQL Server, ClickHouse, libSQL, D1, Oracle, BigQuery. They share the grid, filters, structure view and editor, DDL, export, import, the diagram, Copy Script As, Explain and safe mode. Engine differences are `match`es on `Dialect`.
 
 **Other engines** have their own module, session type and commands: Redis (`redis.rs`, own view `src/redis.ts`), MongoDB, DynamoDB, Elasticsearch, Cassandra (each `src-tauri/src/<engine>/mod.rs`, shown in the shared document view `src/docview.ts` through an adapter `src/<engine>.ts`). Their sessions live in `sessions::Sessions<S>`.
 
@@ -35,6 +35,8 @@ Postgres-compatible servers need none of that: they're a `flavor` on a Postgres 
 - **ClickHouse** over HTTP, not the native protocol; one `session_id` per connection so `SET` and temporary tables persist. The grid is read-only (no row identity).
 - **DuckDB:** a table without a primary key can't be edited, because DuckDB's rowid moves.
 - **Oracle:** the `oracle` crate with Instant Client after `oracle-rs` failed (DEC-009). No autocommit on the wire: each statement commits unless the app opened a transaction. Schemas with their own objects act as "databases". PL/SQL blocks end at a `/` line.
+- **BigQuery:** REST jobs, datasets as databases. Bound values are STRING parameters, cast in the SQL to their column's type (`bigquery::from_text`); a table's columns, keys and descriptions come from `tables.get`, since the emulator's INFORMATION_SCHEMA lacks most views. Transactions are queued and sent as one script.
+- **SQL Server:** comments are `MS_Description` extended properties; a default is a named constraint, dropped by looking its name up before it changes or its column goes; triggers are AFTER triggers (`inserted`, `deleted`); routines save as `CREATE OR ALTER`.
 - **Cassandra** rows go through `SELECT JSON` and `fromJson()`, so nothing decodes CQL types.
 - **MongoDB** shell scripts run in QuickJS that only records operations; a script can't use one operation's result in the next (TODO §24).
 - **D1** transactions are queued and sent as one batch.

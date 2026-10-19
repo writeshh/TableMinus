@@ -227,7 +227,7 @@ fn plan<'a>(t: &str, current: &Structure, changes: &'a [Change], create: &str) -
             }
             Change::DropIndex { name } => p.dropped_indexes.push(name.as_str()),
             Change::AddTrigger { name, timing, events, body } => {
-                p.after_rebuild.push(trigger_sql(D, t, name, *timing, events, body)?);
+                p.after_rebuild.push(trigger_sql(D, t, t, name, *timing, events, body)?); // the plain name only matters to SQL Server
             }
             Change::DropTrigger { name } => p.dropped_triggers.push(name.as_str()),
             Change::Rename { to } => p.rename = Some(rename_sql(D, t, not_blank(to, "the table needs a name")?)),

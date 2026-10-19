@@ -47,7 +47,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   Conn["db::Conn<br/>(catalog, browse, DDL, rows: one code path)"] --> Driver["dyn Driver (driver.rs)<br/>batch, run, execute_with, fetch_with,<br/>stream, ping, stopper, read_only_bounds"]
-  Conn -. "match on Dialect<br/>for SQL that differs" .-> Dialect["Dialect: Pg, My, Lite, Duck, Mssql, Click, Ora"]
+  Conn -. "match on Dialect<br/>for SQL that differs" .-> Dialect["Dialect: Pg, My, Lite, Duck, Mssql, Click, Ora, Bq"]
   Driver --> PG[postgres.rs<br/>+ CockroachDB]
   Driver --> MY[mysql.rs<br/>MySQL, MariaDB]
   Driver --> LITE[sqlite.rs<br/>+ SQLCipher]
@@ -57,6 +57,7 @@ flowchart TB
   Driver --> LIB[libsql.rs]
   Driver --> D1[d1.rs]
   Driver --> ORA[oracle.rs]
+  Driver --> BQ[bigquery.rs]
 ```
 
 - A driver only runs SQL and returns **every cell as text** (`Option<String>`). Everything above it (catalog queries, browse SQL with filters and paging, DDL generation, staged-row saves, export, import, diagram, users, processes) is written once in `db.rs`, `browse.rs`, `ddl.rs`, `rows.rs`, `structure.rs`, `catalog.rs`, `objects.rs`… and matches on `Dialect` where SQL differs (DEC-005).

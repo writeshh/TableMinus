@@ -98,12 +98,24 @@ pub fn routine_sql(d: Dialect, kind: ItemKind, name: &str, definition: &str, cre
     match d {
         Dialect::Pg => Ok(vec![def]),
         Dialect::Bq => Ok(vec![or_replace(&def)]),
+        Dialect::Mssql => Ok(vec![or_alter(&def)]),
         Dialect::My if create => Ok(vec![def]),
         Dialect::My => Ok(vec![format!("DROP {what} IF EXISTS {}", d.ident(name)), def]),
         // ClickHouse keeps the plain CREATE FUNCTION it was made with; saving replaces it.
         Dialect::Click if kind == ItemKind::Function => Ok(vec![if create { def } else { or_replace(&def) }]),
-        Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click | Dialect::Ora => Err(NO_ROUTINES),
+        Dialect::Lite | Dialect::Duck | Dialect::Click | Dialect::Ora => Err(NO_ROUTINES),
     }
+}
+
+/// A SQL Server routine's definition as one that creates or replaces it (`CREATE OR ALTER`, from 2016 SP1), however
+/// its CREATE is spelled.
+fn or_alter(def: &str) -> String {
+    let def = def.trim_start();
+    let Some(rest) = def.get(..6).filter(|w| w.eq_ignore_ascii_case("create")).and_then(|_| def.get(6..)) else {
+        return def.to_string();
+    };
+    let next: Vec<String> = rest.split_whitespace().take(2).map(str::to_ascii_lowercase).collect();
+    if next == ["or", "alter"] { def.to_string() } else { format!("CREATE OR ALTER {}", rest.trim_start()) }
 }
 
 /// An Oracle routine as one CREATE OR REPLACE: PL/SQL keeps the semicolon after its END, and loses the `/` line
@@ -136,7 +148,13 @@ pub fn routine_template(d: Dialect, kind: ItemKind, name: &str) -> Result<String
         }
         (Dialect::Ora, ItemKind::Procedure) => format!("CREATE PROCEDURE {t} IS\nBEGIN\n  NULL;\nEND;"),
         (Dialect::Bq, ItemKind::Function) => format!("CREATE FUNCTION {t}(x INT64) AS (x + 1)"),
-        (Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click, _) => return Err(NO_ROUTINES),
+        (Dialect::Mssql, ItemKind::Function) => {
+            format!("CREATE FUNCTION {t}()\nRETURNS int\nAS\nBEGIN\n  RETURN 1\nEND")
+        }
+        (Dialect::Mssql, ItemKind::Procedure) => {
+            format!("CREATE PROCEDURE {t}\nAS\nBEGIN\n  SET NOCOUNT ON;\n  SELECT 1\nEND")
+        }
+        (Dialect::Lite | Dialect::Duck | Dialect::Click, _) => return Err(NO_ROUTINES),
         _ => return Err(Error::Invalid("not a function or procedure")),
     })
 }
@@ -147,11 +165,14 @@ fn number(s: &str, what: &'static str) -> Result<i64> {
 }
 
 /// The statements that take sequence `seq` from `cur` to `want`: one ALTER SEQUENCE for the settings that changed,
-/// `setval` for a new current value, COMMENT ON for a new comment. Empty when nothing changed.
+/// a new current value (Postgres's `setval`; SQL Server's `RESTART WITH` the value after it), and the comment.
+/// Empty when nothing changed. A setting left as it was is never parsed, so a blank one (SQL Server's default
+/// cache) stays blank.
 pub fn sequence_sql(d: Dialect, seq: &str, cur: &Sequence, want: &Sequence) -> Result<Vec<String>> {
-    if d != Dialect::Pg {
-        return Err(Error::Invalid("sequences are edited on Postgres only"));
+    if !matches!(d, Dialect::Pg | Dialect::Mssql) {
+        return Err(Error::Invalid("sequences are edited on Postgres and SQL Server"));
     }
+    let mssql = d == Dialect::Mssql;
     let t = d.table_ident(seq);
     let mut clauses = Vec::new();
     let fields: [(&str, &str, &str, &'static str); 5] = [
@@ -162,9 +183,19 @@ pub fn sequence_sql(d: Dialect, seq: &str, cur: &Sequence, want: &Sequence) -> R
         ("CACHE", &cur.cache, &want.cache, "the cache size must be a whole number"),
     ];
     for (clause, was, now, what) in fields {
+        if was.trim() == now.trim() {
+            continue;
+        }
         let now = number(now, what)?;
-        if number(was, what).ok() != Some(now) {
-            clauses.push(format!("{clause} {now}"));
+        if number(was, what).ok() == Some(now) {
+            continue;
+        }
+        match clause {
+            "START WITH" if mssql => {
+                return Err(Error::Invalid("SQL Server can't change where a sequence starts; set its current value"));
+            }
+            "CACHE" if mssql && now == 0 => clauses.push("NO CACHE".into()),
+            _ => clauses.push(format!("{clause} {now}")),
         }
     }
     if cur.cycle != want.cycle {
@@ -178,13 +209,26 @@ pub fn sequence_sql(d: Dialect, seq: &str, cur: &Sequence, want: &Sequence) -> R
     if let Some(v) = value(&want.last_value) {
         let v = number(&v, "the current value must be a whole number")?;
         if value(&cur.last_value).and_then(|c| c.parse::<i64>().ok()) != Some(v) {
-            out.push(format!("SELECT setval({}, {v})", d.literal(&t)));
+            if mssql {
+                // The next value is the one after `v`, as after Postgres's setval.
+                let step = number(&want.increment, "the increment must be a whole number")?;
+                let next = v.checked_add(step).ok_or(Error::Invalid("the current value is at the sequence's limit"))?;
+                let restart = format!("ALTER SEQUENCE {t} RESTART WITH {next}");
+                out.push(restart);
+            } else {
+                out.push(format!("SELECT setval({}, {v})", d.literal(&t)));
+            }
         }
     }
     let comment = |c: &Option<String>| c.as_deref().map(str::trim).filter(|c| !c.is_empty()).map(String::from);
     if comment(&cur.comment) != comment(&want.comment) {
-        let is = comment(&want.comment).map_or_else(|| "NULL".into(), |c| d.literal(&c));
-        out.push(format!("COMMENT ON SEQUENCE {t} IS {is}"));
+        if mssql {
+            let had = comment(&cur.comment).is_some();
+            out.extend(crate::ddl::mssql_description(seq, "SEQUENCE", None, had, comment(&want.comment).as_deref()));
+        } else {
+            let is = comment(&want.comment).map_or_else(|| "NULL".into(), |c| d.literal(&c));
+            out.push(format!("COMMENT ON SEQUENCE {t} IS {is}"));
+        }
     }
     Ok(out)
 }
@@ -378,13 +422,25 @@ impl Conn {
                 )
                 .await?
             }
-            Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
+            Dialect::Mssql => {
+                let name = self.table_ident(name);
+                self.fetch_with(
+                    "select definition from sys.sql_modules where object_id = object_id(@P1)",
+                    &[Some(&name)],
+                )
+                .await?
+            }
+            Dialect::Lite | Dialect::Duck | Dialect::Click => return Err(NO_ROUTINES),
         };
-        let pg = self.dialect() == Dialect::Pg;
+        let d = self.dialect();
         let defs: Vec<String> = rows
             .into_iter()
             .filter_map(|mut r| r.pop().flatten())
-            .map(|d| if pg { or_replace(d.trim()) } else { d.trim().into() })
+            .map(|def| match d {
+                Dialect::Pg => or_replace(def.trim()),
+                Dialect::Mssql => or_alter(def.trim()),
+                _ => def.trim().into(),
+            })
             .collect();
         if defs.is_empty() {
             return Err(Error::Invalid("no such routine, or the server doesn't show its definition to this user"));
@@ -392,22 +448,28 @@ impl Conn {
         Ok(defs)
     }
 
-    /// A Postgres sequence's settings and comment.
+    /// A sequence's settings and comment (Postgres, SQL Server).
     pub async fn sequence(&mut self, seq: &str) -> Result<Sequence> {
-        if self.dialect() != Dialect::Pg {
-            return Err(Error::Invalid("sequences are edited on Postgres only"));
-        }
-        let (schema, name) = split(seq);
-        let rows = self
-            .fetch_with(
-                "select s.last_value::text, s.increment_by::text, s.min_value::text, s.max_value::text, \
-                 s.start_value::text, s.cache_size::text, s.cycle::text, obj_description(c.oid, 'pg_class') \
-                 from pg_sequences s join pg_namespace n on n.nspname = s.schemaname \
-                 join pg_class c on c.relnamespace = n.oid and c.relname = s.sequencename \
-                 where s.schemaname = $1 and s.sequencename = $2",
-                &[Some(schema), Some(name)],
-            )
-            .await?;
+        let rows = match self.dialect() {
+            Dialect::Pg => self.pg_sequence(seq).await?,
+            // last_used_value is SQL Server 2017's; the cache is blank when the server picks its size.
+            Dialect::Mssql => {
+                let name = self.table_ident(seq);
+                self.fetch_with(
+                    "select cast(s.last_used_value as nvarchar(40)), cast(s.increment as nvarchar(40)), \
+                     cast(s.minimum_value as nvarchar(40)), cast(s.maximum_value as nvarchar(40)), \
+                     cast(s.start_value as nvarchar(40)), case when s.is_cached = 0 then '0' \
+                       else coalesce(cast(s.cache_size as nvarchar(20)), '') end, \
+                     case when s.is_cycling = 1 then 'true' else 'false' end, cast(ep.value as nvarchar(max)) \
+                     from sys.sequences s left join sys.extended_properties ep on ep.class = 1 \
+                       and ep.major_id = s.object_id and ep.minor_id = 0 and ep.name = 'MS_Description' \
+                     where s.object_id = object_id(@P1)",
+                    &[Some(&name)],
+                )
+                .await?
+            }
+            _ => return Err(Error::Invalid("sequences are edited on Postgres and SQL Server")),
+        };
         let mut r = rows.into_iter().next().ok_or(Error::Invalid("no such sequence"))?;
         r.resize(8, None);
         let mut cell = |i: usize| r[i].take();
@@ -421,6 +483,19 @@ impl Conn {
             cycle: cell(6).as_deref() == Some("true"),
             comment: cell(7),
         })
+    }
+
+    async fn pg_sequence(&mut self, seq: &str) -> Result<Vec<Vec<Option<String>>>> {
+        let (schema, name) = split(seq);
+        self.fetch_with(
+            "select s.last_value::text, s.increment_by::text, s.min_value::text, s.max_value::text, \
+                 s.start_value::text, s.cache_size::text, s.cycle::text, obj_description(c.oid, 'pg_class') \
+                 from pg_sequences s join pg_namespace n on n.nspname = s.schemaname \
+                 join pg_class c on c.relnamespace = n.oid and c.relname = s.sequencename \
+                 where s.schemaname = $1 and s.sequencename = $2",
+            &[Some(schema), Some(name)],
+        )
+        .await
     }
 
     /// The statements that drop a sidebar item. `cascade` is Postgres's.
@@ -453,9 +528,9 @@ impl Conn {
                             .map(|mut r| format!("DROP {what} {t}({}){cascade}", r.pop().flatten().unwrap_or_default()))
                             .collect()
                     }
-                    Dialect::My | Dialect::Ora | Dialect::Bq => vec![format!("DROP {what} {t}")],
+                    Dialect::My | Dialect::Ora | Dialect::Bq | Dialect::Mssql => vec![format!("DROP {what} {t}")],
                     Dialect::Click if kind == ItemKind::Function => vec![format!("DROP FUNCTION {t}")],
-                    Dialect::Lite | Dialect::Duck | Dialect::Mssql | Dialect::Click => return Err(NO_ROUTINES),
+                    Dialect::Lite | Dialect::Duck | Dialect::Click => return Err(NO_ROUTINES),
                 }
             }
         })
@@ -494,12 +569,17 @@ impl Conn {
             (Some(ItemKind::Sequence), Script::Create) => {
                 let s = self.sequence(name).await?;
                 Ok(format!(
-                    "CREATE SEQUENCE {t} INCREMENT BY {} MINVALUE {} MAXVALUE {} START WITH {} CACHE {}{};",
+                    "CREATE SEQUENCE {t} START WITH {} INCREMENT BY {} MINVALUE {} MAXVALUE {} {}{};",
+                    s.start,
                     s.increment,
                     s.min,
                     s.max,
-                    s.start,
-                    s.cache,
+                    // SQL Server's NO CACHE is a cache of 0 here.
+                    if s.cache == "0" && d == Dialect::Mssql {
+                        "NO CACHE".to_string()
+                    } else {
+                        format!("CACHE {}", s.cache)
+                    },
                     if s.cycle { " CYCLE" } else { "" }
                 ))
             }
@@ -618,8 +698,8 @@ pub async fn save_sequence_sql(
 #[cfg(test)]
 mod tests {
     use super::{
-        Script, Sequence, dml_script, or_replace, routine_sql, routine_template, sequence_sql, sqlite_view_body,
-        view_sql,
+        Script, Sequence, dml_script, or_alter, or_replace, routine_sql, routine_template, sequence_sql,
+        sqlite_view_body, view_sql,
     };
 
     #[test]
@@ -646,6 +726,28 @@ mod tests {
             cycle: false,
             comment: None,
         }
+    }
+
+    #[test]
+    fn or_alter_should_make_any_create_spelling_create_or_alter_once() {
+        assert_eq!(or_alter("  create   PROCEDURE p AS SELECT 1"), "CREATE OR ALTER PROCEDURE p AS SELECT 1");
+        assert_eq!(or_alter("CREATE OR ALTER FUNCTION f() RETURNS int"), "CREATE OR ALTER FUNCTION f() RETURNS int");
+        assert_eq!(or_alter("ALTER PROCEDURE p AS SELECT 1"), "ALTER PROCEDURE p AS SELECT 1");
+    }
+
+    #[test]
+    fn sequence_sql_should_restart_a_sql_server_sequence_after_the_value_set() {
+        let want = Sequence { last_value: Some("100".into()), increment: "5".into(), ..seq() };
+        let cur = Sequence { increment: "5".into(), ..seq() };
+        assert_eq!(sequence_sql(Dialect::Mssql, "s", &cur, &want).unwrap(), ["ALTER SEQUENCE [s] RESTART WITH 105"]);
+    }
+
+    #[test]
+    fn sequence_sql_should_keep_a_blank_cache_and_write_no_cache_for_zero() {
+        let cur = Sequence { cache: String::new(), ..seq() };
+        assert_eq!(sequence_sql(Dialect::Mssql, "s", &cur, &cur).unwrap(), Vec::<String>::new());
+        let want = Sequence { cache: "0".into(), ..seq() };
+        assert_eq!(sequence_sql(Dialect::Mssql, "s", &cur, &want).unwrap(), ["ALTER SEQUENCE [s] NO CACHE"]);
     }
 
     #[test]

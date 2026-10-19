@@ -115,9 +115,12 @@ impl Conn {
                  union all select 'type', type_name from all_types where owner = sys_context('USERENV', 'CURRENT_SCHEMA') \
                  order by 1, 2"
                 .into(),
-            // Views only: SQL Server's routines and sequences have no editors here either.
-            Dialect::Mssql => "select 'view', case when s.name = 'dbo' then v.name else s.name + '.' + v.name end \
-                 from sys.views v join sys.schemas s on s.schema_id = v.schema_id where v.is_ms_shipped = 0 order by 2"
+            // `dbo` is left off names, as for tables. Scalar, inline and table-valued functions are all functions.
+            Dialect::Mssql => "select case when o.type = 'V' then 'view' when o.type = 'P' then 'procedure' \
+                   when o.type = 'SO' then 'sequence' else 'function' end, \
+                 case when s.name = 'dbo' then o.name else s.name + '.' + o.name end \
+                 from sys.objects o join sys.schemas s on s.schema_id = o.schema_id \
+                 where o.is_ms_shipped = 0 and o.type in ('V', 'P', 'FN', 'IF', 'TF', 'SO') order by 1, 2"
                 .into(),
             // Views only: DuckDB's sequences and macros have no editors here.
             Dialect::Duck => "select 'view', case when schema_name = 'main' then view_name \

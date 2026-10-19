@@ -253,6 +253,43 @@ fn ora_trigger_body(definition: &str) -> Option<String> {
     Some(inner.unwrap_or(block).to_string())
 }
 
+/// What a SQL Server trigger runs, as `trigger_sql` writes it back: the statements after the `AS` that follows
+/// `ON table`, without a `BEGIN … END` around them or the `SET NOCOUNT ON;` that opens it.
+fn mssql_trigger_body(definition: &str) -> Option<String> {
+    // ASCII upper-casing keeps byte offsets, so positions found in `upper` hold in `definition`.
+    let upper = definition.to_ascii_uppercase();
+    let on = upper.find(" ON ")?;
+    let b = upper.as_bytes();
+    let bare = |i: usize| b.get(i).is_none_or(u8::is_ascii_whitespace);
+    // The first AS standing alone, outside [quoted] and "quoted" names.
+    let mut quote = None;
+    let mut at = None;
+    for i in on..b.len() {
+        match (quote, b[i]) {
+            (None, b'[') => quote = Some(b']'),
+            (None, b'"') => quote = Some(b'"'),
+            (Some(end), c) if c == end => quote = None,
+            (None, b'A') if b.get(i + 1) == Some(&b'S') && bare(i.wrapping_sub(1)) && bare(i + 2) => {
+                at = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let at = at?;
+    let mut body = definition.get(at + 2..)?.trim();
+    let wrapped = body.get(..5).is_some_and(|b| b.eq_ignore_ascii_case("begin"))
+        && body.get(body.len().saturating_sub(3)..).is_some_and(|e| e.eq_ignore_ascii_case("end"));
+    if wrapped {
+        body = body.get(5..body.len() - 3)?.trim();
+    }
+    let nocount = "SET NOCOUNT ON;";
+    if body.get(..nocount.len()).is_some_and(|s| s.eq_ignore_ascii_case(nocount)) {
+        body = body.get(nocount.len()..)?.trim();
+    }
+    Some(body.to_string())
+}
+
 /// Cell `i` of a catalog row, taken out (rows are read once, front to back).
 fn take(row: &mut [Option<String>], i: usize) -> Option<String> {
     row.get_mut(i).and_then(Option::take)
@@ -800,15 +837,20 @@ impl Conn {
             .await?;
         let triggers = self
             .fetch_with(
-                "select name, object_definition(object_id) from sys.triggers where parent_id = object_id(@P1) order by name",
+                "select tr.name, object_definition(tr.object_id), \
+                 case when tr.is_instead_of_trigger = 1 then 'INSTEAD OF' else 'AFTER' end, \
+                 (select string_agg(e.type_desc, char(31)) from sys.trigger_events e where e.object_id = tr.object_id), \
+                 null from sys.triggers tr where tr.parent_id = object_id(@P1) order by tr.name",
                 &t,
             )
             .await?
             .into_iter()
-            .map(|mut r| TriggerInfo {
-                name: take(&mut r, 0).unwrap_or_default(),
-                definition: take(&mut r, 1).unwrap_or_default(),
-                ..TriggerInfo::default()
+            .map(|mut r| {
+                let body = r.get(1).cloned().flatten().and_then(|d| mssql_trigger_body(&d));
+                if let Some(cell) = r.get_mut(4) {
+                    *cell = body;
+                }
+                trigger(r)
             })
             .collect();
         let comment = self
@@ -1083,9 +1125,17 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
-    use super::lite_trigger;
+    use super::{lite_trigger, mssql_trigger_body};
     use crate::db::{Conn, Engine, Options};
     use crate::tls::Tls;
+
+    #[test]
+    fn mssql_trigger_body_should_read_back_what_trigger_sql_wrote() {
+        let def = "CREATE TRIGGER [app].[stamp] ON [app].[pets] AFTER INSERT, UPDATE AS\nBEGIN\n  SET NOCOUNT ON;\n  UPDATE x SET y = 1\nEND";
+        assert_eq!(mssql_trigger_body(def).as_deref(), Some("UPDATE x SET y = 1"));
+        let plain = "create trigger t on [has as in it] for delete as delete from log";
+        assert_eq!(mssql_trigger_body(plain).as_deref(), Some("delete from log"));
+    }
 
     #[test]
     fn lite_trigger_should_read_timing_event_and_body_of_a_plain_row_trigger() {

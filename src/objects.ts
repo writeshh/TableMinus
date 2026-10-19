@@ -149,6 +149,9 @@ export async function editSequence(item: string) {
   const inputs = fields.map(([k, label]) => {
     const i = el("input", { value: String(cur[k] ?? ""), spellcheck: false, inputMode: "numeric" });
     if (k === "last_value") i.placeholder = "Not used yet";
+    // SQL Server restarts a sequence rather than moving its start, and picks a cache size when none is set.
+    if (k === "start" && kind() === "mssql") (i.disabled = true), (i.title = "SQL Server can't move the start; set the current value");
+    if (k === "cache" && kind() === "mssql") i.placeholder = "The server's choice (0: no cache)";
     return [k, el("label", { className: "field" }, label, i), i] as const;
   });
   const cycle = el("input", { type: "checkbox", checked: cur.cycle });
@@ -181,12 +184,12 @@ export async function editSequence(item: string) {
 /** Opens an item's editor, where it has one. */
 export function openItem(itemKind: ItemKind, item: string) {
   if (itemKind === "function" || itemKind === "procedure") editRoutine(itemKind, item);
-  else if (itemKind === "sequence" && kind() === "postgres") editSequence(item);
+  else if (itemKind === "sequence" && (kind() === "postgres" || kind() === "mssql")) editSequence(item);
 }
 
 /** Whether an item opens in an editor (a click on its sidebar row). */
 export const editable = (itemKind: ItemKind) =>
-  itemKind === "function" || itemKind === "procedure" || (itemKind === "sequence" && kind() === "postgres");
+  itemKind === "function" || itemKind === "procedure" || (itemKind === "sequence" && (kind() === "postgres" || kind() === "mssql"));
 
 /** The sidebar's "New" entries beyond tables and schemas, for the schema shown. */
 export function newMenu(schema: string | null): MenuItem[] {
@@ -194,7 +197,7 @@ export function newMenu(schema: string | null): MenuItem[] {
   return [
     ["New view…", () => newView(false, schema)],
     ...(k === "postgres" ? [["New materialized view…", () => newView(true, schema)] as MenuItem] : []),
-    ...(!["sqlite", "duckdb", "mssql", "clickhouse"].includes(k) ? [["New function…", () => newRoutine("function", schema)], ["New procedure…", () => newRoutine("procedure", schema)]] as MenuItem[] : []),
+    ...(!["sqlite", "duckdb", "clickhouse"].includes(k) ? [["New function…", () => newRoutine("function", schema)], ["New procedure…", () => newRoutine("procedure", schema)]] as MenuItem[] : []),
     ...(k === "clickhouse" ? [["New function…", () => newRoutine("function", schema)] as MenuItem] : []),
   ];
 }

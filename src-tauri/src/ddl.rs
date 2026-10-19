@@ -454,8 +454,10 @@ fn check_sql(d: Dialect, name: &str, expression: &str) -> Result<String> {
     Ok(format!("{named}CHECK ({expression})"))
 }
 
+/// `table` as given (`schema.table`), `t` as an identifier.
 fn trigger_sql(
     d: Dialect,
+    table: &str,
     t: &str,
     name: &str,
     timing: TriggerTiming,
@@ -489,8 +491,17 @@ fn trigger_sql(
             format!("CREATE TRIGGER {name} {timing} {event} ON {t} FOR EACH ROW BEGIN\n  {body}{end}\nEND")
         }
         Dialect::Duck => return Err(Error::Invalid("DuckDB has no triggers")),
+        // A statement trigger: the body reads the changed rows from `inserted` and `deleted`. It lives in its
+        // table's schema.
         Dialect::Mssql => {
-            return Err(Error::Invalid("SQL Server triggers read inserted and deleted; write them in a SQL tab"));
+            if timing == "BEFORE" {
+                return Err(Error::Invalid(
+                    "SQL Server triggers fire AFTER a change (INSTEAD OF ones are made in a SQL tab)",
+                ));
+            }
+            let events = events.iter().map(|e| e.sql()).collect::<Vec<_>>().join(", ");
+            let schema = table.split_once('.').map(|(s, _)| format!("{}.", d.ident(s))).unwrap_or_default();
+            format!("CREATE TRIGGER {schema}{name} ON {t} AFTER {events} AS\nBEGIN\n  SET NOCOUNT ON;\n  {body}\nEND")
         }
         Dialect::Click => return Err(Error::Invalid("ClickHouse has no triggers")),
         Dialect::Ora => {
@@ -506,9 +517,13 @@ fn trigger_sql(
     })
 }
 
-fn drop_trigger_sql(d: Dialect, t: &str, name: &str) -> String {
+fn drop_trigger_sql(d: Dialect, table: &str, t: &str, name: &str) -> String {
     match d {
         Dialect::Pg => format!("DROP TRIGGER {} ON {t}", d.ident(name)),
+        Dialect::Mssql => match table.split_once('.') {
+            Some((schema, _)) => format!("DROP TRIGGER {}.{}", d.ident(schema), d.ident(name)),
+            None => format!("DROP TRIGGER {}", d.ident(name)),
+        },
         _ => format!("DROP TRIGGER {}", d.ident(name)),
     }
 }
@@ -582,7 +597,7 @@ fn foreign_key_sql(d: Dialect, name: &str, columns: &[String], ref_table: &str, 
 #[expect(clippy::too_many_lines, reason = "one arm per kind of change, each short")]
 pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: &[Change]) -> Result<Vec<String>> {
     let t = d.table_ident(not_blank(table, "the table needs a name")?);
-    let Some(current) = current else { return create_sql(d, &t, changes) };
+    let Some(current) = current else { return create_sql(d, table, &t, changes) };
     let comment_on_column = |column: &str, comment: Option<&str>| {
         format!(
             "COMMENT ON COLUMN {t}.{} IS {}",
@@ -602,9 +617,6 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 if d == Dialect::Lite && blank_is_none(column.comment.as_ref()).is_some() {
                     return Err(Error::Invalid("SQLite columns have no comments"));
                 }
-                if d == Dialect::Mssql && blank_is_none(column.comment.as_ref()).is_some() {
-                    return Err(Error::Invalid("SQL Server column comments are extended properties; use a SQL tab"));
-                }
                 // T-SQL and Oracle have no COLUMN keyword in ADD.
                 let add = if matches!(d, Dialect::Mssql | Dialect::Ora) { "ADD" } else { "ADD COLUMN" };
                 out.push(format!("ALTER TABLE {t} {add} {}", column_sql(d, column, None)?));
@@ -613,15 +625,25 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 {
                     out.push(comment_on_column(column.name.trim(), Some(comment)));
                 }
+                if d == Dialect::Mssql {
+                    let comment = blank_is_none(column.comment.as_ref());
+                    out.extend(mssql_description(table, "TABLE", Some(column.name.trim()), false, comment));
+                }
             }
-            Change::DropColumn { name } => out.push(format!("ALTER TABLE {t} DROP COLUMN {}", d.ident(name))),
+            Change::DropColumn { name } => {
+                // A SQL Server column with a default can't be dropped until its constraint is.
+                if d == Dialect::Mssql && current.columns.iter().any(|c| &c.name == name && c.default.is_some()) {
+                    out.push(mssql_drop_default(table, name));
+                }
+                out.push(format!("ALTER TABLE {t} DROP COLUMN {}", d.ident(name)));
+            }
             Change::ModifyColumn { from, column } => {
                 let cur = current
                     .columns
                     .iter()
                     .find(|c| &c.name == from)
                     .ok_or(Error::Invalid("a changed column no longer exists; reopen the structure"))?;
-                out.extend(modify_column_sql(d, &t, cur, column)?);
+                out.extend(modify_column_sql(d, table, &t, cur, column)?);
             }
             Change::AddIndex { name, columns, unique, method } => {
                 out.push(index_sql(d, &t, name, columns, *unique, *method)?);
@@ -675,9 +697,9 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
                 _ => format!("ALTER TABLE {t} DROP CONSTRAINT {}", d.ident(name)),
             }),
             Change::AddTrigger { name, timing, events, body } => {
-                out.push(trigger_sql(d, &t, name, *timing, events, body)?);
+                out.push(trigger_sql(d, table, &t, name, *timing, events, body)?);
             }
-            Change::DropTrigger { name } => out.push(drop_trigger_sql(d, &t, name)),
+            Change::DropTrigger { name } => out.push(drop_trigger_sql(d, table, &t, name)),
             Change::SetPrimaryKey { columns } => out.extend(primary_key_sql(d, &t, current, columns)?),
             Change::Engine { engine } => out.push(format!("ALTER TABLE {t} ENGINE = {}", mysql_option(d, engine)?)),
             Change::Collation { collation } => {
@@ -685,6 +707,10 @@ pub fn alter_sql(d: Dialect, table: &str, current: Option<&Structure>, changes: 
             }
             Change::MoveColumn { name, after } => moves.push(move_clause(d, current, changes, name, after.as_deref())?),
             Change::Rename { to } => rename = Some(rename_sql(d, &t, not_blank(to, "the table needs a name")?)),
+            Change::Comment { comment } if d == Dialect::Mssql => {
+                let had = current.comment.is_some();
+                out.extend(mssql_description(table, "TABLE", None, had, blank_is_none(comment.as_ref())));
+            }
             Change::Comment { comment } => out.push(comment_sql(d, &t, blank_is_none(comment.as_ref()))?),
         }
     }
@@ -747,6 +773,49 @@ fn comment_sql(d: Dialect, t: &str, comment: Option<&str>) -> Result<String> {
             )
         }
     })
+}
+
+/// SQL Server keeps comments as `MS_Description` extended properties, added, changed or dropped by procedure:
+/// which one depends on whether `object` (`schema.name`, `dbo` when bare; a `kind` such as TABLE or SEQUENCE) or its
+/// `column` `had` one. None when there's nothing to do.
+pub(crate) fn mssql_description(
+    object: &str,
+    kind: &str,
+    column: Option<&str>,
+    had: bool,
+    comment: Option<&str>,
+) -> Option<String> {
+    let d = Dialect::Mssql;
+    let (schema, name) = object.split_once('.').unwrap_or(("dbo", object));
+    let (procedure, value) = match (had, comment) {
+        (false, None) => return None,
+        (false, Some(c)) => ("sp_addextendedproperty", format!(", @value = {}", d.literal(c))),
+        (true, Some(c)) => ("sp_updateextendedproperty", format!(", @value = {}", d.literal(c))),
+        (true, None) => ("sp_dropextendedproperty", String::new()),
+    };
+    let column =
+        column.map(|c| format!(", @level2type = N'COLUMN', @level2name = {}", d.literal(c))).unwrap_or_default();
+    Some(format!(
+        "EXEC {procedure} @name = N'MS_Description'{value}, @level0type = N'SCHEMA', @level0name = {}, \
+         @level1type = N'{kind}', @level1name = {}{column}",
+        d.literal(schema),
+        d.literal(name)
+    ))
+}
+
+/// Drops the default constraint on SQL Server column `column` of `table` (`schema.table`), whatever its name; a
+/// column with one can't be dropped or given another. The name is looked up, so the statement is one batch.
+fn mssql_drop_default(table: &str, column: &str) -> String {
+    let d = Dialect::Mssql;
+    let object = d.literal(&d.table_ident(table));
+    format!(
+        "DECLARE @df sysname = (SELECT name FROM sys.default_constraints WHERE parent_object_id = OBJECT_ID({object}) \
+         AND parent_column_id = COLUMNPROPERTY(OBJECT_ID({object}), {}, 'ColumnId')); \
+         DECLARE @drop nvarchar(max) = N'ALTER TABLE ' + {} + N' DROP CONSTRAINT ' + QUOTENAME(@df); \
+         IF @df IS NOT NULL EXEC (@drop)",
+        d.literal(column),
+        d.literal(&d.table_ident(table))
+    )
 }
 
 fn rename_sql(d: Dialect, t: &str, to: &str) -> String {
@@ -817,7 +886,8 @@ fn column_def(c: &ColumnInfo) -> ColumnDef {
 }
 
 #[expect(clippy::too_many_lines, reason = "one arm per engine")]
-fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) -> Result<Vec<String>> {
+/// `table` as given (`schema.table`), `t` as an identifier.
+fn modify_column_sql(d: Dialect, table: &str, t: &str, cur: &ColumnInfo, want: &ColumnDef) -> Result<Vec<String>> {
     let name = not_blank(&want.name, "every column needs a name")?;
     let data_type = not_blank(&want.data_type, "every column needs a type")?;
     let default = blank_is_none(want.default.as_ref());
@@ -895,21 +965,27 @@ fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) ->
             }
         }
         Dialect::Mssql => {
-            if reincremented || recommented {
-                return Err(Error::Invalid(
-                    "SQL Server can't change a column's identity or comment here; use a SQL tab",
-                ));
-            }
-            if redefaulted {
-                return Err(Error::Invalid("SQL Server keeps a default as a named constraint; change it in a SQL tab"));
+            if reincremented {
+                return Err(Error::Invalid("SQL Server can't add or remove a column's identity; use a SQL tab"));
             }
             if renamed {
                 let old = format!("{t}.{}", d.ident(&cur.name));
                 out.push(format!("EXEC sp_rename {}, {}, N'COLUMN'", d.literal(&old), d.literal(name)));
             }
+            // A default is a constraint of its own: it goes before the column changes type, and comes back after.
+            let unset = redefaulted || (retyped && cur.default.is_some());
+            if unset && cur.default.is_some() {
+                out.push(mssql_drop_default(table, name));
+            }
             if retyped || renulled {
                 let null = if want.nullable { "NULL" } else { "NOT NULL" };
                 out.push(format!("ALTER TABLE {t} ALTER COLUMN {col} {data_type} {null}"));
+            }
+            if let Some(default) = default.filter(|_| unset) {
+                out.push(format!("ALTER TABLE {t} ADD DEFAULT {default} FOR {col}"));
+            }
+            if recommented {
+                out.extend(mssql_description(table, "TABLE", Some(name), cur.comment.is_some(), comment));
             }
         }
         Dialect::Ora => {
@@ -977,8 +1053,8 @@ fn modify_column_sql(d: Dialect, t: &str, cur: &ColumnInfo, want: &ColumnDef) ->
 }
 
 /// CREATE TABLE with the added columns, foreign keys and checks inline (MySQL: its engine and collation too), then
-/// its indexes and (Postgres) comments.
-fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
+/// its indexes and (Postgres, SQL Server) comments. `table` as given, `t` as an identifier.
+fn create_sql(d: Dialect, table: &str, t: &str, changes: &[Change]) -> Result<Vec<String>> {
     let mut defs = Vec::new();
     let mut primary = Vec::new();
     let mut after = Vec::new();
@@ -1000,10 +1076,8 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
                         ));
                     }
                     (Dialect::Lite, Some(_)) => return Err(Error::Invalid("SQLite columns have no comments")),
-                    (Dialect::Mssql, Some(_)) => {
-                        return Err(Error::Invalid(
-                            "SQL Server column comments are extended properties; use a SQL tab",
-                        ));
+                    (Dialect::Mssql, comment @ Some(_)) => {
+                        after.extend(mssql_description(table, "TABLE", Some(column.name.trim()), false, comment));
                     }
                     _ => {}
                 }
@@ -1013,7 +1087,7 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
             }
             Change::AddCheck { name, expression } => defs.push(check_sql(d, name, expression)?),
             Change::AddTrigger { name, timing, events, body } => {
-                after.push(trigger_sql(d, t, name, *timing, events, body)?);
+                after.push(trigger_sql(d, table, t, name, *timing, events, body)?);
             }
             Change::Engine { engine } => options.push(format!(" ENGINE = {}", mysql_option(d, engine)?)),
             Change::Collation { collation } => options.push(format!(" COLLATE = {}", mysql_option(d, collation)?)),
@@ -1057,9 +1131,7 @@ fn create_sql(d: Dialect, t: &str, changes: &[Change]) -> Result<Vec<String>> {
             after.insert(0, format!("COMMENT ON TABLE {t} IS {}", d.literal(c)));
         }
         (Dialect::Lite, Some(_)) => return Err(Error::Invalid("SQLite tables have no comments")),
-        (Dialect::Mssql, Some(_)) => {
-            return Err(Error::Invalid("SQL Server comments are extended properties; set them in a SQL tab"));
-        }
+        (Dialect::Mssql, comment @ Some(_)) => after.extend(mssql_description(table, "TABLE", None, false, comment)),
         _ => {}
     }
     Ok(std::iter::once(create).chain(after).collect())

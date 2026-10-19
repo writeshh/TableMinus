@@ -20,6 +20,8 @@ case "${1:-}" in
     echo "DynamoDB Local: http://127.0.0.1:8001, any access key and secret"
     echo "Elasticsearch: http://127.0.0.1:9200, no user (security off)"
     echo "Cassandra: 127.0.0.1:9042, no user"
+    echo "Oracle: 127.0.0.1:1521, service FREEPDB1, user tm, password testpass (needs Instant Client)"
+    echo "BigQuery emulator: http://127.0.0.1:9050, project tm, dataset app, no key"
     echo "SQL Server: 127.0.0.1:1433 (or host mssql through SSH), user sa, password TestPass1!word"
     echo "CockroachDB: 127.0.0.1:26257 (or host cockroach through SSH), user root, no password, sslmode=disable"
     ;;

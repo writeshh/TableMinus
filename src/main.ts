@@ -146,6 +146,10 @@ const FORM_SHAPES: Record<string, { hide: string[]; label?: Record<string, strin
     label: { user: "Access key ID", password: "Secret access key", database: "Region" },
     placeholder: { host: "dynamodb.us-east-1.amazonaws.com, or localhost for DynamoDB Local", port: "443, or 8000 for DynamoDB Local" },
   },
+  mssql: {
+    hide: [],
+    placeholder: { host: "127.0.0.1, or host\\SQLEXPRESS for a named instance", port: "1433; blank finds a named instance's port" },
+  },
   bigquery: {
     hide: ["user"],
     label: { password: "Service account key", database: "Project ID" },
@@ -596,6 +600,8 @@ function openEditor(id: string, existing?: Saved, fresh = false, password = "") 
       set("port", u.port);
       set("user", decodeURIComponent(kind === "d1" ? u.hostname : u.username));
       set("database", kind === "dynamodb" ? u.searchParams.get("region") ?? "" : decodeURIComponent(u.pathname.slice(1)));
+      const instance = kind === "mssql" ? u.searchParams.get("instance") : null;
+      if (instance) field("host").value = `${u.hostname}\\${instance}`;
 
     }
   }
@@ -700,6 +706,12 @@ function formToSaved(): Saved {
     } else if (editingKind === "dynamodb") {
       if (!user) throw "Enter the access key ID.";
       url = `dynamodb://${encodeURIComponent(user)}@${host}${port ? ":" + port : ""}?region=${encodeURIComponent(db || "us-east-1")}`;
+    } else if (editingKind === "mssql" && host.includes("\\")) {
+      // host\instance: SQL Browser tells the instance's port, unless one is typed.
+      const [server, instance] = host.split("\\", 2);
+      if (!server || !instance) throw "Write a named instance as host\\INSTANCE.";
+      const typed = field("port").value.trim();
+      url = `mssql://${user ? encodeURIComponent(user) + "@" : ""}${server}${typed ? ":" + typed : ""}/${db ? encodeURIComponent(db) : ""}?instance=${encodeURIComponent(instance)}`;
     } else if (editingKind === "bigquery") {
       if (!db) throw "Enter the Google Cloud project ID.";
       url = `bigquery://${host}${port ? ":" + port : ""}/${encodeURIComponent(db)}`; // its first dataset is current

@@ -39,7 +39,19 @@ impl SqlServer {
     ) -> Result<SqlServer> {
         let u = url::Url::parse(url)?;
         let host = u.host_str().unwrap_or("localhost").to_string();
-        let port = u.port().unwrap_or(1433);
+        let instance =
+            u.query_pairs().find(|(k, _)| k == "instance").map(|(_, v)| v.into_owned()).filter(|i| !i.is_empty());
+        // A named instance listens where SQL Browser says, unless the connection gives the port.
+        let port = match (u.port(), &instance, tunnel_port) {
+            (Some(p), _, _) => p,
+            (None, Some(_), Some(_)) => {
+                return Err(Error::Invalid(
+                    "through SSH, a named instance needs its port: SQL Browser answers over UDP",
+                ));
+            }
+            (None, Some(name), None) => instance_port(&host, name).await?,
+            (None, None, _) => 1433,
+        };
         let decode = |s: &str| percent_decode(s);
         let mut config = Config::new();
         config.host(&host);
@@ -62,6 +74,30 @@ impl SqlServer {
         let client = Box::pin(Client::connect(config, tcp.compat_write())).await?;
         Ok(SqlServer { client, cancel: Arc::new(Notify::new()) })
     }
+}
+
+/// Asks the SQL Browser service on `host` (UDP 1434) which TCP port instance `name` listens on.
+async fn instance_port(host: &str, name: &str) -> Result<u16> {
+    let socket = tokio::net::UdpSocket::bind(if host.contains(':') { "[::]:0" } else { "0.0.0.0:0" }).await?;
+    socket.connect((host, 1434)).await?;
+    // CLNT_UCAST_INST: 0x04, then the instance's name.
+    let mut ask = vec![4u8];
+    ask.extend_from_slice(name.as_bytes());
+    socket.send(&ask).await?;
+    let mut answer = vec![0u8; 4096];
+    let n = tokio::time::timeout(crate::db::CONNECT_TIMEOUT, socket.recv(&mut answer))
+        .await
+        .map_err(|_| Error::Invalid("SQL Browser didn't answer on UDP 1434; enter the instance's port instead"))??;
+    instance_port_in(answer.get(..n).unwrap_or_default())
+        .ok_or(Error::Invalid("SQL Browser doesn't know that instance, or it doesn't listen on TCP"))
+}
+
+/// The TCP port in SQL Browser's answer: 0x05, a two-byte length, then `ServerName;…;InstanceName;…;tcp;1433;;`.
+fn instance_port_in(answer: &[u8]) -> Option<u16> {
+    let text = String::from_utf8_lossy(answer.get(3..)?.split(|b| *b == 0).next()?).into_owned();
+    let fields: Vec<&str> = text.split(';').collect();
+    let at = fields.iter().position(|f| f.eq_ignore_ascii_case("tcp"))?;
+    fields.get(at + 1)?.parse().ok()
 }
 
 fn percent_decode(s: &str) -> String {
@@ -310,6 +346,18 @@ impl Driver for SqlServer {
 #[cfg(test)]
 mod tests {
     use super::split_batches;
+
+    #[test]
+    fn instance_port_in_should_read_the_tcp_port_from_sql_browsers_answer() {
+        let mut answer = vec![5u8, 0, 0];
+        answer.extend_from_slice(
+            b"ServerName;DB1;InstanceName;SQLEXPRESS;IsClustered;No;Version;16.0.1000.6;tcp;49724;;",
+        );
+        assert_eq!(super::instance_port_in(&answer), Some(49724));
+        let mut pipes_only = vec![5u8, 0, 0];
+        pipes_only.extend_from_slice(b"ServerName;DB1;InstanceName;X;np;\\\\DB1\\pipe\\sql\\query;;");
+        assert_eq!(super::instance_port_in(&pipes_only), None);
+    }
 
     #[test]
     fn split_batches_should_split_at_go_lines_and_drop_empty_batches() {
@@ -668,15 +716,15 @@ mod tests {
             );
             assert!(s.columns.iter().any(|c| c.name == "age") && !s.columns.iter().any(|c| c.name == "nick"));
 
+            // Comments, defaults and AFTER triggers are made (local_sql_server_structure_should_change_…).
             for refused in [
-                Change::Comment { comment: Some("x".into()) },
                 Change::ModifyColumn {
                     from: "age".into(),
-                    column: ColumnDef { default: Some("0".into()), ..col("age", "bigint") },
+                    column: ColumnDef { auto_increment: true, ..col("age", "bigint") },
                 },
                 Change::AddTrigger {
                     name: "t".into(),
-                    timing: crate::ddl::TriggerTiming::After,
+                    timing: crate::ddl::TriggerTiming::Before,
                     events: vec![crate::ddl::TriggerEvent::Insert],
                     body: "x".into(),
                 },
@@ -801,6 +849,202 @@ mod tests {
             assert!(c.query("SET SHOWPLAN_TEXT ON\nGO\nselect * from nope\nGO\nSET SHOWPLAN_TEXT OFF").await.is_err());
             assert_eq!(c.query("select 6 as six").await.unwrap().rows, [[Some("6".into())]], "and after a failure");
             drop_database(c, "tm_explain").await;
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local SQL Server on 1433 (scripts/test-env.sh up) and UDP 1434 free; answers as SQL Browser"]
+    fn local_sql_server_named_instance_should_connect_on_the_port_sql_browser_gives() {
+        tauri::async_runtime::block_on(async {
+            // A stand-in SQL Browser that sends instance TM to the server on 1433.
+            let browser = tokio::net::UdpSocket::bind("127.0.0.1:1434").await.unwrap();
+            tauri::async_runtime::spawn(async move {
+                let mut ask = [0u8; 256];
+                let (n, from) = browser.recv_from(&mut ask).await.unwrap();
+                assert_eq!(&ask[..n], b"\x04TM");
+                let text = b"ServerName;LOCAL;InstanceName;TM;IsClustered;No;Version;16.0;tcp;1433;;";
+                let mut answer = vec![5u8, u8::try_from(text.len()).unwrap(), 0];
+                answer.extend_from_slice(text);
+                browser.send_to(&answer, from).await.unwrap();
+            });
+            let password = SecretString::from("TestPass1!word");
+            let url = "mssql://sa@127.0.0.1/master?instance=TM";
+            let mut c = Conn::open(Engine::Mssql, url, Some(&password), &Tls::default(), &Options::default(), None)
+                .await
+                .unwrap();
+            assert_eq!(c.fetch_with("select 1", &[]).await.unwrap(), [[Some("1".into())]]);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local SQL Server (scripts/test-env.sh up); creates and drops a scratch database"]
+    fn local_sql_server_should_list_edit_and_drop_functions_procedures_and_sequences() {
+        use crate::catalog::ItemKind;
+        use crate::objects::{routine_sql, routine_template, sequence_sql};
+        tauri::async_runtime::block_on(async {
+            let mut c = local("tm_items").await;
+            let d = crate::db::Dialect::Mssql;
+            for (kind, name) in [(ItemKind::Function, "first"), (ItemKind::Procedure, "first_proc")] {
+                let text = routine_template(d, kind, name).unwrap();
+                c.run_ddl(&routine_sql(d, kind, name, &text, true).unwrap()).await.unwrap();
+            }
+            c.query("create sequence ticket as bigint start with 10 increment by 5").await.unwrap();
+            let items: Vec<(ItemKind, String)> =
+                c.items(false).await.unwrap().into_iter().map(|i| (i.kind, i.name)).collect();
+            assert!(items.contains(&(ItemKind::Function, "first".into())), "{items:?}");
+            assert!(
+                items.contains(&(ItemKind::Procedure, "first_proc".into()))
+                    && items.contains(&(ItemKind::Sequence, "ticket".into()))
+            );
+
+            // Saving an existing routine replaces it.
+            let def = c.routine_definitions(ItemKind::Function, "first").await.unwrap().remove(0);
+            assert!(def.starts_with("CREATE OR ALTER FUNCTION"), "{def}");
+            c.run_ddl(
+                &routine_sql(d, ItemKind::Function, "first", &def.replace("RETURN 1", "RETURN 2"), false).unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(c.fetch_with("select dbo.first()", &[]).await.unwrap(), [[Some("2".into())]]);
+
+            c.query("select next value for ticket").await.unwrap();
+            let cur = c.sequence("ticket").await.unwrap();
+            assert_eq!(
+                (cur.last_value.as_deref(), cur.increment.as_str(), cur.start.as_str()),
+                (Some("10"), "5", "10")
+            );
+            let want = crate::objects::Sequence {
+                last_value: Some("100".into()),
+                comment: Some("tickets".into()),
+                ..cur.clone()
+            };
+            let sql = sequence_sql(d, "ticket", &cur, &want).unwrap();
+            c.run_ddl(&sql).await.unwrap();
+            assert_eq!(c.fetch_with("select next value for ticket", &[]).await.unwrap(), [[Some("105".into())]]);
+            assert_eq!(c.sequence("ticket").await.unwrap().comment.as_deref(), Some("tickets"));
+            let moved = crate::objects::Sequence { start: "1".into(), ..cur.clone() };
+            assert!(sequence_sql(d, "ticket", &cur, &moved).is_err(), "SQL Server can't move the start");
+
+            for (kind, name) in
+                [(ItemKind::Function, "first"), (ItemKind::Procedure, "first_proc"), (ItemKind::Sequence, "ticket")]
+            {
+                let sql = c.drop_item_sql(kind, name, false).await.unwrap();
+                c.run_ddl(&sql).await.unwrap();
+            }
+            assert_eq!(c.items(false).await.unwrap().len(), 0, "all dropped");
+            drop_database(c, "tm_items").await;
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a local SQL Server (scripts/test-env.sh up); creates and drops a scratch database"]
+    #[expect(clippy::too_many_lines, reason = "one scenario against a live server: create, change, then drop")]
+    fn local_sql_server_structure_should_change_defaults_comments_and_triggers() {
+        use crate::ddl::{Change, ColumnDef, TriggerEvent, TriggerTiming};
+        tauri::async_runtime::block_on(async {
+            let mut c = local("tm_gaps").await;
+            let col = |name: &str, data_type: &str| ColumnDef {
+                name: name.into(),
+                data_type: data_type.into(),
+                nullable: true,
+                default: None,
+                comment: None,
+                auto_increment: false,
+                primary: false,
+            };
+            let create = [
+                Change::AddColumn { column: ColumnDef { primary: true, nullable: false, ..col("id", "int") } },
+                Change::AddColumn {
+                    column: ColumnDef {
+                        default: Some("0".into()),
+                        comment: Some("points".into()),
+                        ..col("score", "int")
+                    },
+                },
+                Change::AddColumn { column: col("seen", "datetime2") },
+                Change::Comment { comment: Some("all the pets".into()) },
+            ];
+            {
+                let sql = c.alter_sql("app.pets", true, &create).await.unwrap();
+                c.run_ddl(&sql).await
+            }
+            .unwrap_err();
+            c.query("create schema app").await.unwrap();
+            {
+                let sql = c.alter_sql("app.pets", true, &create).await.unwrap();
+                c.run_ddl(&sql).await
+            }
+            .unwrap();
+            let s = c.structure("app.pets").await.unwrap();
+            assert_eq!(s.comment.as_deref(), Some("all the pets"));
+            let score = &s.columns[1];
+            assert_eq!((score.default.as_deref(), score.comment.as_deref()), (Some("((0))"), Some("points")));
+
+            // A new default, a new type (the default comes back), a changed comment, a trigger.
+            let changes = [
+                Change::ModifyColumn {
+                    from: "score".into(),
+                    column: ColumnDef {
+                        default: Some("7".into()),
+                        comment: Some("stars".into()),
+                        ..col("score", "bigint")
+                    },
+                },
+                Change::ModifyColumn {
+                    from: "seen".into(),
+                    column: ColumnDef { default: Some("sysdatetime()".into()), ..col("seen", "datetime2") },
+                },
+                Change::AddTrigger {
+                    name: "stamp".into(),
+                    timing: TriggerTiming::After,
+                    events: vec![TriggerEvent::Insert, TriggerEvent::Update],
+                    body: "UPDATE p SET seen = sysdatetime() FROM app.pets p JOIN inserted i ON i.id = p.id;".into(),
+                },
+                Change::Comment { comment: None },
+            ];
+            {
+                let sql = c.alter_sql("app.pets", false, &changes).await.unwrap();
+                c.run_ddl(&sql).await
+            }
+            .unwrap();
+            let s = c.structure("app.pets").await.unwrap();
+            let score = &s.columns[1];
+            assert_eq!(
+                (score.data_type.as_str(), score.default.as_deref(), score.comment.as_deref()),
+                ("bigint", Some("((7))"), Some("stars"))
+            );
+            assert!(s.columns[2].default.is_some() && s.comment.is_none());
+            let t = &s.triggers[0];
+            assert_eq!(
+                (t.timing.as_deref(), t.events.clone()),
+                (Some("AFTER"), vec!["INSERT".to_string(), "UPDATE".to_string()])
+            );
+            assert!(t.body.as_deref().is_some_and(|b| b.starts_with("UPDATE p SET seen")), "{:?}", t.body);
+            c.query("insert into app.pets (id) values (1)").await.unwrap();
+            assert_eq!(c.fetch_with("select score from app.pets", &[]).await.unwrap(), [[Some("7".into())]]);
+            assert!(c.fetch_with("select seen from app.pets", &[]).await.unwrap()[0][0].is_some());
+            let before = [Change::AddTrigger {
+                name: "x".into(),
+                timing: TriggerTiming::Before,
+                events: vec![TriggerEvent::Insert],
+                body: "x".into(),
+            }];
+            assert!(c.alter_sql("app.pets", false, &before).await.is_err());
+
+            // Dropping the trigger, a default (to none), then a column that had one.
+            let changes = [
+                Change::DropTrigger { name: "stamp".into() },
+                Change::ModifyColumn { from: "seen".into(), column: col("seen", "datetime2") },
+                Change::DropColumn { name: "score".into() },
+            ];
+            {
+                let sql = c.alter_sql("app.pets", false, &changes).await.unwrap();
+                c.run_ddl(&sql).await
+            }
+            .unwrap();
+            let s = c.structure("app.pets").await.unwrap();
+            assert!(s.triggers.is_empty() && s.columns.len() == 2 && s.columns[1].default.is_none());
+            drop_database(c, "tm_gaps").await;
         });
     }
 }

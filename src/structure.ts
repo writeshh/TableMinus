@@ -287,8 +287,8 @@ export async function showStructure(out: HTMLElement, tabId: number, table: stri
 function draw(out: HTMLElement, tabId: number, d: Draft) {
   const redraw = () => (draw(out, tabId, d), host.pendingChanged());
   const touched = () => host.pendingChanged();
-  // SQLite has no comments, and SQL Server's are extended properties that are set in a SQL tab.
-  const lite = kind() === "sqlite" || kind() === "mssql";
+  // SQLite has no comments.
+  const lite = kind() === "sqlite";
   const view = el("div", { className: "structure" });
   if (d.error) view.append(el("p", { className: "error-text structure-error", textContent: d.error }));
 
@@ -419,7 +419,7 @@ function draw(out: HTMLElement, tabId: number, d: Draft) {
 /** Postgres triggers call a function; MySQL and SQLite run statements (SQLite's go inside BEGIN … END). */
 const TRIGGER_BODY: Record<string, string> = {
   postgres: "Function to call, e.g. audit()", mysql: "Statement, e.g. SET NEW.updated_at = NOW()", sqlite: "Statements, e.g. UPDATE …;",
-  duckdb: "", mssql: "", clickhouse: "", bigquery: "", oracle: "PL/SQL, e.g. :new.updated_at := SYSDATE;",
+  duckdb: "", mssql: "Statements; the changed rows are in inserted and deleted", clickhouse: "", bigquery: "", oracle: "PL/SQL, e.g. :new.updated_at := SYSDATE;",
 };
 
 /** Triggers: an existing one can be dropped, or edited (dropped, and added again as changed); added ones are forms. */

@@ -66,7 +66,7 @@ Tests that need a database are `#[ignore]`d with a reason saying what they need 
 scripts/test-env.sh up
 ```
 
-Starts Docker containers from `scripts/test-env.yml`: an sshd on 127.0.0.1:2222 that reaches Postgres 16 and MySQL 8.0 only through the tunnel, plus CockroachDB, SQL Server 2022, ClickHouse 24.8, MongoDB 8.0, Cassandra 5, Oracle 23 Free, Elasticsearch 8.15, DynamoDB Local and libSQL on local ports. The script prints each server's address and test credentials, and keeps its SSH key in `.test-env/` (git-ignored). Stop and wipe them with `scripts/test-env.sh down`.
+Starts Docker containers from `scripts/test-env.yml`: an sshd on 127.0.0.1:2222 that reaches Postgres 16 and MySQL 8.0 only through the tunnel, plus CockroachDB, SQL Server 2022, ClickHouse 24.8, MongoDB 8.0, Cassandra 5, Oracle 23 Free, the BigQuery emulator, Elasticsearch 8.15, DynamoDB Local and libSQL on local ports. The script prints each server's address and test credentials, and keeps its SSH key in `.test-env/` (git-ignored). Stop and wipe them with `scripts/test-env.sh down`.
 
 ```bash
 cd src-tauri && cargo test --locked -- --ignored

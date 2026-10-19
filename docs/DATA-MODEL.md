@@ -30,7 +30,7 @@ All of these are written to a temporary file and renamed into place, and a file 
 | Field | Meaning |
 | --- | --- |
 | `name` | Unique; also the keychain account and the base of the session key |
-| `kind` | `db::Engine`: `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`, `mssql`, `clickhouse`, `libsql`, `d1`, `redis`, `mongodb`, `dynamodb`, `elasticsearch`, `cassandra`, `oracle` |
+| `kind` | `db::Engine`: `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`, `mssql`, `clickhouse`, `libsql`, `d1`, `redis`, `mongodb`, `dynamodb`, `elasticsearch`, `cassandra`, `oracle`, `bigquery` |
 | `url` | Connection URL **without the password** (a file path for SQLite and DuckDB) |
 | `tag` | `""`, `local`, `development`, `staging`, `production`, or a custom tag |
 | `safety` | `safety::Safety`: `silent`, `alert1`, `alert2` (default), `safe1`, `safe2`. Old files with `confirm_writes: bool` still load (true is Alert 2) |
