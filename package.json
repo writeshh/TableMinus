@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "check": "tsc --noEmit && node --test 'src/**/*.test.ts' && cd src-tauri && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked",
+    "test:live": "scripts/test-live.sh",
     "audit": "cd src-tauri && cargo deny check && cargo audit",
     "bundle": "scripts/build.sh"
   },

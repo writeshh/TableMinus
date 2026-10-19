@@ -115,6 +115,33 @@ services:
     ports: ["127.0.0.1:8080:8080"]
     networks: [front, back]
 
+  # The servers the #[ignore]d MySQL, Postgres and Redis tests expect on their usual ports (scripts/test-live.sh), passwordless
+  # superusers, so these trust every connection. Behind the `live` profile: `test-env.sh up` leaves them alone, as a
+  # local server (DBngin) may hold those ports.
+  live-mysql:
+    # 8.0 to match the mysqldump a stock Ubuntu runner has: the backup test needs a client as new as the server.
+    image: mysql:8.0
+    command: --local-infile=1
+    profiles: [live]
+    environment: { MYSQL_ALLOW_EMPTY_PASSWORD: "yes" }
+    ports: ["127.0.0.1:3306:3306"]
+    healthcheck: { test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 --silent"], interval: 2s, retries: 60 }
+
+  live-postgres:
+    # PostGIS for the geometry browse test. Its images are amd64 only; Apple silicon runs them under Rosetta.
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    profiles: [live]
+    environment: { POSTGRES_HOST_AUTH_METHOD: trust }
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"], interval: 2s, retries: 60 }
+
+  live-redis:
+    image: redis:7
+    profiles: [live]
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 2s, retries: 60 }
+
 networks:
   front: {}
   back: { internal: true }

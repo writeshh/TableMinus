@@ -1,6 +1,6 @@
 # `npm run check` on every push and pull request: tsc, the UI tests, rustfmt, clippy (warnings are errors) and the
-# Rust tests. macOS, as the app's Touch ID and keychain code is built for it. Tests that need a live database stay
-# ignored here, as they are locally.
+# Rust tests. macOS, as the app's Touch ID and keychain code is built for it. Tests that need a live MySQL, Postgres or
+# Redis run in the live job below; the other engines' stay ignored here, as they are locally.
 name: check
 
 on:
@@ -26,3 +26,46 @@ jobs:
       # tauri's generate_context! embeds ../dist, so the frontend is built before cargo runs.
       - run: npm run build
       - run: npm run check
+
+  # The #[ignore]d tests that need MySQL, Postgres or Redis: what `npm run test:live` runs against the `live` profile of
+  # scripts/test-env.yml. Service containers can't take a command line, so local_infile is switched on with SET GLOBAL
+  # instead.
+  live:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 --silent" --health-interval 2s --health-retries 60
+      postgres:
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 2s --health-retries 60
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 2s --health-retries 60
+    steps:
+      - uses: actions/checkout@v4
+      # Tauri's WebKitGTK webview and menus, SQLCipher's OpenSSL, keyring's Secret Service (D-Bus); mysqldump for
+      # the backup test.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev mysql-client
+      - run: mysql -h 127.0.0.1 -u root -e "set global local_infile = 1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npm run build
+      # The servers are already up, so the script goes straight to the tests.
+      - run: npm run test:live

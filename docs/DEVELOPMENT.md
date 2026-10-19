@@ -74,7 +74,11 @@ cd src-tauri && cargo test --locked -- --ignored
 
 Runs every ignored test. Several also expect servers on the usual local ports (Postgres on 5432, MySQL on 3306, Redis on 6379). The owner runs those with DBngin, not the compose file. Run single tests by name to target one engine. `scripts/test-ssh.sh` tests the SSH tunnel against MySQL.
 
-A branch with a one-command live-test runner (`npm run test:live`, `docker-compose.yml`, a CI job) exists but isn't merged (TASK-002).
+```bash
+npm run test:live
+```
+
+Runs the ignored tests that need MySQL, Postgres or Redis on their usual ports (`scripts/test-live.sh`). Whichever of the three isn't listening is started from the `live` profile of `scripts/test-env.yml` (passwordless, MySQL 8.0 with `local_infile`, Postgres with PostGIS); a local one such as DBngin is used as it is. It skips the tests that need `scripts/test-env.sh up`'s engines and the SSH tunnel test. The `live` job in `.github/workflows/check.yml` runs the same script against service containers (not yet run on GitHub).
 
 ## Checking the UI without the native window
 

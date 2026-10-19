@@ -187,7 +187,8 @@ fn my_column(maria: bool, mut r: Vec<Option<String>>) -> ColumnInfo {
         primary: take(&mut r, 6).as_deref() == Some("PRI"),
         on_update: extra.to_ascii_lowercase().find("on update ").map(|i| extra[i + 10..].to_string()),
         collation: take(&mut r, 7),
-        generated: extra.to_ascii_uppercase().contains("GENERATED"),
+        // `VIRTUAL GENERATED` / `STORED GENERATED`; not `DEFAULT_GENERATED`, which only marks an expression default.
+        generated: extra.split_whitespace().any(|w| w.eq_ignore_ascii_case("GENERATED")),
         data_type,
     }
 }
@@ -1125,7 +1126,7 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
-    use super::{lite_trigger, mssql_trigger_body};
+    use super::{lite_trigger, mssql_trigger_body, my_column};
     use crate::db::{Conn, Engine, Options};
     use crate::tls::Tls;
 
@@ -1164,6 +1165,17 @@ mod tests {
         let of = lite_trigger("t".into(), "create trigger t after update of name on pets begin select 1; end".into());
         assert!(when.timing.is_none() && when.body.is_none() && of.timing.is_none());
         assert!(of.definition.starts_with("create trigger"));
+    }
+
+    fn my_extra(extra: &str) -> Vec<Option<String>> {
+        ["c", "timestamp", "YES", "CURRENT_TIMESTAMP", "", extra, "", ""].map(|v| Some(v.to_string())).into()
+    }
+
+    #[test]
+    fn my_column_should_not_take_an_expression_default_for_a_generated_column() {
+        assert!(!my_column(false, my_extra("DEFAULT_GENERATED on update CURRENT_TIMESTAMP")).generated);
+        assert!(my_column(false, my_extra("VIRTUAL GENERATED")).generated);
+        assert!(my_column(true, my_extra("STORED GENERATED")).generated);
     }
 
     async fn sqlite() -> Conn {
