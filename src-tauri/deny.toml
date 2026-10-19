@@ -1,4 +1,4 @@
-# cargo-deny: run with `npm run audit` (needs the network for the advisory database). See CLAUDE.md › Release.
+# cargo-deny: run with `npm run audit` (needs the network for the advisory database). See docs/CONVENTIONS.md › Release.
 
 [graph]
 all-features = false
