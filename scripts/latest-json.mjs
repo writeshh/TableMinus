@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // scripts/latest-json.mjs <bundle dir> <target triple>: writes <bundle dir>/latest.json, the file the app's updater
-// reads (src-tauri/src/updater.rs), for the update artifact `tauri build` signed. The release's notes are the
+// reads (src-tauri/src/app/updater.rs), for the update artifact `tauri build` signed. The release's notes are the
 // version's section of CHANGELOG.md. Upload it with the artifact to the release tagged v<version>.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

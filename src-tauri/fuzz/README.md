@@ -1,7 +1,7 @@
 # Fuzzing
 
 `cargo fuzz` runs safe mode's read-only check (`src/readonly.rs`) on generated text, looking for input that makes
-it panic. The property tests in `readonly.rs` and `db.rs` cover what it should answer; this covers that it always
+it panic. The property tests in `safety/readonly.rs` and `sql/db.rs` cover what it should answer; this covers that it always
 answers.
 
 Needs a nightly toolchain and cargo-fuzz (`cargo install --locked cargo-fuzz`). From `src-tauri`:

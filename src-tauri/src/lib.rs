@@ -1,44 +1,22 @@
 //! TableMinus's Tauri commands: the only surface the UI can call.
 
-mod acp;
-mod ai;
-mod backup;
-mod browse;
-mod cassandra;
-mod catalog;
-mod console;
-mod db;
-mod ddl;
-mod diagram;
-mod discover;
-mod driver;
-mod dynamo;
-mod elastic;
+mod app;
+mod assistant;
+mod connect;
 mod error;
-mod export;
-mod import;
-mod jobs;
-mod launcher;
-mod locations;
-mod mcp;
-mod mongo;
-mod objects;
-mod passcode;
-mod plugins;
-mod processes;
-mod readonly;
-mod redis;
-mod rows;
+mod nosql;
 mod safety;
-mod secrets;
-mod sessions;
-mod ssh;
-mod store;
-mod structure;
-mod themes;
-mod tls;
-mod updater;
-mod users;
+mod sql;
+mod transfer;
+
+// The modules the commands below name directly.
+use app::{console, locations, passcode, plugins, secrets, themes, updater};
+use assistant::{acp, ai, mcp};
+use connect::{discover, launcher, ssh, store};
+use nosql::{cassandra, dynamo, elastic, mongo, redis};
+use safety::readonly;
+use sql::{browse, catalog, db, ddl, diagram, objects, processes, rows, structure, users};
+use transfer::{backup, jobs};
 
 /// What `cargo fuzz` drives (`fuzz/fuzz_targets/read_only.rs`): safe mode's read-only check on arbitrary text, for
 /// every engine. Built only with `--cfg fuzzing`, which cargo-fuzz sets, so the app's surface stays as it is.
@@ -1132,13 +1110,13 @@ mod tests {
         live: &mut Live,
         sql: &str,
         limit: Option<D>,
-    ) -> crate::error::Result<crate::db::QueryResult> {
+    ) -> crate::error::Result<crate::sql::db::QueryResult> {
         let sql = sql.to_string();
         with_limit(live, limit, move |c| Box::pin(async move { c.query(&sql).await })).await
     }
-    use crate::db::{Conn, Engine, Options};
+    use crate::connect::{store, tls::Tls};
     use crate::error::Error;
-    use crate::{store, tls::Tls};
+    use crate::sql::db::{Conn, Engine, Options};
     use std::time::{Duration, Instant};
 
     async fn live(engine: Engine, url: &str) -> Live {
@@ -1151,7 +1129,7 @@ mod tests {
             ssh: None,
             tls: Tls::default(),
             options: Options::default(),
-            password_mode: crate::store::PasswordMode::Keychain,
+            password_mode: crate::connect::store::PasswordMode::Keychain,
             color: None,
             group: String::new(),
             flavor: None,
@@ -1170,7 +1148,7 @@ mod tests {
             l.password = Some("pw".into());
             let open = super::Open::default();
             open.insert("t".into(), l).await;
-            let reads = |sql: &'static str| move |kind| crate::readonly::is_read_only(kind, sql);
+            let reads = |sql: &'static str| move |kind| crate::safety::readonly::is_read_only(kind, sql);
             assert!(super::guard(&open, "t", reads("select 1"), false, None).await.is_ok());
             let write = super::guard(&open, "t", reads("delete from x"), true, None).await;
             assert!(matches!(write, Err(Error::PasswordRequired)), "confirming isn't enough at Safe 2");

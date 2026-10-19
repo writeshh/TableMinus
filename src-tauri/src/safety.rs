@@ -1,5 +1,7 @@
 //! Safe mode: five levels, from silent to asking for the password, checked by the backend wherever SQL runs.
 
+pub(crate) mod readonly;
+
 use crate::error::{Error, Result};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -81,7 +83,7 @@ fn token_digest(token: &SecretString) -> [u8; 32] {
 #[tauri::command]
 pub async fn batch_grant() -> Result<String> {
     touch_id("run these statements in safe mode").await?;
-    let token = crate::mcp::random_hex(32)?;
+    let token = crate::assistant::mcp::random_hex(32)?;
     let now = Instant::now();
     let mut grants = GRANTS.lock().unwrap_or_else(PoisonError::into_inner);
     grants.retain(|(_, until)| *until > now);

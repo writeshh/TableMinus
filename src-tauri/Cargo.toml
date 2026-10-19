@@ -25,7 +25,7 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 # preserve_order: an agent's config file keeps its keys in their order when the MCP setup adds to it.
 serde_json = { version = "1", features = ["preserve_order"] }
-# Drivers (driver.rs) are trait objects with async methods; already in the tree through tokio-postgres and rmcp.
+# Drivers (sql/driver.rs) are trait objects with async methods; already in the tree through tokio-postgres and rmcp.
 async-trait = "0.1"
 tokio-postgres = "0.7.18"
 postgres-protocol = "0.6.12"
@@ -49,7 +49,7 @@ tokio = { version = "1", features = ["time", "process", "net", "io-std", "io-uti
 russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-config = "0.58.0"
 tauri-plugin-dialog = "2"
-# Updates from GitHub Releases, signed with the key build.sh finds (updater.rs). No `zip`: v2 update artifacts
+# Updates from GitHub Releases, signed with the key build.sh finds (app/updater.rs). No `zip`: v2 update artifacts
 # are the installers themselves, and the zip crate it would bring has open advisories.
 tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
 futures-util = { version = "0.3", default-features = false }
@@ -64,7 +64,7 @@ getrandom = "0.3"
 dirs = "7"
 argon2 = "0.6"
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
-# Plugins run in QuickJS, with no file, network or app access but what plugins.rs gives them.
+# Plugins run in QuickJS, with no file, network or app access but what app/plugins.rs gives them.
 rquickjs = "0.14"
 tokio-util = { version = "0.7.20", features = ["compat"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
@@ -86,7 +86,7 @@ robius-authentication = "0.3.1"
 
 
 [dev-dependencies]
-# Property tests for the read-only check and SQL quoting (readonly.rs, db.rs).
+# Property tests for the read-only check and SQL quoting (safety/readonly.rs, sql/db.rs).
 proptest = "1"
 
 [lints.rust]

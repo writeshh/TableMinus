@@ -28,12 +28,17 @@ Sources: [Apollo Rust best practices](https://github.com/apollographql/rust-best
 - Cap anything untrusted that drives an allocation or a loop (row counts, file sizes, import lengths).
 
 **Secrets**
-- Passwords and URLs holding passwords are `secrecy::SecretString`. Call `expose_secret()` only at the point of use. Never `Debug`, log or persist them; the keychain is the only store (through `secrets.rs`, which falls back to its encrypted vault on Linux without a Secret Service).
+- Passwords and URLs holding passwords are `secrecy::SecretString`. Call `expose_secret()` only at the point of use. Never `Debug`, log or persist them; the keychain is the only store (through `app/secrets.rs`, which falls back to its encrypted vault on Linux without a Secret Service).
 
 **Async**
 - Every network call has a timeout (`CONNECT_TIMEOUT` for connects).
 - Never hold a `std::sync::Mutex` guard across `.await`. Blocking work (SQLite, file I/O on large files, external tools) belongs in `spawn_blocking`.
 - External tools (`pg_dump` etc.): `Command::arg` per argument, never `sh -c`; passwords via environment variables, never arguments.
+
+**Layout**
+- A module with children is `name.rs` beside a `name/` folder, never `name/mod.rs`, so an editor's tabs show names, not a row of `mod.rs`. Group modules by domain in folders (`sql/`, `nosql/`, `connect/`…, see [ARCHITECTURE.md](ARCHITECTURE.md#the-rust-layout)); `lib.rs` keeps the commands and `error.rs` stays at the top.
+- Unit tests sit in the file or in `name/tests.rs` beside it; there is no `tests/` folder, as the crate exposes no public API.
+- Refer to a module by its full path (`crate::sql::db`), not through `lib.rs`'s `use` lines.
 
 **Style**
 - Borrow in signatures (`&str`, `&[T]`, `&Path`); clone only when ownership is really needed.
@@ -50,8 +55,8 @@ Sources: [Apollo Rust best practices](https://github.com/apollographql/rust-best
 - **Errors the UI acts on** get a stable code in `Error::code` (`error.rs`), mirrored in the `Code` type in `src/ipc.ts`. Add to both together.
 - **Every path that runs SQL checks safe mode in the backend**, never only in the UI ([features/safe-mode.md](features/safe-mode.md)). A new command that runs user SQL calls `readonly::is_read_only` and `safety::check`.
 - **New SQL engines** go on the `Driver` trait with a `Dialect` variant; let the compiler list the `match`es to fill ([features/engines.md](features/engines.md)). Non-SQL engines get their own module and a `sessions::Sessions<S>`.
-- **Statements are generated first, then run as shown:** DDL, row saves, user edits and object edits return SQL for the preview, and the run executes the same plan (`ddl.rs`, `rows.rs`, `users.rs`).
-- **Long work** runs on its own connection and reports through events (`jobs.rs`, `backup.rs`).
+- **Statements are generated first, then run as shown:** DDL, row saves, user edits and object edits return SQL for the preview, and the run executes the same plan (`sql/ddl.rs`, `sql/rows.rs`, `sql/users.rs`).
+- **Long work** runs on its own connection and reports through events (`transfer/jobs.rs`, `transfer/backup.rs`).
 - **Ignored tests** say exactly what they need in the `#[ignore = "…"]` reason and clean up after themselves (scratch databases, specific Redis db numbers).
 - `rustfmt.toml`: 120 columns, `use_small_heuristics = "Max"`: dense one-line expressions are the house style.
 - Dependencies carry a comment in `Cargo.toml` saying why they're there, especially when "already in the tree through X".

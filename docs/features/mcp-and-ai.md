@@ -11,13 +11,13 @@
 - **Tokens** (`mcp.json`, stored as SHA-256 hashes; each value shown once): named, scoped to some or all connections, read-only or read-write, revocable. A read-only token never writes and also runs its queries inside the driver's read-only bounds.
 - **Approval:** a query that isn't provably read-only shows an Allow/Deny dialog in the app (on by default); a connection in safe mode always asks. Nobody answering in 60 s denies it.
 - **The bridge** `tableminus-mcp` (`src/bin/tableminus-mcp.rs`): agents start it as a command; it forwards stdin JSON-RPC to the server using the port and token from `mcp-bridge.json` (mode 0600). `TABLEMINUS_MCP_TOKEN` gives it a narrower token. `npm run bundle` builds it and ships it next to the app's executable (`tauri.bundle.json` `externalBin`).
-- **Setup:** Settings › MCP shows manual instructions, and can edit Claude Desktop, Cursor or Windsurf config files (`mcp/setup.rs`): it adds or repoints the `tableminus` entry, keeps everything else including key order and the entry's `env`, copies the original aside, writes through a temporary file, and leaves a file that isn't a JSON object untouched.
+- **Setup:** Settings › MCP shows manual instructions, and can edit Claude Desktop, Cursor or Windsurf config files (`assistant/mcp/setup.rs`): it adds or repoints the `tableminus` entry, keeps everything else including key order and the entry's `env`, copies the original aside, writes through a temporary file, and leaves a file that isn't a JSON object untouched.
 - **Activity log** and **connected clients** (per token since the app started). Disconnect revokes the token; the bridge's token is rotated.
 - The passcode lock stops MCP requests too.
 
-Tests: `mcp/tests.rs` runs a real server on a free port against SQLite (approvals, read-only tokens, safe-mode levels, the bridge file's permissions).
+Tests: `assistant/mcp/tests.rs` runs a real server on a free port against SQLite (approvals, read-only tokens, safe-mode levels, the bridge file's permissions).
 
-## AI assistant (`src-tauri/src/ai.rs`, `acp.rs`; UI `src/ai.ts`, `src/ai-text.ts`)
+## AI assistant (`src-tauri/src/assistant/ai.rs`, `assistant/acp.rs`; UI `src/ai.ts`, `src/ai-text.ts`)
 
 - Off until enabled under a consent notice that prompts go to the provider.
 - **Providers:** Anthropic Messages API; OpenAI-compatible chat completions with a custom base URL (OpenAI, Ollama, LM Studio). HTTPS only except to this computer. Keys in the keychain. An optional HTTP proxy with Basic credentials (user in the address, password in the keychain).

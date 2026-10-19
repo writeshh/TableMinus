@@ -12,13 +12,13 @@ flowchart LR
   end
   subgraph Core["Rust core (src-tauri/src)"]
     CMD[lib.rs<br/>~150 Tauri commands]
-    SAFE[safety.rs + readonly.rs]
+    SAFE[safety.rs + safety/readonly.rs]
     OPEN[Open: SQL sessions<br/>Conn = Box&lt;dyn Driver&gt;]
-    NOSQL[sessions.rs: Redis, MongoDB,<br/>DynamoDB, Elasticsearch, Cassandra]
-    STORE[store.rs, locations.rs,<br/>secrets.rs]
+    NOSQL[nosql/sessions.rs: Redis, MongoDB,<br/>DynamoDB, Elasticsearch, Cassandra]
+    STORE[connect/store.rs, app/locations.rs,<br/>app/secrets.rs]
     MCP[mcp/: HTTP server on 127.0.0.1]
-    AI[ai.rs, acp.rs]
-    JOBS[jobs.rs, backup.rs]
+    AI[assistant/ai.rs, assistant/acp.rs]
+    JOBS[transfer/jobs.rs, transfer/backup.rs]
   end
   IPC -->|invoke / events| CMD
   CMD --> SAFE --> OPEN
@@ -36,6 +36,22 @@ flowchart LR
   JOBS --> Tools[pg_dump, mysqldump…]
 ```
 
+## The Rust layout
+
+`src-tauri/src` has `lib.rs` (the commands), `main.rs`, `error.rs`, `bin/` (the MCP server's binary) and one folder per domain, each with a `<folder>.rs` that lists its modules:
+
+| Folder | Holds |
+| --- | --- |
+| `sql/` | `db.rs` (`Conn`), `driver/` (one file per SQL engine), and what the UI does on them: catalog, browse, rows, DDL, structure, objects, diagram, processes, users |
+| `transfer/` | export, import, backup and restore, and the background jobs that run them |
+| `nosql/` | Redis, MongoDB, DynamoDB, Elasticsearch, Cassandra and their sessions |
+| `connect/` | saved connections and the launcher, SSH tunnels, TLS settings, discovery |
+| `safety/` | safe mode (`safety.rs`) and its read-only check (`safety/readonly.rs`) |
+| `assistant/` | the AI provider, ACP agents and the MCP server |
+| `app/` | the console log, file locations, passcode, plugins, themes, updates and the keychain |
+
+A new engine goes in `sql/driver/` or, when it isn't SQL, in `nosql/` (see [features/engines.md](features/engines.md)).
+
 ## The backend boundary
 
 - **`lib.rs` is the only surface the UI can call.** Every `#[tauri::command]` is registered in one `generate_handler!` list. The webview runs with `withGlobalTauri: false` and a strict CSP (`tauri.conf.json`); capabilities are limited to window close/drag and the open/save dialogs (`capabilities/default.json`).
@@ -46,7 +62,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  Conn["db::Conn<br/>(catalog, browse, DDL, rows: one code path)"] --> Driver["dyn Driver (driver.rs)<br/>batch, run, execute_with, fetch_with,<br/>stream, ping, stopper, read_only_bounds"]
+  Conn["db::Conn<br/>(catalog, browse, DDL, rows: one code path)"] --> Driver["dyn Driver (sql/driver.rs)<br/>batch, run, execute_with, fetch_with,<br/>stream, ping, stopper, read_only_bounds"]
   Conn -. "match on Dialect<br/>for SQL that differs" .-> Dialect["Dialect: Pg, My, Lite, Duck, Mssql, Click, Ora, Bq"]
   Driver --> PG[postgres.rs<br/>+ CockroachDB]
   Driver --> MY[mysql.rs<br/>MySQL, MariaDB]
@@ -60,7 +76,7 @@ flowchart TB
   Driver --> BQ[bigquery.rs]
 ```
 
-- A driver only runs SQL and returns **every cell as text** (`Option<String>`). Everything above it (catalog queries, browse SQL with filters and paging, DDL generation, staged-row saves, export, import, diagram, users, processes) is written once in `db.rs`, `browse.rs`, `ddl.rs`, `rows.rs`, `structure.rs`, `catalog.rs`, `objects.rs`… and matches on `Dialect` where SQL differs (DEC-005).
+- A driver only runs SQL and returns **every cell as text** (`Option<String>`). Everything above it (catalog queries, browse SQL with filters and paging, DDL generation, staged-row saves, export, import, diagram, users, processes) is written once in `sql/db.rs`, `sql/browse.rs`, `sql/ddl.rs`, `sql/rows.rs`, `sql/structure.rs`, `sql/catalog.rs`, `sql/objects.rs`… and matches on `Dialect` where SQL differs (DEC-005).
 - libSQL and D1 are SQLite underneath and use `Dialect::Lite`, so table rebuilds, structure editing and the grid come for free. CockroachDB is a Postgres connection with `flavor: "cockroach"`.
 - Adding an engine: [features/engines.md](features/engines.md).
 
@@ -68,7 +84,7 @@ flowchart TB
 
 - **SQL:** `Open` holds `HashMap<session key, Arc<Mutex<Live>>>`. A `Live` is the saved connection, the URL in use, the password, the `Conn` and its SSH tunnel (the tunnel lives exactly as long as the connection). One lock per connection, so a slow query blocks only its own connection (DEC-007). The map lock is released before waiting on a connection's lock.
 - **Session keys:** a workspace's first tab uses the saved connection's name; another database of the same connection in its own tab is `name\u{1f}n`. The MCP server uses the plain name, so it shares the first session.
-- **Not SQL:** Redis, MongoDB, DynamoDB, Elasticsearch and Cassandra each have their own session type and commands (`redis_*`, `mongo_*`…), kept in a generic `sessions::Sessions<S>` under the same keys (`sessions.rs`, commit `d164f67`).
+- **Not SQL:** Redis, MongoDB, DynamoDB, Elasticsearch and Cassandra each have their own session type and commands (`redis_*`, `mongo_*`…), kept in a generic `sessions::Sessions<S>` under the same keys (`nosql/sessions.rs`, commit `d164f67`).
 - **Passcode lock:** `Open.locked`; while set, `Open::get` and the other session maps refuse every request, the MCP server's included. The app starts locked until it knows whether a passcode is set.
 - **Keep-alive:** a 30 s loop pings idle connections and emits `connection-lost` for ones that don't answer. Busy connections are skipped.
 - **Background jobs** (exports, imports, backups, the process list) open a **connection of their own**, so the workspace stays usable and a job can be cancelled independently.
@@ -79,7 +95,7 @@ flowchart TB
 2. `lib.rs` gets the session, runs `readonly::is_read_only` (sqlparser, per engine dialect) and `safety::check` for the connection's level. If the level wants a click or a password, the command fails with `confirm`/`password`; the UI asks (`safety.ts`) and resends with `confirmed: true` or an `Unlock`.
 3. At Alert 2 and Safe 2, SQL the parse calls read-only runs inside the driver's `read_only_bounds` (a read-only transaction; SQLite `query_only`), so the database itself refuses a write hidden in a function.
 4. The driver streams rows, stopping at the row limit (default 1,000; at most 100 result sets per call). The query timeout cancels on the server (Postgres cancel, MySQL `KILL QUERY`, SQLite interrupt, attention/`KILL QUERY`/OCI break elsewhere).
-5. `console.rs` records each statement sent, with password literals masked (`redact`).
+5. `app/console.rs` records each statement sent, with password literals masked (`redact`).
 
 Details: [features/safe-mode.md](features/safe-mode.md).
 
@@ -102,13 +118,13 @@ Details: [features/safe-mode.md](features/safe-mode.md).
 | What | Where it runs | What it can reach |
 | --- | --- | --- |
 | Custom scripts (Tools › Run Custom Script) | A Web Worker (`script-worker.ts`) | Only `query`/`execute`/`print`/`table` posted to the page, which go through `run_query` and safe mode |
-| Plugins | QuickJS per action (`plugins.rs`), 64 MB, 10 s | No files, network or app; the `query` permission gives read-only SQL |
-| mongosh scripts | QuickJS (`mongo/shell.rs`, `shell.js`) | Nothing: the script only records the operations it asks for; Rust runs them after safe mode |
+| Plugins | QuickJS per action (`app/plugins.rs`), 64 MB, 10 s | No files, network or app; the `query` permission gives read-only SQL |
+| mongosh scripts | QuickJS (`nosql/mongo/shell.rs`, `shell.js`) | Nothing: the script only records the operations it asks for; Rust runs them after safe mode |
 
 ## MCP and AI
 
-- `mcp/server.rs`: streamable HTTP on 127.0.0.1 (rmcp, stateless), bearer token on every request, tools `list_connections`, `list_tables`, `describe_table`, `run_query`. `src-tauri/src/bin/tableminus-mcp.rs` is the stdio bridge agents launch; it reads the port and token from `mcp-bridge.json`.
-- `ai.rs`: chat with Anthropic or any OpenAI-compatible endpoint; the model's only tool is `run_query`, which the UI shows and runs only on approval. `acp.rs`: local agents (Claude Code, Codex, Gemini CLI) as child processes over the Agent Client Protocol, reaching the database through the MCP bridge with an in-memory, read-only token.
+- `assistant/mcp/server.rs`: streamable HTTP on 127.0.0.1 (rmcp, stateless), bearer token on every request, tools `list_connections`, `list_tables`, `describe_table`, `run_query`. `src-tauri/src/bin/tableminus-mcp.rs` is the stdio bridge agents launch; it reads the port and token from `mcp-bridge.json`.
+- `assistant/ai.rs`: chat with Anthropic or any OpenAI-compatible endpoint; the model's only tool is `run_query`, which the UI shows and runs only on approval. `assistant/acp.rs`: local agents (Claude Code, Codex, Gemini CLI) as child processes over the Agent Client Protocol, reaching the database through the MCP bridge with an in-memory, read-only token.
 - Details: [features/mcp-and-ai.md](features/mcp-and-ai.md).
 
 ## Constraints that shape the code

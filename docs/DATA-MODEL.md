@@ -1,6 +1,6 @@
 # Data model
 
-TableMinus has no database of its own. Its state is JSON files in the app's config folder (some movable through Settings › Locations), secrets in the OS keychain, and in-memory sessions. The types are in `src-tauri/src/store.rs`, `db.rs`, `tls.rs`, `ssh.rs`, `safety.rs`, `locations.rs` and `mcp/mod.rs`.
+TableMinus has no database of its own. Its state is JSON files in the app's config folder (some movable through Settings › Locations), secrets in the OS keychain, and in-memory sessions. The types are in `src-tauri/src/connect/store.rs`, `sql/db.rs`, `connect/tls.rs`, `connect/ssh.rs`, `safety.rs`, `app/locations.rs` and `assistant/mcp.rs`.
 
 ## Where files live
 

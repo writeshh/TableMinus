@@ -27,7 +27,7 @@ The connection's lock is released before the check, because Touch ID waits for t
 
 ## Where it applies
 
-The editor's `run_query`, grid saves (`rows.rs`), DDL previews run through `run_ddl`, imports (`jobs.rs`), restore (`backup.rs`, always confirmed), user management (`users.rs`), plugins' `query` permission (`plugins.rs`, read-only only), custom scripts (through `run_query`), metrics widgets (writes only from their own Run button, never on auto-refresh), the AI assistant (read-only only, at most 50 rows, after approval), and the MCP server (`mcp/mod.rs`: approval for unsafe queries, read-only tokens never write and also run inside read-only bounds). The non-SQL engines check in their own command modules.
+The editor's `run_query`, grid saves (`sql/rows.rs`), DDL previews run through `run_ddl`, imports (`transfer/jobs.rs`), restore (`transfer/backup.rs`, always confirmed), user management (`sql/users.rs`), plugins' `query` permission (`app/plugins.rs`, read-only only), custom scripts (through `run_query`), metrics widgets (writes only from their own Run button, never on auto-refresh), the AI assistant (read-only only, at most 50 rows, after approval), and the MCP server (`assistant/mcp.rs`: approval for unsafe queries, read-only tokens never write and also run inside read-only bounds). The non-SQL engines check in their own command modules.
 
 ## Batch grants
 
@@ -35,14 +35,14 @@ Run All at a Safe level asks once. `batch_grant` prompts for Touch ID and return
 
 ## Related protections
 
-- **Passcode lock** (`passcode.rs`): while locked, every database request is refused, MCP's included. The app starts locked until it knows whether a passcode is set.
+- **Passcode lock** (`app/passcode.rs`): while locked, every database request is refused, MCP's included. The app starts locked until it knows whether a passcode is set.
 - **Console log** masks password literals (`PASSWORD '…'`, `IDENTIFIED BY '…'`) before recording a statement (`console::redact`).
 - **Imported connections** with startup scripts are held until the user sees the scripts (`launcher::Scripts`).
 - **DDL undo note:** MySQL commits each DDL statement as it runs, so the previews say so, and a failure partway lists what already ran.
 
 ## Tests
 
-`readonly.rs` unit tests and proptests (never panics; a write after any read is caught; SELECTs of quoted names pass), regression seeds in `src-tauri/proptest-regressions/`, a cargo-fuzz target in `src-tauri/fuzz/`, `lib.rs::guard_should_apply_the_open_connections_level`, and the MCP end-to-end tests in `mcp/tests.rs`.
+`safety/readonly.rs` unit tests and proptests (never panics; a write after any read is caught; SELECTs of quoted names pass), regression seeds in `src-tauri/proptest-regressions/`, a cargo-fuzz target in `src-tauri/fuzz/`, `lib.rs::guard_should_apply_the_open_connections_level`, and the MCP end-to-end tests in `assistant/mcp/tests.rs`.
 
 ## Edge cases to keep
 

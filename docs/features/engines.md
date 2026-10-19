@@ -4,20 +4,20 @@
 
 ## Two kinds
 
-**SQL engines** sit on the `Driver` trait (`src-tauri/src/driver.rs`), held by `db::Conn`: Postgres (and CockroachDB), MySQL/MariaDB, SQLite/SQLCipher, DuckDB, SQL Server, ClickHouse, libSQL, D1, Oracle, BigQuery. They share the grid, filters, structure view and editor, DDL, export, import, the diagram, Copy Script As, Explain and safe mode. Engine differences are `match`es on `Dialect`.
+**SQL engines** sit on the `Driver` trait (`src-tauri/src/sql/driver.rs`), held by `db::Conn`: Postgres (and CockroachDB), MySQL/MariaDB, SQLite/SQLCipher, DuckDB, SQL Server, ClickHouse, libSQL, D1, Oracle, BigQuery. They share the grid, filters, structure view and editor, DDL, export, import, the diagram, Copy Script As, Explain and safe mode. Engine differences are `match`es on `Dialect`.
 
-**Other engines** have their own module, session type and commands: Redis (`redis.rs`, own view `src/redis.ts`), MongoDB, DynamoDB, Elasticsearch, Cassandra (each `src-tauri/src/<engine>/mod.rs`, shown in the shared document view `src/docview.ts` through an adapter `src/<engine>.ts`). Their sessions live in `sessions::Sessions<S>`.
+**Other engines** have their own module, session type and commands: Redis (`nosql/redis.rs`, own view `src/redis.ts`), MongoDB, DynamoDB, Elasticsearch, Cassandra (each `src-tauri/src/<engine>/mod.rs`, shown in the shared document view `src/docview.ts` through an adapter `src/<engine>.ts`). Their sessions live in `sessions::Sessions<S>`.
 
 ## Adding a SQL engine
 
 From TODO §24 and the commits that added DuckDB, SQL Server and ClickHouse (`7ab33eb`, `4a19f63`, `9622e14`):
 
 1. `src-tauri/src/driver/<engine>.rs` implementing `Driver`: `batch`, `run` (every result set, cells as text), `execute_with`/`fetch_with` (bound parameters), `stream` (stops at the row limit), `ping`, `stopper` (how a query timeout cancels on the server), `lost_by` (which errors mean the connection dropped), `read_only_bounds`, and optionally `use_database`, `max_params`, `param`.
-2. A `Dialect` variant in `db.rs` (with `ident`, `table_ident`, `literal`, `param`), an `Engine` variant, and an arm in `Conn::open`.
+2. A `Dialect` variant in `sql/db.rs` (with `ident`, `table_ident`, `literal`, `param`), an `Engine` variant, and an arm in `Conn::open`.
 3. Build: the compiler lists every `match` on `Dialect` that needs the engine's SQL (catalog, browse paging and `like_pattern`, structure, DDL, objects, diagram, processes, users, export, import…). Fill each in or return a clear "not supported" error.
-4. `readonly.rs`: the sqlparser dialect, and the engine's side-effect functions.
+4. `safety/readonly.rs`: the sqlparser dialect, and the engine's side-effect functions.
 5. UI: the engine list (`ENGINES` and `FORM_SHAPES` in `src/engines.ts`), the form's fields and defaults (every field optional, defaults as placeholders: REQ-021), URL schemes in `src/connections.ts` and `src-tauri/Info.plist`, editor highlighting in `src/editor.ts`, and the feature switches (backup tools, user management, Explain).
-6. Discovery: a probe in `discover.rs` if the server can be found locally.
+6. Discovery: a probe in `connect/discover.rs` if the server can be found locally.
 7. A service in `scripts/test-env.yml` and ignored live tests that say what they need. Then a TODO.md entry saying what was tried, against which version, and what wasn't.
 
 Postgres-compatible servers need none of that: they're a `flavor` on a Postgres connection (CockroachDB).
@@ -27,7 +27,7 @@ Postgres-compatible servers need none of that: they're a `flavor` on a Postgres 
 - Cells are text end to end. Typed values that would lose precision as JavaScript numbers never reach the UI as numbers.
 - Every connect has `CONNECT_TIMEOUT`; every query honours the query timeout through `Stopper`.
 - Blocking client libraries run through `driver::blocking` (SQLite, DuckDB) or `spawn_blocking` with a channel (Oracle).
-- TLS: map the connection's `Tls` modes faithfully (`tls.rs`). When a library can't do a mode exactly (tiberius can't skip the name check for Verify CA; rustls can't skip it for MongoDB's), say so in TODO.md.
+- TLS: map the connection's `Tls` modes faithfully (`connect/tls.rs`). When a library can't do a mode exactly (tiberius can't skip the name check for Verify CA; rustls can't skip it for MongoDB's), say so in TODO.md.
 - If the server can't enforce read-only, safe mode rests on the parse. Write that down (TODO.md, ISSUE-010).
 
 ## Engine-specific choices worth knowing

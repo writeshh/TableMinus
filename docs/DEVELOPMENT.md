@@ -51,7 +51,7 @@ None are needed for development. These change behaviour when set:
 
 | Variable | Used by | Purpose |
 | --- | --- | --- |
-| `ORACLE_CLIENT_LIB_DIR` | `driver/oracle.rs` | Folder of Oracle Instant Client |
+| `ORACLE_CLIENT_LIB_DIR` | `sql/driver/oracle.rs` | Folder of Oracle Instant Client |
 | `TABLEMINUS_MCP_TOKEN` | `tableminus-mcp` bridge | Use a narrower MCP token than the bridge's own |
 | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PATH`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `scripts/build.sh` | Updater signing key; default file `~/.tauri/tableminus.key` |
 | `APPLE_SIGNING_IDENTITY`; `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` (or `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH`) | `scripts/build.sh`, Tauri | Developer ID signing and notarization. Wired in but never tried |
@@ -108,7 +108,7 @@ No release has been published yet (TASK-004). Publishing is outward-facing: it n
 | `failed to run 'cargo metadata' … No such file or directory` | cargo isn't on `PATH` (Homebrew rustup) | The owner added `export PATH="/opt/homebrew/opt/rustup/bin:$PATH"` to `~/.zshenv` (2026-10-14). `scripts/build.sh` also searches `~/.cargo/bin` and rustup toolchains |
 | `Error: Port 1420 is already in use` | Another Vite (often an agent's browser preview) holds the port | Stop it. Past sessions used a temporary `.claude/launch.json` entry on another port and reverted it before committing |
 | A shared `.app` says it is "damaged" on another Mac | The bundle wasn't ad-hoc signed as a whole | Fixed: `tauri.bundle.json` has `"signingIdentity": "-"`. Recipients still need System Settings › Privacy & Security › Open Anyway, or `xattr -dr com.apple.quarantine /Applications/TableMinus.app`. Send the `.dmg`, not a zipped `.app`. Only Developer ID signing and notarization remove the prompt |
-| MySQL TLS panics about the crypto provider | Both rustls providers are compiled in | `db::install_tls_provider()` installs ring once; it is called before each rustls config is built (`db.rs`, `tls.rs`, `updater.rs`). New TLS code must call it too |
+| MySQL TLS panics about the crypto provider | Both rustls providers are compiled in | `db::install_tls_provider()` installs ring once; it is called before each rustls config is built (`sql/db.rs`, `connect/tls.rs`, `app/updater.rs`). New TLS code must call it too |
 | The first build takes many minutes | DuckDB compiles from source | Expected |
 | Oracle connection says where to get Instant Client | Instant Client isn't installed or found | Install it, or set `ORACLE_CLIENT_LIB_DIR` |
 | An Oracle connection waits 20 s, then "no answer from the server", from the app but not from tests | Instant Client looks up this Mac's own `.local` name over multicast DNS, which macOS's Local Network privacy holds back from an app until the user allows it | Allow TableMinus under System Settings › Privacy & Security › Local Network (the app asks, through `NSLocalNetworkUsageDescription` in `Info.plist`) |

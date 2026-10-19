@@ -22,12 +22,12 @@ Versions are what `Cargo.lock` and `package-lock.json` held on 2026-10-18. The m
 | SQLite, SQLCipher | rusqlite 0.40.2 (`bundled-sqlcipher`, `backup`) | CommonCrypto on macOS, system libcrypto on Linux |
 | DuckDB | duckdb 1.10506 (`bundled`) | Built from source: a long first compile and a larger app |
 | SQL Server | tiberius 0.13 (rustls) | |
-| ClickHouse, libSQL, D1, DynamoDB, Elasticsearch | hyper 1 + the app's own small HTTP client (`driver/http.rs`) | DynamoDB's SigV4 signing is hand-written (`dynamo/sigv4.rs`) instead of the AWS SDK |
+| ClickHouse, libSQL, D1, DynamoDB, Elasticsearch | hyper 1 + the app's own small HTTP client (`sql/driver/http.rs`) | DynamoDB's SigV4 signing is hand-written (`nosql/dynamo/sigv4.rs`) instead of the AWS SDK |
 | MongoDB | mongodb 3.9.1 | Needs MongoDB 4.0 or later |
 | Cassandra, ScyllaDB | scylla 1.9 (rustls) | |
 | Oracle | oracle 0.6.3 (ODPI-C) | Needs Oracle Instant Client at run time, not at build time (DEC-009) |
 | BigQuery | the HTTP client above + ring 0.17 | RS256 signatures for service account sign-in; ring was already in the tree |
-| Redis | none: a RESP2 client in `redis.rs` | |
+| Redis | none: a RESP2 client in `nosql/redis.rs` | |
 | SQL parsing | sqlparser 0.63 (`visitor`) | Safe mode's read-only check, SQLite table rebuilds |
 | TLS | rustls 0.23.46 (ring), native-tls, rustls-native-certs | Both rustls providers end up compiled in; `install_tls_provider()` picks ring |
 | SSH | russh 0.64, russh-config | Tunnels; known_hosts accept-new |

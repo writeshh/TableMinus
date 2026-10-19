@@ -4,7 +4,7 @@ Everything outside the app that TableMinus talks to. Per-engine feature depth an
 
 ## Database engines
 
-All connections can go through an SSH tunnel (`ssh.rs`, russh; known_hosts accept-new), and TLS follows the libpq modes everywhere: Prefer and Require encrypt without checking the certificate, Verify CA checks the chain, Verify full the chain and the host name. A connect gives up after `CONNECT_TIMEOUT` (20 s).
+All connections can go through an SSH tunnel (`connect/ssh.rs`, russh; known_hosts accept-new), and TLS follows the libpq modes everywhere: Prefer and Require encrypt without checking the certificate, Verify CA checks the chain, Verify full the chain and the host name. A connect gives up after `CONNECT_TIMEOUT` (20 s).
 
 | Engine | Client | Protocol and auth | Read-only enforced by the server? | Local test server |
 | --- | --- | --- | --- | --- |
@@ -49,7 +49,7 @@ Notable failure modes, all from TODO.md and commit history:
 
 ## AI providers
 
-`src-tauri/src/ai.rs`. Off until the user turns it on under a consent notice (Settings › AI).
+`src-tauri/src/assistant/ai.rs`. Off until the user turns it on under a consent notice (Settings › AI).
 
 - **Anthropic** Messages API, and any **OpenAI-compatible** chat completions endpoint (OpenAI, Ollama, LM Studio…) with a custom base URL. HTTPS only, except to this computer.
 - API keys and the proxy password are in the keychain (`dev.ritesh.tableminus.ai`).
@@ -63,7 +63,7 @@ Notable failure modes, all from TODO.md and commit history:
 
 ## Updates
 
-`src-tauri/src/updater.rs`, `src/updates.ts`. Tauri's updater reads `latest.json` from `https://github.com/writeshh/TableMinus/releases/latest/download/latest.json`, or from the release tagged `beta`. Updates are signed with the minisign key whose public half is in `tauri.conf.json`. The check runs quietly at startup unless Settings › General turns it off. It has never run against a real release (none published).
+`src-tauri/src/app/updater.rs`, `src/updates.ts`. Tauri's updater reads `latest.json` from `https://github.com/writeshh/TableMinus/releases/latest/download/latest.json`, or from the release tagged `beta`. Updates are signed with the minisign key whose public half is in `tauri.conf.json`. The check runs quietly at startup unless Settings › General turns it off. It has never run against a real release (none published).
 
 ## OS services
 
