@@ -1,0 +1,39 @@
+name: Database engine request
+description: Ask for support for another database
+title: "feat(engine): "
+labels: ["enhancement", "engine"]
+body:
+  - type: input
+    id: engine
+    attributes:
+      label: Database
+      description: Name and the versions you use.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why you need it
+    validations:
+      required: true
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: How it is reached
+      options:
+        - SQL over a native wire protocol
+        - SQL or queries over HTTP
+        - A local file
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: test-server
+    attributes:
+      label: How to run it locally for tests
+      description: A Docker image, an emulator or an installer. Tests run against real servers, so this matters.
+  - type: input
+    id: client
+    attributes:
+      label: A client library or protocol document
+      description: A Rust crate, or the wire protocol or REST API reference.

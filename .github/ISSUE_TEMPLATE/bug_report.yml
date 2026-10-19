@@ -1,0 +1,122 @@
+name: Bug report
+description: Something doesn't work, or works differently from what you expect
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Never paste passwords, tokens, connection URLs with a password, or real data from your databases.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched the existing issues and this isn't reported yet
+          required: true
+        - label: I removed passwords, tokens and private data from everything below
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, and what went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Connect to ...
+        2. Open the table ...
+        3. Click ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected to happen
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Database engine
+      options:
+        - PostgreSQL
+        - CockroachDB
+        - MySQL
+        - MariaDB
+        - SQLite / SQLCipher
+        - DuckDB
+        - SQL Server
+        - ClickHouse
+        - libSQL / Turso
+        - Cloudflare D1
+        - Oracle
+        - BigQuery
+        - Redis
+        - MongoDB
+        - DynamoDB
+        - Elasticsearch
+        - Cassandra
+        - Not related to an engine
+    validations:
+      required: true
+  - type: input
+    id: server-version
+    attributes:
+      label: Server version
+      description: For example PostgreSQL 16.4 or MySQL 8.0.33. Leave empty if not related to an engine.
+  - type: input
+    id: app-version
+    attributes:
+      label: TableMinus version
+      description: The version of the installed release, for example 1.0.0.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: macOS 15.1, Ubuntu 24.04, ...
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How you connect
+      multiple: true
+      options:
+        - Directly over TCP
+        - Over an SSH tunnel
+        - With TLS
+        - Over a Unix socket
+        - To a local file
+        - To a cloud service
+  - type: dropdown
+    id: safe-mode
+    attributes:
+      label: Safe mode level on the connection
+      options:
+        - Silent
+        - Alert 1
+        - Alert 2
+        - Safe 1
+        - Safe 2
+        - Not sure
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console log, error text and screenshots
+      description: The console log (Shift+Cmd+C) shows what the app sent. Check it for private data first.
+      render: text
