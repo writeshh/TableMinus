@@ -17,7 +17,7 @@
 
 Tests: `assistant/mcp/tests.rs` runs a real server on a free port against SQLite (approvals, read-only tokens, safe-mode levels, the bridge file's permissions).
 
-## AI assistant (`src-tauri/src/assistant/ai.rs`, `assistant/acp.rs`; UI `src/ai.ts`, `src/ai-text.ts`)
+## AI assistant (`src-tauri/src/assistant/ai.rs`, `assistant/acp.rs`; UI `src/assistant/ai.ts`, `src/assistant/ai-text.ts`)
 
 - Off until enabled under a consent notice that prompts go to the provider.
 - **Providers:** Anthropic Messages API; OpenAI-compatible chat completions with a custom base URL (OpenAI, Ollama, LM Studio). HTTPS only except to this computer. Keys in the keychain. An optional HTTP proxy with Basic credentials (user in the address, password in the keychain).

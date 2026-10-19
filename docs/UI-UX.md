@@ -10,7 +10,7 @@ Set by commit `36f0704` (2026-10-15, "Restyle the app in the brand palette"). Th
 - **Environments map to the primaries:** local pink, development blue, staging yellow, production orange.
 - **Shapes:** controls and rows are pills (`border-radius: 999px` on inputs, selects and buttons); windows and panels 16–20px radius; **the grid stays square**.
 - **The launcher's side panel is ink in both schemes**, with a four-disc mark (`.mark` in `styles.css`). A blue mockingbird logo is wanted to replace it (REQ-063).
-- **Tokens:** everything reads CSS variables on `:root` in `src/styles.css`, with `light-dark()` for both schemes: `--bg`, `--fg`, `--accent`, `--line`, `--hover`, `--warn`, `--danger`, `--ok`, the `--syn-*` editor colours and the `--grid-*` settings. Themes (`src/theme-file.ts`, `src/themes.ts`) override these variables.
+- **Tokens:** everything reads CSS variables on `:root` in `src/styles.css`, with `light-dark()` for both schemes: `--bg`, `--fg`, `--accent`, `--line`, `--hover`, `--warn`, `--danger`, `--ok`, the `--syn-*` editor colours and the `--grid-*` settings. Themes (`src/shell/theme-file.ts`, `src/shell/themes.ts`) override these variables.
 - **Bundled themes:** TableMinus Light, TableMinus Dark, Paper, Harbor, Ember, Lagoon. Auto follows the system, with separate light and dark defaults. Users can edit, import, export and install themes from Git.
 - **Type:** the system UI font; `--mono` (`ui-monospace`, SF Mono, Menlo, DejaVu Sans Mono) for the editor and grid. Font, size and padding can be set in a theme.
 
@@ -34,8 +34,8 @@ Set by commit `36f0704` (2026-10-15, "Restyle the app in the brand palette"). Th
 
 - Pane dividers work from the keyboard (focus, arrows move 16px, Shift 64px, Home resets).
 - Metrics widgets move and resize with arrow keys; charts have arrow-key tooltips.
-- Icon buttons have instant tooltips (`data-tip`, `src/tip.ts`), because the native `title` waits about a second and the tab strip clips it (REQ-061).
-- A reduced-motion rule exists in `styles.css`, `charts.css` and `metrics.css`.
+- Icon buttons have instant tooltips (`data-tip`, `src/shell/tip.ts`), because the native `title` waits about a second and the tab strip clips it (REQ-061).
+- A reduced-motion rule exists in `styles.css`, `metrics/charts.css` and `metrics/metrics.css`.
 
 ## The owner's feedback so far
 

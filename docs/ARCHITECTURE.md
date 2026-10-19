@@ -8,7 +8,7 @@ How the code fits together, as of `12be348` (2026-10-18). Module-level detail is
 flowchart LR
   subgraph Webview["Webview (src/, TypeScript, no framework)"]
     UI[main.ts + modules] --> IPC[ipc.ts invoke]
-    Worker[script-worker.ts<br/>custom scripts]
+    Worker[extend/script-worker.ts<br/>custom scripts]
   end
   subgraph Core["Rust core (src-tauri/src)"]
     CMD[lib.rs<br/>~150 Tauri commands]
@@ -91,8 +91,8 @@ flowchart TB
 
 ## A query's path
 
-1. The SQL editor (`editor.ts`, CodeMirror) splits statements (`statements.ts`), asks for parameters, and calls `run_query` through `invoke`.
-2. `lib.rs` gets the session, runs `readonly::is_read_only` (sqlparser, per engine dialect) and `safety::check` for the connection's level. If the level wants a click or a password, the command fails with `confirm`/`password`; the UI asks (`safety.ts`) and resends with `confirmed: true` or an `Unlock`.
+1. The SQL editor (`editor/editor.ts`, CodeMirror) splits statements (`editor/statements.ts`), asks for parameters, and calls `run_query` through `invoke`.
+2. `lib.rs` gets the session, runs `readonly::is_read_only` (sqlparser, per engine dialect) and `safety::check` for the connection's level. If the level wants a click or a password, the command fails with `confirm`/`password`; the UI asks (`shell/safety.ts`) and resends with `confirmed: true` or an `Unlock`.
 3. At Alert 2 and Safe 2, SQL the parse calls read-only runs inside the driver's `read_only_bounds` (a read-only transaction; SQLite `query_only`), so the database itself refuses a write hidden in a function.
 4. The driver streams rows, stopping at the row limit (default 1,000; at most 100 result sets per call). The query timeout cancels on the server (Postgres cancel, MySQL `KILL QUERY`, SQLite interrupt, attention/`KILL QUERY`/OCI break elsewhere).
 5. `app/console.rs` records each statement sent, with password literals masked (`redact`).
@@ -102,22 +102,33 @@ Details: [features/safe-mode.md](features/safe-mode.md).
 ## The UI
 
 - No framework. `index.html` holds the static shell; modules build DOM with the `el()` helper from `dom.ts`. Styling is hand-written CSS with design tokens on `:root` (`styles.css`) plus per-feature stylesheets ([UI-UX.md](UI-UX.md)).
-- **`main.ts` (about 1,000 lines) wires the modules together** and keeps the SQL editor, the tab strip, the sidebar tree, the keyboard handlers and the command list. The workspace on screen is one object, `S` (`state.ts`), because a module can't assign another's `let`; the modules ask `main.ts` for the few things it still owns through an init host, as `grid-edit.ts` and `sidebar.ts` do. The split (merged 2026-10-19; the first two attempts were on branches):
-  - `state.ts` (`S`, tab types, `call`, `okToDiscard`), `engines.ts` (the engine list, per-engine form shapes, URLs, what each engine supports), `settings.ts` + `settings-defaults.ts`, `dialogs.ts` (menu, popover, confirmations).
-  - `connform.ts` (engine picker and connection form), `home.ts` (the launcher's list), `workspaces.ts` + `workspace-tabs.ts` (workspaces, split panes, the strip of workspace tabs), `dbpicker.ts` (Open a Database), `history.ts`.
-  - `tabletab.ts` + `table-text.ts` (table tabs), `run.ts` + `run-text.ts` (running SQL and its results), `gridview.ts` (grids, selection, copy).
-  - Feature modules (`structure.ts`, `metrics.ts`, `diagram.ts`, `ai.ts`, `redis.ts`, `docview.ts`…) are wired in from `main.ts`. Side-effect imports (Settings tabs, stylesheets) stay in `main.ts` ahead of the modules, because import order is load order.
-- **Commands:** `commands.ts` holds one list of app commands that feeds the keyboard handler, the native menu bar (`menu.ts`, rebuilt when shortcuts change), Open Anything (⌘P) and Settings › Shortcuts.
-- **Document view:** `docview.ts` is one grid-and-console view shared by MongoDB, DynamoDB, Elasticsearch and Cassandra through a small engine adapter each (`mongo.ts`, `dynamo.ts`, `elastic.ts`, `cassandra.ts`). Redis has its own view (`redis.ts`).
-- **Pure logic is kept out of DOM code** in `*-text.ts`, `statements.ts`, `staging.ts`, `chartdata.ts`, `diagram-layout.ts`… so `node --test` can test it.
-- **Grid:** `vgrid.ts` renders only rows near the viewport; `staging.ts` holds staged edits with undo/redo; saves go to `rows::save_rows` as one transaction.
-- **Settings** live in `settings.json` through `prefs.ts`; localStorage only keeps a copy for a fast start, and the file wins (DEC-014).
+- **`main.ts` (about 1,000 lines) wires the modules together** and keeps the SQL editor, the tab strip, the sidebar tree, the keyboard handlers and the command list. The workspace on screen is one object, `S` (`workspace/state.ts`), because a module can't assign another's `let`; the modules ask `main.ts` for the few things it still owns through an init host, as `grid-edit.ts` and `sidebar.ts` do. Side-effect imports (Settings tabs, stylesheets) stay in `main.ts` ahead of the modules, because import order is load order.
+- **`src/` has one folder per area**, with each module's tests (`*.test.ts`) and stylesheet beside it. `main.ts`, `ipc.ts`, `dom.ts`, `raw.d.ts` and `styles.css` stay at the top:
+
+  | Folder | Holds |
+  | --- | --- |
+  | `shell/` | commands, menu, Open Anything, shortcuts, dialogs, splitters, preferences, settings, locations, themes, passcode, updates, console, vault, safe mode |
+  | `connections/` | the launcher's list, the connection form, the engine list (`engines.ts`), Open a Database |
+  | `workspace/` | the workspace on screen (`state.ts`), workspaces and their tabs, table tabs, running SQL, history, favorites, the sidebar, filters, column layout |
+  | `grid/` | result grids, editing, cell editors, the virtual body, row detail, staged changes, copying, the results strip |
+  | `editor/` | the SQL editor, statement parsing, text transforms, the SQL viewer |
+  | `database/` | structure, objects, the ER diagram, users, processes, backup, import and export, jobs |
+  | `nosql/` | Redis and the document engines (`docview.ts` with an adapter each) |
+  | `metrics/` | metrics boards and charts |
+  | `extend/` | plugins and custom scripts (with the worker that runs them) |
+  | `assistant/` | the AI assistant and Settings › MCP |
+
+- **Commands:** `shell/commands.ts` holds one list of app commands that feeds the keyboard handler, the native menu bar (`shell/menu.ts`, rebuilt when shortcuts change), Open Anything (⌘P) and Settings › Shortcuts.
+- **Document view:** `nosql/docview.ts` is one grid-and-console view shared by MongoDB, DynamoDB, Elasticsearch and Cassandra through a small engine adapter each (`nosql/mongo.ts`, `nosql/dynamo.ts`, `nosql/elastic.ts`, `nosql/cassandra.ts`). Redis has its own view (`nosql/redis.ts`).
+- **Pure logic is kept out of DOM code** in `*-text.ts`, `editor/statements.ts`, `grid/staging.ts`, `metrics/chartdata.ts`, `database/diagram-layout.ts`… so `node --test` can test it.
+- **Grid:** `grid/vgrid.ts` renders only rows near the viewport; `grid/staging.ts` holds staged edits with undo/redo; saves go to `rows::save_rows` as one transaction.
+- **Settings** live in `settings.json` through `shell/prefs.ts`; localStorage only keeps a copy for a fast start, and the file wins (DEC-014).
 
 ## Sandboxes for user code
 
 | What | Where it runs | What it can reach |
 | --- | --- | --- |
-| Custom scripts (Tools › Run Custom Script) | A Web Worker (`script-worker.ts`) | Only `query`/`execute`/`print`/`table` posted to the page, which go through `run_query` and safe mode |
+| Custom scripts (Tools › Run Custom Script) | A Web Worker (`extend/script-worker.ts`) | Only `query`/`execute`/`print`/`table` posted to the page, which go through `run_query` and safe mode |
 | Plugins | QuickJS per action (`app/plugins.rs`), 64 MB, 10 s | No files, network or app; the `query` permission gives read-only SQL |
 | mongosh scripts | QuickJS (`nosql/mongo/shell.rs`, `shell.js`) | Nothing: the script only records the operations it asks for; Rust runs them after safe mode |
 

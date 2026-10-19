@@ -2,78 +2,78 @@ import { invoke } from "./ipc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
-import { createEditor, type Schema } from "./editor";
+import { createEditor, type Schema } from "./editor/editor";
 import { $, el } from "./dom";
-import type { Dialect } from "./copy";
-import { dropDraft, initStructure, saveStructure, sidebarMenu, tableMenu } from "./structure";
-import { openBackup, openRestore } from "./backup";
-import { openProcesses } from "./processes";
-import { openUsers } from "./users";
-import "./mcp"; // adds Settings › MCP before the settings tabs are wired below
-import { forgetSchema, initAssistant, renderPane as renderAssistant, toggleAssistant } from "./ai"; // and Settings › AI
-import * as grid from "./grid-edit";
-import * as vgrid from "./vgrid";
-import { toggleRowDetail } from "./rowdetail";
-import { divider, initHiding, togglePane } from "./splitters";
-import { openViewer } from "./viewer";
-import "./themes"; // adds the theme rows to Settings › Appearance
-import "./passcode"; // the lock screen, and its rows in Settings › Security
-import { openScript } from "./scripts";
-import { initPlugins, pluginMenu } from "./plugins"; // also adds Settings › Plugins
-import { initRedis, syncRedis } from "./redis";
-import { initMongo } from "./mongo";
-import { initDynamo } from "./dynamo";
-import { initElastic } from "./elastic";
-import { initCassandra } from "./cassandra";
-import { checkForUpdates, showReleaseNotes } from "./updates";
-import { docEntry, flushDocs, setDocEntry } from "./locations"; // also adds Settings › Locations
-import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./importexport";
-import { addCommands, commands, isMac, onBindingsChanged, runCommand } from "./commands";
-import { openAnything, type Item as AnythingItem } from "./openanything";
-import { initMenu, refreshMenu } from "./menu";
+import type { Dialect } from "./grid/copy";
+import { dropDraft, initStructure, saveStructure, sidebarMenu, tableMenu } from "./database/structure";
+import { openBackup, openRestore } from "./database/backup";
+import { openProcesses } from "./database/processes";
+import { openUsers } from "./database/users";
+import "./assistant/mcp"; // adds Settings › MCP before the settings tabs are wired below
+import { forgetSchema, initAssistant, renderPane as renderAssistant, toggleAssistant } from "./assistant/ai"; // and Settings › AI
+import * as grid from "./grid/grid-edit";
+import * as vgrid from "./grid/vgrid";
+import { toggleRowDetail } from "./grid/rowdetail";
+import { divider, initHiding, togglePane } from "./shell/splitters";
+import { openViewer } from "./editor/viewer";
+import "./shell/themes"; // adds the theme rows to Settings › Appearance
+import "./shell/passcode"; // the lock screen, and its rows in Settings › Security
+import { openScript } from "./extend/scripts";
+import { initPlugins, pluginMenu } from "./extend/plugins"; // also adds Settings › Plugins
+import { initRedis, syncRedis } from "./nosql/redis";
+import { initMongo } from "./nosql/mongo";
+import { initDynamo } from "./nosql/dynamo";
+import { initElastic } from "./nosql/elastic";
+import { initCassandra } from "./nosql/cassandra";
+import { checkForUpdates, showReleaseNotes } from "./shell/updates";
+import { docEntry, flushDocs, setDocEntry } from "./shell/locations"; // also adds Settings › Locations
+import { exportDialog, importFile, type Ctx as TransferCtx, type ExportSource } from "./database/importexport";
+import { addCommands, commands, isMac, onBindingsChanged, runCommand } from "./shell/commands";
+import { openAnything, type Item as AnythingItem } from "./shell/openanything";
+import { initMenu, refreshMenu } from "./shell/menu";
 import {
   columnOrderMenu, forgetItems, initSearch, initSidebar, loadedItems, newItemsMenu, renderTree, shownSchema, sortColumns, treeMenu,
-} from "./sidebar";
-import type { Transform } from "./transforms";
-import { initDiagram, openDiagram } from "./diagram";
-import * as launcher from "./connections";
-import { tagLabel } from "./connections";
-import "./tip"; // instant tooltips on the icon buttons
-import "./console"; // the console log panel and its command
-import { addFavorite, initFavorites, showSaved } from "./favorites"; // also adds the History pane's Saved queries
-import "./results"; // its stylesheet before workspace.css, as always
-import type { QueryResult } from "./results";
-import "./workspace.css";
-import "./charts"; // its stylesheet, before metrics.ts would bring it
-import { openBoard, type BoardCtx } from "./metrics";
-import { flushPrefs } from "./prefs";
+} from "./workspace/sidebar";
+import type { Transform } from "./editor/transforms";
+import { initDiagram, openDiagram } from "./database/diagram";
+import * as launcher from "./connections/connections";
+import { tagLabel } from "./connections/connections";
+import "./shell/tip"; // instant tooltips on the icon buttons
+import "./shell/console"; // the console log panel and its command
+import { addFavorite, initFavorites, showSaved } from "./workspace/favorites"; // also adds the History pane's Saved queries
+import "./grid/results"; // its stylesheet before workspace.css, as always
+import type { QueryResult } from "./grid/results";
+import "./workspace/workspace.css";
+import "./metrics/charts"; // its stylesheet, before metrics.ts would bring it
+import { openBoard, type BoardCtx } from "./metrics/metrics";
+import { flushPrefs } from "./shell/prefs";
 // Last, so the modules above (the Settings tabs among them) load in the order they always have.
 import {
   allTabs, call, connectCommand, current, dbLabel, isRedis, keyLabel, loadColumns, note, okToDiscard, ownView, S, sessionKey, status,
   type Info, type Tab, type TableTab, type Workspace,
-} from "./state";
-import { clamp, initSettings, openSettings, setSetting, settings, showTab } from "./settings";
+} from "./workspace/state";
+import { clamp, initSettings, openSettings, setSetting, settings, showTab } from "./shell/settings";
 import {
   closePane, closeWorkspace, connect, cyclePane, cycleWorkspace, focusPane, initWorkspaces, newWorkspace, reconnect,
   reconnectAll, show, showWorkspace, showWorkspaces, splitRight, type KeptTab,
-} from "./workspaces";
-import { execute, initRun, reloadResult, resultTarget, runAll, runCurrent, showResults, type SqlTab } from "./run";
-import { confirmDialog, contextMenu, type MenuItem } from "./dialogs";
+} from "./workspace/workspaces";
+import { execute, initRun, reloadResult, resultTarget, runAll, runCurrent, showResults, type SqlTab } from "./workspace/run";
+import { confirmDialog, contextMenu, type MenuItem } from "./shell/dialogs";
 import {
   applyLayout, browseRequest, initTableTabs, loadTable, openFound, openTable, redrawFilters, reloadTab,
   renderTableTab, showFilters, showPending, toggleFilters,
-} from "./tabletab";
+} from "./workspace/tabletab";
 import {
   copySelection, copyText, drawn, fillCell, initGridView, paintSelection, selectedBlock, selectedRows, selection,
   setSelection, syncDetail,
-} from "./gridview";
-import { findLocal, homeNote, initHome, refresh, saved, showRecent, toolsMenu } from "./home";
-import { dumps, hasProcesses, managesUsers } from "./engines";
-import { sqlKind } from "./statements";
-import { initHistory } from "./history";
-import { initDbPicker, openDbPicker } from "./dbpicker";
-import { importFromUrl, initConnForm } from "./connform";
-import { DEFAULT_SETTINGS } from "./settings-defaults";
+} from "./grid/gridview";
+import { findLocal, homeNote, initHome, refresh, saved, showRecent, toolsMenu } from "./connections/home";
+import { dumps, hasProcesses, managesUsers } from "./connections/engines";
+import { sqlKind } from "./editor/statements";
+import { initHistory } from "./workspace/history";
+import { initDbPicker, openDbPicker } from "./connections/dbpicker";
+import { importFromUrl, initConnForm } from "./connections/connform";
+import { DEFAULT_SETTINGS } from "./shell/settings-defaults";
 const editor = createEditor($("sql"), {
   change: (doc) => {
     const tab = current();

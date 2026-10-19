@@ -432,7 +432,7 @@ enum State {
 }
 
 /// Splits SQL at semicolons outside strings, quoted names, comments and dollar quotes, fed a line at a time.
-/// The same rules as the editor's splitter (statements.ts).
+/// The same rules as the editor's splitter (editor/statements.ts).
 // ponytail: MySQL's DELIMITER command (mysqldump's routines and triggers) isn't understood; files using it
 // need the MySQL client.
 struct Splitter {
@@ -615,7 +615,7 @@ mod tests {
         vec![Some(id.into()), Some(name.into()), note.map(String::from)]
     }
 
-    /// The requests importexport.ts sends, as captured from the wizard.
+    /// The requests database/importexport.ts sends, as captured from the wizard.
     #[test]
     fn import_requests_from_the_ui_should_deserialize() {
         let csv = r#"{"path":"/x/people.csv","format":{"csv":{"delimiter":",","quote":"\"","header":true,"empty_is_null":true}},

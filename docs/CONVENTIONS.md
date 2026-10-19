@@ -63,11 +63,12 @@ Sources: [Apollo Rust best practices](https://github.com/apollographql/rust-best
 
 ## TypeScript and UI patterns (inferred)
 
+- Modules live in a folder per area (`src/shell`, `workspace`, `grid`…, see [ARCHITECTURE.md](ARCHITECTURE.md#the-ui)); a module's test and stylesheet sit beside it. A new module goes in the folder of the feature it belongs to, and imports from another folder use its path (`../workspace/state`).
 - Plain DOM, no framework: `el(tag, props, children)` and `$(id)` from `src/dom.ts`. Static structure in `index.html`.
 - Call the backend only through `invoke` from `src/ipc.ts`, never `@tauri-apps/api/core` directly, and branch on `codeOf(e)`, not on message text. A raw `invoke` once made errors show as `[object Object]` (fixed in merge `f979e28`).
 - Keep logic that can be tested out of DOM code, in a `*-text.ts` or similar module with a `*.test.ts` beside it (`node:test`, `node:assert`).
-- Commands (anything with a shortcut or a menu item) go in the `commands.ts` registry, so the keyboard, the menu bar, Open Anything and Settings › Shortcuts stay in step.
-- Settings go through `prefs.ts` (`readPref`/`writePref`), not localStorage directly.
+- Commands (anything with a shortcut or a menu item) go in the `shell/commands.ts` registry, so the keyboard, the menu bar, Open Anything and Settings › Shortcuts stay in step.
+- Settings go through `shell/prefs.ts` (`readPref`/`writePref`), not localStorage directly.
 - Feature modules that add a Settings tab register it on import (`import "./mcp"` in `main.ts`). Import order in `main.ts` is load order, so keep side-effect imports where they are.
 - CSS: design tokens on `:root` in `styles.css` (`--fg`, `--line`, `--accent`…, `light-dark()` for both schemes); per-feature stylesheets imported by their module. Themes override the tokens ([UI-UX.md](UI-UX.md)).
 - The CSP has `script-src 'self'`: no inline scripts and no `eval` on the page. Custom scripts run in a Web Worker, where the CSP doesn't apply because Tauri sends it only with HTML.

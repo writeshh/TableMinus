@@ -6,7 +6,7 @@
 
 **SQL engines** sit on the `Driver` trait (`src-tauri/src/sql/driver.rs`), held by `db::Conn`: Postgres (and CockroachDB), MySQL/MariaDB, SQLite/SQLCipher, DuckDB, SQL Server, ClickHouse, libSQL, D1, Oracle, BigQuery. They share the grid, filters, structure view and editor, DDL, export, import, the diagram, Copy Script As, Explain and safe mode. Engine differences are `match`es on `Dialect`.
 
-**Other engines** have their own module, session type and commands: Redis (`nosql/redis.rs`, own view `src/redis.ts`), MongoDB, DynamoDB, Elasticsearch, Cassandra (each `src-tauri/src/<engine>/mod.rs`, shown in the shared document view `src/docview.ts` through an adapter `src/<engine>.ts`). Their sessions live in `sessions::Sessions<S>`.
+**Other engines** have their own module, session type and commands: Redis (`nosql/redis.rs`, own view `src/nosql/redis.ts`), MongoDB, DynamoDB, Elasticsearch, Cassandra (each `src-tauri/src/<engine>/mod.rs`, shown in the shared document view `src/nosql/docview.ts` through an adapter `src/<engine>.ts`). Their sessions live in `sessions::Sessions<S>`.
 
 ## Adding a SQL engine
 
@@ -16,7 +16,7 @@ From TODO §24 and the commits that added DuckDB, SQL Server and ClickHouse (`7a
 2. A `Dialect` variant in `sql/db.rs` (with `ident`, `table_ident`, `literal`, `param`), an `Engine` variant, and an arm in `Conn::open`.
 3. Build: the compiler lists every `match` on `Dialect` that needs the engine's SQL (catalog, browse paging and `like_pattern`, structure, DDL, objects, diagram, processes, users, export, import…). Fill each in or return a clear "not supported" error.
 4. `safety/readonly.rs`: the sqlparser dialect, and the engine's side-effect functions.
-5. UI: the engine list (`ENGINES` and `FORM_SHAPES` in `src/engines.ts`), the form's fields and defaults (every field optional, defaults as placeholders: REQ-021), URL schemes in `src/connections.ts` and `src-tauri/Info.plist`, editor highlighting in `src/editor.ts`, and the feature switches (backup tools, user management, Explain).
+5. UI: the engine list (`ENGINES` and `FORM_SHAPES` in `src/connections/engines.ts`), the form's fields and defaults (every field optional, defaults as placeholders: REQ-021), URL schemes in `src/connections/connections.ts` and `src-tauri/Info.plist`, editor highlighting in `src/editor/editor.ts`, and the feature switches (backup tools, user management, Explain).
 6. Discovery: a probe in `connect/discover.rs` if the server can be found locally.
 7. A service in `scripts/test-env.yml` and ignored live tests that say what they need. Then a TODO.md entry saying what was tried, against which version, and what wasn't.
 

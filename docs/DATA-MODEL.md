@@ -54,7 +54,7 @@ All of these are written to a temporary file and renamed into place, and a file 
 
 The `dev.ritesh.dbmanager` names predate the TableMinus name and must stay: renaming them would orphan every saved password (DEC-018).
 
-**Linux without a Secret Service:** the same entries go into `secrets.vault`, one JSON map sealed with AES-256-GCM under a key from argon2id and a master password, typed once per session. Until then reads and writes fail with `vault_locked`, and the UI asks (`src/vault.ts`). "Forgot master password?" starts a new vault and keeps the old file renamed.
+**Linux without a Secret Service:** the same entries go into `secrets.vault`, one JSON map sealed with AES-256-GCM under a key from argon2id and a master password, typed once per session. Until then reads and writes fail with `vault_locked`, and the UI asks (`src/shell/vault.ts`). "Forgot master password?" starts a new vault and keeps the old file renamed.
 
 **Exported connection files:** sealed the same way (AES-256-GCM, argon2id key from a file password). Passwords go only into a password-protected file. An imported connection that carries a startup script is held back until the user has seen the script and chosen to keep or drop it.
 

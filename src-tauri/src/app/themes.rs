@@ -1,6 +1,6 @@
 //! Themes from a Git repository (Settings › Appearance › Install from Git…): a shallow clone over HTTPS into a
 //! temporary folder, from which the theme files (`*.json` at the top and in `themes/`) are read and handed to the UI,
-//! which checks each one as it does an imported file (theme-file.ts). The clone is removed afterwards. Updating runs
+//! which checks each one as it does an imported file (shell/theme-file.ts). The clone is removed afterwards. Updating runs
 //! the same fetch again.
 
 use crate::error::{Error, Result};
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
 
-/// A theme file is small (theme-file.ts allows 64 KB).
+/// A theme file is small (shell/theme-file.ts allows 64 KB).
 const MAX_FILE: u64 = 64 * 1024;
 /// More than any theme repository holds; a repository with more isn't read past this.
 const MAX_FILES: usize = 100;

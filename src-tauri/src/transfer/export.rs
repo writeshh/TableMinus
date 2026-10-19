@@ -574,7 +574,7 @@ mod tests {
         });
     }
 
-    /// The requests importexport.ts sends, as captured from the dialog.
+    /// The requests database/importexport.ts sends, as captured from the dialog.
     #[test]
     fn export_requests_from_the_ui_should_deserialize() {
         let tables = r#"{"items":[{"path":"/x/people.sql","source":{"table":"people"}}],
