@@ -4,6 +4,11 @@ What changed in each version of TableMinus. The app shows a version's section wh
 `scripts/latest-json.mjs` copies it into the release's `latest.json`: before a release, rename Unreleased to the
 version in `src-tauri/tauri.conf.json`.
 
+## 1.0.1
+
+- Fixed: the structure editor refused to rename or move a MySQL column with an expression default such as
+  `DEFAULT CURRENT_TIMESTAMP`, because it took the column for a generated one.
+
 ## 1.0.0
 
 - New engines: Oracle (through Oracle Instant Client, which you install: tables, views, functions and procedures,
