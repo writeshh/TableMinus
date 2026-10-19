@@ -170,7 +170,7 @@ async function fetchAndReview(origin: Origin) {
 }
 
 fromGit.onclick = () => gitUrl.value.trim() && void fetchAndReview({ git: gitUrl.value.trim() });
-gitUrl.onkeydown = (e) => e.key === "Enter" && fromGit.click();
+gitUrl.onkeydown = (e) => void (e.key === "Enter" && fromGit.click()); // false would cancel typing
 fromFolder.onclick = async () => {
   const folder = await openDialog({ directory: true }).catch(() => null);
   if (typeof folder === "string") await fetchAndReview({ folder });

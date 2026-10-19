@@ -677,6 +677,32 @@ impl Driver for BigQuery {
         self.dataset.clone()
     }
 
+    /// The default dataset's tables, views and the rest (`tables.list`): each with its type (TABLE, VIEW,
+    /// `MATERIALIZED_VIEW`…), sorted by name.
+    async fn list_tables(&mut self) -> Result<Vec<(String, String)>> {
+        let Some(dataset) = self.dataset.clone() else { return Ok(vec![]) };
+        let (mut out, mut token) = (vec![], None::<String>);
+        loop {
+            let page = token.as_deref().map(|t| format!("&pageToken={}", urlencode(t))).unwrap_or_default();
+            let path = format!(
+                "/bigquery/v2/projects/{}/datasets/{}/tables?maxResults=1000{page}",
+                self.project,
+                urlencode(&dataset)
+            );
+            let answer = self.request(Method::GET, &path, None).await?;
+            for t in answer.get("tables").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default() {
+                if let Some(name) = t["tableReference"]["tableId"].as_str() {
+                    out.push((name.to_string(), t["type"].as_str().unwrap_or("TABLE").to_string()));
+                }
+            }
+            token = answer.get("nextPageToken").and_then(Value::as_str).map(String::from);
+            if token.is_none() {
+                out.sort();
+                return Ok(out);
+            }
+        }
+    }
+
     /// The table resource (`tables.get`): its schema, key, description, and a view's query. `table` may be
     /// `dataset.table`.
     async fn describe(&mut self, table: &str) -> Result<Value> {

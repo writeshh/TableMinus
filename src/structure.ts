@@ -115,10 +115,12 @@ function columnMoves(d: Draft): Record<string, unknown>[] {
 }
 
 /** A type's length or other arguments: `255` in varchar(255), `10,2` in decimal(10,2). */
-const typeArgs = (t: string) => /\(([^()]*)\)/.exec(t)?.[1] ?? "";
+// Only numbers (or SQL Server's max) are a length: ClickHouse's Nullable(Date) or Array(String) wrap a type instead.
+const ARGS = /\s*\(\s*(\d+(?:\s*,\s*\d+)*|max)\s*\)/i;
+const typeArgs = (t: string) => ARGS.exec(t)?.[1] ?? "";
 /** The type with its arguments replaced (added at the end when it had none, removed when empty). */
 const withArgs = (t: string, args: string) =>
-  /\([^()]*\)/.test(t) ? t.replace(/\s*\([^()]*\)/, args.trim() ? `(${args.trim()})` : "") : args.trim() ? `${t.trimEnd()}(${args.trim()})` : t;
+  ARGS.test(t) ? t.replace(ARGS, args.trim() ? `(${args.trim()})` : "") : args.trim() ? `${t.trimEnd()}(${args.trim()})` : t;
 
 /** The primary key's columns as drafted, by their names in the end, or null when it's unchanged. Columns are
  *  compared by what they were, so renaming a key column alone isn't a new key. */
@@ -458,7 +460,7 @@ function triggerSection(d: Draft, redraw: () => void, touched: () => void) {
     return tr;
   });
   const add = addButton("Trigger", () => (d.triggers.push({
-    name: `${d.name.trim()}_trigger${d.triggers.length + 1}`, definition: "", timing: "BEFORE", events: ["INSERT"], body: "", added: true,
+    name: `${d.name.trim()}_trigger${d.triggers.length + 1}`, definition: "", timing: kind() === "mssql" ? "AFTER" : "BEFORE", events: ["INSERT"], body: "", added: true, // SQL Server has no BEFORE
   }), redraw()));
   return section("Triggers", ["Name", "Definition", ""], rows, add);
 }

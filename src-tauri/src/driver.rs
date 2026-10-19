@@ -181,6 +181,12 @@ pub trait Driver: Send {
         None
     }
 
+    /// The current database's tables and views with their kinds, for engines that list them outside SQL (BigQuery,
+    /// whose emulator has no `INFORMATION_SCHEMA` in an empty dataset).
+    async fn list_tables(&mut self) -> Result<Vec<(String, String)>> {
+        Err(Error::Invalid("this engine lists its tables in SQL"))
+    }
+
     /// A table as the engine's API describes it, for engines whose SQL catalog leaves things out (BigQuery).
     async fn describe(&mut self, _table: &str) -> Result<serde_json::Value> {
         Err(Error::Invalid("this engine describes tables in SQL"))

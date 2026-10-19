@@ -764,7 +764,7 @@ function table(r: QueryResult, picked?: number, pick?: (index: number) => void) 
         tr.tabIndex = 0;
         tr.setAttribute("aria-selected", String(i === picked));
         tr.onclick = () => pick(i);
-        tr.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), pick(i));
+        tr.onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), pick(i))); // false would cancel Tab
       }
       return tr;
     })));

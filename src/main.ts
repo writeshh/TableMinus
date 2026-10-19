@@ -144,7 +144,9 @@ const FORM_SHAPES: Record<string, { hide: string[]; label?: Record<string, strin
   dynamodb: {
     hide: [],
     label: { user: "Access key ID", password: "Secret access key", database: "Region" },
-    placeholder: { host: "dynamodb.us-east-1.amazonaws.com, or localhost for DynamoDB Local", port: "443, or 8000 for DynamoDB Local" },
+    placeholder: {
+      host: "dynamodb.us-east-1.amazonaws.com, or localhost for DynamoDB Local", port: "443, or 8000 for DynamoDB Local", database: "us-east-1",
+    },
   },
   mssql: {
     hide: [],
@@ -3115,6 +3117,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== " " || e.metaKey || e.ctrlKey || e.altKey || $("workspace").hidden || document.querySelector("dialog[open]")) return;
   const a = document.activeElement;
   if (current()?.kind !== "table" || (a && a !== document.body && !$("out").contains(a))) return;
+  // The structure view's fields sit inside the results area too: a space typed there is text.
+  if (a instanceof HTMLElement && (a.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(a.tagName))) return;
   e.preventDefault();
   toggleRowDetail();
 });

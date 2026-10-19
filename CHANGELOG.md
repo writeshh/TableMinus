@@ -17,6 +17,9 @@ version in `src-tauri/tauri.conf.json`.
   Postgres connections can use a Unix socket.
 - SQL Server: named instances (`host\INSTANCE`); functions, procedures and sequences in the sidebar, with editors;
   column defaults, comments and triggers in the structure editor.
+- Fixed: the filter and sort fields of MongoDB, DynamoDB, Elasticsearch and Cassandra tables, and the "Install from Git"
+  fields for plugins and themes, took no typing; spaces typed in the structure editor were lost; Oracle connections
+  could hang until macOS's local network permission was given; a picked row in a metrics table was unreadable.
 - ClickHouse: `SET` and temporary tables last from one statement to the next; user-defined functions show in the
   sidebar, and open, save and drop there.
 - Metrics boards: a data table's selected row feeds other widgets' queries (`order.id`), and a button can refresh

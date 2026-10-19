@@ -141,13 +141,16 @@ impl Conn {
     /// BigQuery's views and materialized views in the default dataset, then its routines. The emulator has no
     /// ROUTINES view, so the routines are left out where it fails.
     async fn bq_items(&mut self) -> Result<Vec<Item>> {
-        let mut rows = self
-            .fetch_with(
-                "select case table_type when 'VIEW' then 'view' else 'matview' end, table_name \
-                 from INFORMATION_SCHEMA.TABLES where table_type in ('VIEW', 'MATERIALIZED VIEW') order by 1, 2",
-                &[],
-            )
-            .await?;
+        let mut rows: Vec<Vec<Option<String>>> = self
+            .driver_tables()
+            .await?
+            .into_iter()
+            .filter_map(|(name, kind)| match kind.as_str() {
+                "VIEW" => Some(vec![Some("view".into()), Some(name)]),
+                "MATERIALIZED_VIEW" => Some(vec![Some("matview".into()), Some(name)]),
+                _ => None,
+            })
+            .collect();
         let routines = "select lower(routine_type), routine_name from INFORMATION_SCHEMA.ROUTINES \
              where routine_type in ('FUNCTION', 'PROCEDURE') order by 1, 2";
         rows.extend(self.fetch_with(routines, &[]).await.unwrap_or_default());

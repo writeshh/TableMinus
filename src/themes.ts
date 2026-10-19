@@ -180,7 +180,7 @@ function openGit() {
   }
   const install = el("button", { className: "primary", textContent: "Install" });
   install.onclick = () => url.value.trim() && void fetchFrom(url.value.trim());
-  url.onkeydown = (e) => e.key === "Enter" && install.click();
+  url.onkeydown = (e) => void (e.key === "Enter" && install.click()); // false would cancel typing
   footer.append(el("span", { className: "spacer" }), button("Close", () => d.close()), install);
   render();
   d.showModal();

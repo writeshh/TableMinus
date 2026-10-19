@@ -384,8 +384,12 @@ impl Conn {
             Dialect::Click => {
                 "select table, name from system.columns where database = currentDatabase() order by table, position"
             }
-            // The default dataset's; INFORMATION_SCHEMA without a dataset reads it.
+            // The default dataset's; INFORMATION_SCHEMA without a dataset reads it (the emulator has none while the
+            // dataset is empty).
             Dialect::Bq => {
+                if self.driver.list_tables().await?.is_empty() {
+                    return Ok(vec![]);
+                }
                 "select table_name, column_name from INFORMATION_SCHEMA.COLUMNS order by table_name, ordinal_position"
             }
         };
@@ -517,6 +521,11 @@ impl Conn {
 
     pub(crate) fn table_ident(&self, table: &str) -> String {
         self.dialect().table_ident(table)
+    }
+
+    /// Tables and views with their kinds, from the engine's API (BigQuery's `tables.list`).
+    pub(crate) async fn driver_tables(&mut self) -> Result<Vec<(String, String)>> {
+        self.driver.list_tables().await
     }
 
     /// A table as the engine's API describes it (BigQuery's `tables.get`).
@@ -670,7 +679,7 @@ impl Conn {
                  and dropped = 'NO' and nested = 'NO' and secondary = 'N' \
                  union select view_name from all_views where owner = sys_context('USERENV', 'CURRENT_SCHEMA') order by 1"
             }
-            Dialect::Bq => "select table_name from INFORMATION_SCHEMA.TABLES order by 1",
+            Dialect::Bq => return Ok(self.driver.list_tables().await?.into_iter().map(|(name, _)| name).collect()),
         };
         let r = self.query(sql).await?;
         Ok(r.rows.into_iter().filter_map(|mut row| row.swap_remove(0)).collect())

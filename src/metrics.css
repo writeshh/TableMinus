@@ -33,7 +33,9 @@ dialog.metrics-board[open] { display: flex; flex-direction: column; }
 .widget-table td.null { color: var(--grid-null); }
 .widget-table.pickable tbody tr { cursor: pointer; }
 .widget-table.pickable tbody tr:hover { background: var(--hover); }
-.widget-table.pickable tbody tr[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+/* :nth-child(n) matches every row; it only lifts the rule over the zebra stripes (styles.css), which otherwise paint an
+   even picked row grey under its accent-coloured text. */
+.widget-table.pickable tbody tr[aria-selected="true"]:nth-child(n) { background: var(--accent); color: var(--on-accent); }
 .widget-table.pickable tbody tr[aria-selected="true"] td.null { color: inherit; opacity: 0.7; }
 .board-targets { display: flex; flex-direction: column; gap: 2px; max-height: 140px; overflow: auto; }
 .score { flex: 1; display: flex; flex-direction: column; justify-content: center; min-width: 0; }

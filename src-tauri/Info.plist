@@ -3,6 +3,10 @@
 <!-- Merged into the app bundle's Info.plist: database links open in TableMinus (launcher.rs handles them). -->
 <plist version="1.0">
 <dict>
+  <!-- macOS asks before an app reaches the local network; without this the request can't be shown, and lookups
+       of .local names (Oracle's client resolves this Mac's own name) wait until they time out. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>TableMinus connects to database servers on your local network.</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>

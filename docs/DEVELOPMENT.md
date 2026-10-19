@@ -107,4 +107,6 @@ No release has been published yet (TASK-004). Publishing is outward-facing: it n
 | MySQL TLS panics about the crypto provider | Both rustls providers are compiled in | `db::install_tls_provider()` installs ring once; it is called before each rustls config is built (`db.rs`, `tls.rs`, `updater.rs`). New TLS code must call it too |
 | The first build takes many minutes | DuckDB compiles from source | Expected |
 | Oracle connection says where to get Instant Client | Instant Client isn't installed or found | Install it, or set `ORACLE_CLIENT_LIB_DIR` |
+| An Oracle connection waits 20 s, then "no answer from the server", from the app but not from tests | Instant Client looks up this Mac's own `.local` name over multicast DNS, which macOS's Local Network privacy holds back from an app until the user allows it | Allow TableMinus under System Settings › Privacy & Security › Local Network (the app asks, through `NSLocalNetworkUsageDescription` in `Info.plist`) |
+| Each rebuilt dev `.app` asks for keychain access again | An unsigned build is a new app to the keychain | Expected for `--no-sign` builds: allow it, or sign the build |
 | `npm run tauri dev` app can't be driven by computer-use | The dev binary isn't an `.app` bundle | Build a debug `.app` (`npm run tauri build -- --debug`) or use the browser preview |

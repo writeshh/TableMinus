@@ -231,7 +231,8 @@ export function docView(engine: Engine, host: Host) {
     Object.assign(s, { filter: filterInput.value, sort: sortInput.value, tokens: [null], total: null, row: null });
     return loadPage();
   }
-  for (const input of [filterInput, sortInput]) input.onkeydown = (e) => e.key === "Enter" && (e.preventDefault(), void apply());
+  // void: a handler that returns false cancels the key, so nothing could be typed.
+  for (const input of [filterInput, sortInput]) input.onkeydown = (e) => void (e.key === "Enter" && (e.preventDefault(), apply()));
 
   function step(by: number) {
     const s = stateOf(session());
