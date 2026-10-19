@@ -16,7 +16,7 @@ From TODO §24 and the commits that added DuckDB, SQL Server and ClickHouse (`7a
 2. A `Dialect` variant in `db.rs` (with `ident`, `table_ident`, `literal`, `param`), an `Engine` variant, and an arm in `Conn::open`.
 3. Build: the compiler lists every `match` on `Dialect` that needs the engine's SQL (catalog, browse paging and `like_pattern`, structure, DDL, objects, diagram, processes, users, export, import…). Fill each in or return a clear "not supported" error.
 4. `readonly.rs`: the sqlparser dialect, and the engine's side-effect functions.
-5. UI: the engine list (`ENGINES` in `src/main.ts`), the form's fields and defaults (every field optional, defaults as placeholders: REQ-021), URL schemes in `src/connections.ts` and `src-tauri/Info.plist`, editor highlighting in `src/editor.ts`, and the feature switches (backup tools, user management, Explain).
+5. UI: the engine list (`ENGINES` and `FORM_SHAPES` in `src/engines.ts`), the form's fields and defaults (every field optional, defaults as placeholders: REQ-021), URL schemes in `src/connections.ts` and `src-tauri/Info.plist`, editor highlighting in `src/editor.ts`, and the feature switches (backup tools, user management, Explain).
 6. Discovery: a probe in `discover.rs` if the server can be found locally.
 7. A service in `scripts/test-env.yml` and ignored live tests that say what they need. Then a TODO.md entry saying what was tried, against which version, and what wasn't.
 

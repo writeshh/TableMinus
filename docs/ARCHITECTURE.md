@@ -7,7 +7,7 @@ How the code fits together, as of `12be348` (2026-10-18). Module-level detail is
 ```mermaid
 flowchart LR
   subgraph Webview["Webview (src/, TypeScript, no framework)"]
-    UI[main.ts + feature modules] --> IPC[ipc.ts invoke]
+    UI[main.ts + modules] --> IPC[ipc.ts invoke]
     Worker[script-worker.ts<br/>custom scripts]
   end
   subgraph Core["Rust core (src-tauri/src)"]
@@ -86,7 +86,11 @@ Details: [features/safe-mode.md](features/safe-mode.md).
 ## The UI
 
 - No framework. `index.html` holds the static shell; modules build DOM with the `el()` helper from `dom.ts`. Styling is hand-written CSS with design tokens on `:root` (`styles.css`) plus per-feature stylesheets ([UI-UX.md](UI-UX.md)).
-- **`main.ts` (3,853 lines) is the hub:** launcher, connection form, workspace tabs, table tabs, SQL tabs, the grid and the settings dialog. Feature modules (`structure.ts`, `metrics.ts`, `diagram.ts`, `ai.ts`, `redis.ts`, `docview.ts`…) are wired in from it. A split of `main.ts` exists on an unmerged branch (TASK-001).
+- **`main.ts` (about 1,000 lines) wires the modules together** and keeps the SQL editor, the tab strip, the sidebar tree, the keyboard handlers and the command list. The workspace on screen is one object, `S` (`state.ts`), because a module can't assign another's `let`; the modules ask `main.ts` for the few things it still owns through an init host, as `grid-edit.ts` and `sidebar.ts` do. The split (merged 2026-10-19; the first two attempts were on branches):
+  - `state.ts` (`S`, tab types, `call`, `okToDiscard`), `engines.ts` (the engine list, per-engine form shapes, URLs, what each engine supports), `settings.ts` + `settings-defaults.ts`, `dialogs.ts` (menu, popover, confirmations).
+  - `connform.ts` (engine picker and connection form), `home.ts` (the launcher's list), `workspaces.ts` + `workspace-tabs.ts` (workspaces, split panes, the strip of workspace tabs), `dbpicker.ts` (Open a Database), `history.ts`.
+  - `tabletab.ts` + `table-text.ts` (table tabs), `run.ts` + `run-text.ts` (running SQL and its results), `gridview.ts` (grids, selection, copy).
+  - Feature modules (`structure.ts`, `metrics.ts`, `diagram.ts`, `ai.ts`, `redis.ts`, `docview.ts`…) are wired in from `main.ts`. Side-effect imports (Settings tabs, stylesheets) stay in `main.ts` ahead of the modules, because import order is load order.
 - **Commands:** `commands.ts` holds one list of app commands that feeds the keyboard handler, the native menu bar (`menu.ts`, rebuilt when shortcuts change), Open Anything (⌘P) and Settings › Shortcuts.
 - **Document view:** `docview.ts` is one grid-and-console view shared by MongoDB, DynamoDB, Elasticsearch and Cassandra through a small engine adapter each (`mongo.ts`, `dynamo.ts`, `elastic.ts`, `cassandra.ts`). Redis has its own view (`redis.ts`).
 - **Pure logic is kept out of DOM code** in `*-text.ts`, `statements.ts`, `staging.ts`, `chartdata.ts`, `diagram-layout.ts`… so `node --test` can test it.
@@ -116,6 +120,5 @@ Details: [features/safe-mode.md](features/safe-mode.md).
 
 ## Where the code differs from the intent
 
-- `src/main.ts` is far larger than the rest; a split was done twice on branches and not merged (TASK-001).
 - `README.md`'s Layout table and `Cargo.toml`'s description still describe the three-engine app (ISSUE-001).
 - Some engines rest on the SQL parse alone for read-only safety because the server can't enforce it: SQL Server, libSQL, D1 (TODO §24, ISSUE-010).
