@@ -25,3 +25,6 @@ dist-ssr
 
 # Docker test servers (scripts/test-env.sh)
 .test-env
+
+# Local notes and tooling, kept on the maintainer's machine
+.local/
