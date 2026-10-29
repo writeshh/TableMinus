@@ -1,4 +1,5 @@
 import { invoke } from "./ipc";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
@@ -922,6 +923,9 @@ addCommands([
 ]);
 initMenu();
 initHiding();
+// The launcher's version comes from the bundle, so a release can't leave it stale. The browser preview has no app, so
+// the label stays empty there.
+getVersion().then((v) => ($("app-version").textContent = `Version ${v}`), () => undefined);
 // The header's icon toolbar runs commands, so a button does what its menu item and shortcut do. Users only exists
 // where there are users to manage.
 for (const b of document.querySelectorAll<HTMLButtonElement>(".tool-icons [data-command]")) b.onclick = () => void runCommand(b.dataset.command!);
