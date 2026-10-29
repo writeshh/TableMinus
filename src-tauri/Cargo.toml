@@ -1,6 +1,6 @@
 [package]
 name = "table-minus"
-version = "1.0.1"
+version = "1.0.2"
 description = "Personal database client: Postgres, MySQL/MariaDB and SQLite"
 authors = ["Ritesh Shrestha"]
 edition = "2024"

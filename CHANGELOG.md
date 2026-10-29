@@ -4,6 +4,12 @@ What changed in each version of TableMinus. The app shows a version's section wh
 `scripts/latest-json.mjs` copies it into the release's `latest.json`: before a release, rename Unreleased to the
 version in `src-tauri/tauri.conf.json`.
 
+## 1.0.2
+
+- Security: updated the TLS certificate checks, the bundled root certificates, tokio and two cryptography crates to
+  versions that fix six published advisories (RUSTSEC-2026-0381, -0382, -0383, -0385, -0386 and -0387).
+- Fixed: the start screen said "Version 0.1.0" in every release. It now shows the installed version.
+
 ## 1.0.1
 
 - Fixed: the structure editor refused to rename or move a MySQL column with an expression default such as
