@@ -95,7 +95,7 @@ This checks layout and UI logic, not the backend. Say in a pull request whether 
 Steps from [../README.md](../README.md):
 
 1. Set the version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`, and rename the changelog's Unreleased section to that version.
-2. `npm run bundle`. With the signing key present, the bundle folder also gets the signed update file and `latest.json`, whose notes come from `CHANGELOG.md` (`scripts/latest-json.mjs`).
+2. `npm run bundle`. With the signing key present, the bundle folder also gets the signed update file and `latest.json`, whose notes come from `CHANGELOG.md` (`scripts/latest-json.mjs`). On a fresh checkout, run `npm run build` first: Tauri embeds `dist/`, and the bundle fails without it. If the audit fails on a new advisory, update the crate with `cargo update -p <crate>` in `src-tauri/`.
 3. Optionally sign with a Developer ID (variables above).
 4. Make a GitHub release tagged `v<version>` with the `.dmg`, the update file, its `.sig` and `latest.json`. Beta builds go to a release tagged `beta`.
 

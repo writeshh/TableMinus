@@ -63,7 +63,7 @@ Notable failure modes:
 
 ## Updates
 
-`src-tauri/src/app/updater.rs`, `src/shell/updates.ts`. Tauri's updater reads `latest.json` from `https://github.com/writeshh/TableMinus/releases/latest/download/latest.json`, or from the release tagged `beta`. Updates are signed with the minisign key whose public half is in `tauri.conf.json`. The check runs quietly at startup unless Settings › General turns it off. It has never run against a real release (none published).
+`src-tauri/src/app/updater.rs`, `src/shell/updates.ts`. Tauri's updater reads `latest.json` from `https://github.com/writeshh/TableMinus/releases/latest/download/latest.json`, or from the release tagged `beta`. Updates are signed with the minisign key whose public half is in `tauri.conf.json`. The check runs quietly at startup unless Settings › General turns it off. Release 1.0.2 is published, and the updater has not yet been tried against it.
 
 ## OS services
 
