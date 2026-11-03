@@ -2,7 +2,7 @@
 // combination another command already uses is refused until you choose to move it over.
 import { el } from "../dom";
 import { bindings, commands, isMac, setRecording } from "./commands";
-import { conflicts, label, resolve } from "./keys";
+import { conflicts, keys as keycaps, label, resolve, spoken } from "./keys";
 
 /** Draws the pane into `host`. `overrides` are the user's own bindings (id → keys); `store` keeps new ones (and
  *  applies them, so `bindings` reflects them before the pane redraws). */
@@ -35,7 +35,7 @@ export function renderShortcuts(host: HTMLElement, overrides: Record<string, str
         .map((c) => {
           const keys = bindings(c.id);
           const record = el("button", { type: "button", className: "keys", title: "Click, then press the new shortcut (Esc cancels)" },
-            ...(keys.length ? keys.map((k) => el("kbd", { textContent: label(k, isMac), className: shared.has(k) ? "clash" : "" })) : ["None"]));
+            ...(keys.length ? keys.map((k) => el("span", { className: shared.has(k) ? "combo clash" : "combo", title: spoken(k, isMac) }, ...keycaps(k, isMac).map((cap) => el("kbd", { textContent: cap })))) : ["None"]));
           record.onclick = () => {
             record.replaceChildren("Press keys…");
             record.classList.add("recording");

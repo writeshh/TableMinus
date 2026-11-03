@@ -8,6 +8,7 @@ version in `src-tauri/tauri.conf.json`.
 
 - Fixed: the tab close buttons, the table chevrons and the filter row buttons were slightly off centre. They are now
   drawn icons. The filter row's Apply-only button is larger.
+- Changed: Settings › Shortcuts shows each key on its own keycap, and the tooltip names the keys in words.
 
 ## 1.0.2
 

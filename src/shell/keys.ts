@@ -29,13 +29,28 @@ const NAMES: Record<string, string> = {
 };
 const MAC_MODS: Record<string, string> = { Ctrl: "⌃", Alt: "⌥", Shift: "⇧", Meta: "⌘" };
 
-/** How a binding reads on screen: "⌘⇧T" on macOS, "Ctrl+Shift+T" elsewhere. */
-export function label(binding: string, mac: boolean): string {
-  if (!binding) return "";
+/** A binding as separate keys, one keycap each: ["⇧", "⌘", "T"] on macOS, ["Shift", "Ctrl", "T"] elsewhere. */
+export function keys(binding: string, mac: boolean): string[] {
+  if (!binding) return [];
   const parts = binding.split("+");
   const code = parts.pop()!;
   const key = NAMES[code] ?? code.replace(/^(Key|Digit|Numpad)/, "");
-  return mac ? parts.map((m) => MAC_MODS[m] ?? m).join("") + key : [...parts, key].join("+");
+  return [...parts.map((m) => (mac ? MAC_MODS[m] : null) ?? m), key];
+}
+
+/** How a binding reads on screen: "⇧⌘T" on macOS, "Ctrl+Shift+T" elsewhere. */
+export function label(binding: string, mac: boolean): string {
+  return keys(binding, mac).join(mac ? "" : "+");
+}
+
+const MAC_WORDS: Record<string, string> = { Ctrl: "Control", Alt: "Option", Shift: "Shift", Meta: "Command" };
+
+/** A binding in words, for a tooltip: "Shift + Command + T". The symbols alone are hard to read. */
+export function spoken(binding: string, mac: boolean): string {
+  const parts = binding.split("+");
+  const code = parts.pop()!;
+  const key = NAMES[code] ?? code.replace(/^(Key|Digit|Numpad)/, "");
+  return [...parts.map((m) => (mac ? MAC_WORDS[m] : null) ?? m), key].join(" + ");
 }
 
 /** Every binding used by more than one command, with those commands' ids. */
