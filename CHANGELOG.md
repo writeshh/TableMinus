@@ -6,6 +6,7 @@ version in `src-tauri/tauri.conf.json`.
 
 ## Unreleased
 
+- New: Settings has a search box. Type a word to see the matching settings from every tab at once.
 - Fixed: the tab close buttons, the table chevrons and the filter row buttons were slightly off centre. They are now
   drawn icons. The filter row's Apply-only button is larger.
 - Changed: Settings › Shortcuts shows each key on its own keycap, and the tooltip names the keys in words.

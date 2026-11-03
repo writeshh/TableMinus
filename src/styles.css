@@ -251,6 +251,13 @@ button.icon-btn svg.ico { width: 14px; height: 14px; }
 .tool-icons button, .title-actions > #assistant-button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; }
 .tool-icons button[aria-pressed="true"], .title-actions > #assistant-button[aria-pressed="true"] { color: var(--fg); background: var(--press); }
 dialog.prefs section { padding: 22px 28px 8px; display: grid; gap: 14px; }
+.no-match { display: none !important; }
+.prefs-search { padding: 12px 28px 0; }
+.prefs-search input { width: 100%; box-sizing: border-box; }
+#settings-empty { margin: 22px 28px 8px; text-align: center; }
+/* While searching, each tab's matches sit under the tab's name */
+dialog.prefs.searching section { padding-top: 14px; }
+dialog.prefs.searching section::before { content: attr(data-pane); text-transform: capitalize; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
 dialog.prefs footer { padding: 12px 18px 16px; margin: 0; }
 .row { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 14px; }
 .row .k { text-align: right; color: var(--muted); }

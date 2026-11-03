@@ -90,10 +90,36 @@ function applySettings() {
   invoke("set_preferences", { keepAlive: settings.keepAlive, queryTimeoutSecs: settings.queryTimeout, maxRows: settings.sqlLimit }).catch(() => {});
 }
 
+let activeTab = "general";
+
 export function showTab(tab: string) {
+  activeTab = tab;
   if (tab === "shortcuts") renderShortcuts($("shortcuts-pane"), settings.shortcuts, (o) => setSetting("shortcuts", o));
-  for (const t of $("settings").querySelectorAll<HTMLElement>("[role=tab]")) t.setAttribute("aria-selected", String(t.dataset.tab === tab));
-  for (const p of $("settings").querySelectorAll<HTMLElement>("[data-pane]")) p.hidden = p.dataset.pane !== tab;
+  $<HTMLInputElement>("settings-search").value = "";
+  searchSettings("");
+}
+
+/** The search box: with text in it, every tab's matching rows show together, each pane under its tab's name;
+ *  empty, the chosen tab shows whole again. A row (any block in a pane but a hint) matches on its text, which
+ *  includes a menu's options, and on the tab's name. Hidden with a class, so a block that hides itself stays so. */
+function searchSettings(text: string) {
+  const q = text.trim().toLowerCase();
+  const d = $("settings");
+  d.classList.toggle("searching", q !== "");
+  for (const t of d.querySelectorAll<HTMLElement>("[role=tab]")) t.setAttribute("aria-selected", String(!q && t.dataset.tab === activeTab));
+  let found = 0;
+  for (const p of d.querySelectorAll<HTMLElement>("[data-pane]")) {
+    let hits = 0;
+    for (const row of p.querySelectorAll<HTMLElement>(":scope > :not(.hint)")) {
+      const hit = !q || `${p.dataset.pane} ${row.textContent}`.toLowerCase().includes(q);
+      row.classList.toggle("no-match", !hit);
+      hits += +hit;
+    }
+    for (const note of p.querySelectorAll<HTMLElement>(":scope > .hint")) note.classList.toggle("no-match", q !== "");
+    p.hidden = q ? !hits : p.dataset.pane !== activeTab;
+    found += hits;
+  }
+  $("settings-empty").hidden = !q || found > 0;
 }
 
 export const MAX_PAGE = 100_000; // sql/browse.rs MAX_PAGE
@@ -102,7 +128,11 @@ export const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.ma
 export const openSettings = () => {
   const d = $<HTMLDialogElement>("settings");
   csvDefaults($("csv-defaults")); // the export dialog may have changed them since
-  if (!d.open) d.showModal();
+  if (d.open) return;
+  $<HTMLInputElement>("settings-search").value = "";
+  searchSettings("");
+  d.showModal();
+  $("settings-search").focus(); // type to find a setting straight away
 };
 
 export function initSettings(h: Host) {
@@ -125,6 +155,7 @@ export function initSettings(h: Host) {
   $<HTMLSelectElement>("filter-column").onchange = (e) => setSetting("filterColumn", (e.target as HTMLSelectElement).value as DefaultColumn);
   $<HTMLSelectElement>("filter-op").onchange = (e) => setSetting("filterOp", (e.target as HTMLSelectElement).value as Op);
   $<HTMLInputElement>("filter-bar").onchange = (e) => setSetting("filterBar", (e.target as HTMLInputElement).checked);
+  $("settings-search").oninput = (e) => searchSettings((e.target as HTMLInputElement).value);
   $("settings-reset").onclick = () => {
     settings = { ...DEFAULT_SETTINGS };
     setSetting("theme", settings.theme); // persists and re-applies everything
