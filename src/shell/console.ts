@@ -2,7 +2,7 @@
 // panel is open, newest at the bottom.
 
 import { invoke } from "../ipc";
-import { $, el } from "../dom";
+import { $, el, icon } from "../dom";
 import { addCommands } from "./commands";
 import { divider } from "./splitters";
 import { highlightSql } from "../editor/editor";
@@ -15,7 +15,7 @@ const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-di
 const list = el("ol", { className: "console-list" });
 const empty = el("p", { className: "hint empty", textContent: "Statements the app sends appear here." });
 const clear = el("button", { type: "button", className: "ghost", textContent: "Clear" });
-const close = el("button", { type: "button", className: "ghost", textContent: "×", title: "Close the console" });
+const close = el("button", { type: "button", className: "ghost icon-btn", title: "Close the console" }, icon("close"));
 const panel = el("section", { className: "console", hidden: true },
   el("header", {}, el("strong", { textContent: "Console" }), el("span", { className: "spacer" }), clear, close),
   el("div", { className: "console-body" }, list, empty));

@@ -1,7 +1,7 @@
 // The right sidebar's row detail (Space): every field of the selected row as a form, with search. Changes are
 // staged exactly like grid edits (grid-edit.ts), so they count, undo and save with them.
 
-import { $, el } from "../dom";
+import { $, el, icon } from "../dom";
 import { sameJson } from "./staging";
 import { choicesOf, kindOf, readOnly, stage, valueAt, type EditTab } from "./grid-edit";
 
@@ -67,7 +67,7 @@ export function syncRowDetail(tab: EditTab | null, ri: number | null) {
 }
 
 function head(title: string) {
-  const close = el("button", { className: "ghost", textContent: "×", title: "Close (Space)" });
+  const close = el("button", { className: "ghost icon-btn", title: "Close (Space)" }, icon("close"));
   close.onclick = toggleRowDetail;
   return el("header", {}, el("strong", { textContent: title }), el("span", { className: "spacer" }), close);
 }

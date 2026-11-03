@@ -4,6 +4,11 @@ What changed in each version of TableMinus. The app shows a version's section wh
 `scripts/latest-json.mjs` copies it into the release's `latest.json`: before a release, rename Unreleased to the
 version in `src-tauri/tauri.conf.json`.
 
+## Unreleased
+
+- Fixed: the tab close buttons, the table chevrons and the filter row buttons were slightly off centre. They are now
+  drawn icons. The filter row's Apply-only button is larger.
+
 ## 1.0.2
 
 - Security: updated the TLS certificate checks, the bundled root certificates, tokio and two cryptography crates to

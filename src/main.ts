@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { createEditor, type Schema } from "./editor/editor";
-import { $, el } from "./dom";
+import { $, el, icon } from "./dom";
 import type { Dialect } from "./grid/copy";
 import { dropDraft, initStructure, saveStructure, sidebarMenu, tableMenu } from "./database/structure";
 import { openBackup, openRestore } from "./database/backup";
@@ -203,7 +203,7 @@ function renderTables() {
 function tableRow(t: string, label: string, first: MenuItem[], last: MenuItem[]) {
   const open = current()?.kind === "table" ? (current() as TableTab).table : null;
   const isOpen = S.expanded.has(t);
-  const chevron = el("button", { className: "chevron", textContent: "›", title: isOpen ? "Hide columns" : "Show columns" });
+  const chevron = el("button", { className: "chevron", title: isOpen ? "Hide columns" : "Show columns" }, icon("chevron"));
   chevron.setAttribute("aria-expanded", String(isOpen));
   chevron.onclick = async (e) => {
     e.stopPropagation();
@@ -410,7 +410,7 @@ function renderMain() {
   const tab = current();
   $("tabs").replaceChildren(
     ...S.tabs.map((t) => {
-      const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
+      const close = el("span", { className: "close", title: "Close tab" }, icon("close"));
       close.onclick = (e) => (e.stopPropagation(), closeTab(t.id));
       const b = el("button", { className: `tab ${t.kind}`, title: t.kind === "sql" && t.path ? t.path : t.title },
         ...(t.kind === "empty" ? [] : [el("span", { className: t.kind === "sql" ? "tab-sql" : "tbl-icon", textContent: t.kind === "sql" ? "SQL" : "" })]),

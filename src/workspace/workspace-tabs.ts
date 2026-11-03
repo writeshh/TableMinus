@@ -1,7 +1,7 @@
 // Workspace tabs: one per open workspace (a connection, or another database of one), across the top, and the session
 // key each workspace gets. workspaces.ts keeps the workspaces and swaps them on and off the screen.
 
-import { $, el } from "../dom";
+import { $, el, icon } from "../dom";
 import { keyLabel, S, type Workspace } from "./state";
 import { closeWorkspace, newWorkspace, showWorkspace } from "./workspaces";
 
@@ -34,7 +34,7 @@ export function renderDbTabs() {
   }
   const home = !$("home").hidden;
   const launcherTab = () => {
-    const close = el("span", { className: "close", textContent: "×", title: "Back to the workspace" });
+    const close = el("span", { className: "close", title: "Back to the workspace" }, icon("close"));
     close.onclick = (e) => (e.stopPropagation(), S.ws && showWorkspace(S.ws));
     const b = el("button", { className: "db-tab new-ws", title: "Connect to open another workspace" },
       el("span", { className: "dot" }), el("span", { className: "label", textContent: "New workspace" }), close);
@@ -42,13 +42,13 @@ export function renderDbTabs() {
     b.setAttribute("aria-selected", "true");
     return b;
   };
-  const add = el("button", { className: "add", textContent: "+", title: `New workspace (${keyLabel("new-workspace")})` });
+  const add = el("button", { className: "add", title: `New workspace (${keyLabel("new-workspace")})` }, icon("plus"));
   add.onclick = newWorkspace;
   strip.replaceChildren(
     ...S.workspaces.map((w) => {
       const database = ((d) => d && (w.conn.kind === "redis" ? `db${d}` : d))((w === S.ws ? S.info : w.info)?.database);
       const lost = w === S.ws ? !$("lost").hidden : w.lost;
-      const close = el("span", { className: "close", textContent: "×", title: "Close tab" });
+      const close = el("span", { className: "close", title: "Close tab" }, icon("close"));
       close.onclick = (e) => (e.stopPropagation(), closeDbTab(w));
       const b = el("button", {
         className: `db-tab ${w.conn.tag}`, draggable: true,

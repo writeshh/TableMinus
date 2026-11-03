@@ -182,7 +182,8 @@ aside { display: flex; flex-direction: column; }
 .tree-row.active .chevron { color: inherit; }
 .tree-row.active :is(.tbl-icon, .item-icon) { --accent: var(--on-accent); } /* or the icon vanishes into the row */
 .label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.chevron { border: 0; background: none; padding: 0; width: 16px; color: var(--muted); font-size: 15px; line-height: 1; flex: none; transition: transform 120ms ease-out; }
+.chevron { border: 0; background: none; padding: 0; width: 16px; height: 16px; display: grid; place-items: center; color: var(--muted); flex: none; transition: transform 120ms ease-out; }
+.chevron svg.ico { width: 12px; height: 12px; }
 .chevron[aria-expanded="true"] { transform: rotate(90deg); }
 .tbl-icon { flex: none; width: 13px; height: 11px; border-radius: 2px; background:
   linear-gradient(var(--accent) 0 0) 0 0 / 100% 3px no-repeat,
@@ -203,7 +204,8 @@ aside { display: flex; flex-direction: column; }
 .tabs { display: flex; gap: 4px; padding: 6px 8px; background: var(--tabs-bg); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; }
 .tab { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 220px; padding: 4px 6px 4px 12px; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--muted); white-space: nowrap; }
 .tab[aria-selected="true"] { background: var(--tab-active); color: var(--fg); border-color: var(--line); font-weight: 600; }
-.tab .close { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; opacity: 0; font-size: 13px; }
+.tab .close { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; opacity: 0; }
+.tab .close svg.ico, .db-tab .close svg.ico { width: 10px; height: 10px; }
 .tab:hover .close, .tab[aria-selected="true"] .close { opacity: 0.7; }
 .tab .close:hover { opacity: 1; background: var(--press); }
 .tab-sql { font: 700 9px var(--mono); color: var(--accent); }
@@ -240,6 +242,10 @@ dialog.prefs { width: min(760px, calc(100vw - 32px)); padding: 0; overflow: hidd
 .prefs-tabs button[aria-selected="true"] { color: var(--bg); background: var(--fg); }
 .prefs-tabs svg, .ghost svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .ghost svg { width: 16px; height: 16px; vertical-align: -3px; }
+/* Drawn icons (dom.ts icon()): a block-level svg in a grid or flex parent sits exactly in the middle, which a text glyph never does */
+svg.ico { display: block; flex: none; width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: baseline; }
+button.icon-btn { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 50%; }
+button.icon-btn svg.ico { width: 14px; height: 14px; }
 /* The header's icon toolbar: each button runs a command (data-command), the same as its menu item and shortcut */
 .tool-icons { display: inline-flex; gap: 2px; }
 .tool-icons button, .title-actions > #assistant-button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; }
@@ -356,7 +362,9 @@ td.null { color: var(--grid-null); font-style: italic; }
 .filter-row .rm { grid-column: 8; }
 .filter-row .add { grid-column: 9; }
 /* Glyph buttons sized like the inputs beside them, in ink rather than the ghost style's muted grey. */
-.filter-row button.ghost { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--fg); font-size: 17px; line-height: 1; }
+.filter-row button.ghost { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--fg); }
+.filter-row button.ghost svg.ico { width: 18px; height: 18px; }
+.filter-row button.only svg.ico { width: 22px; height: 22px; fill: currentColor; stroke-width: 1.5; } /* the Apply button: filled, and as big as its circle allows */
 .filter-foot { display: flex; gap: 6px; align-items: center; }
 th.sortable { cursor: default; user-select: none; }
 th .sort { margin-left: 4px; color: var(--accent); font-size: 10px; }
@@ -427,7 +435,9 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .conns li.conn-section:hover { background: none; }
 .conns .conns { overflow: visible; }
 .conn-group { display: flex; align-items: center; gap: 6px; padding: 10px 8px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border-radius: 8px; }
-.conn-group .fold { width: 10px; }
+.conn-group .fold { display: grid; place-items: center; width: 12px; height: 12px; transition: transform 120ms ease-out; }
+.conn-group .fold svg.ico { width: 12px; height: 12px; }
+.conn-group .fold.open { transform: rotate(90deg); }
 .conn-group .count { margin-left: auto; font-weight: 400; }
 .conn-group.drop { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--fg); border-radius: 999px; }
 .conns li.colored { box-shadow: inset 3px 0 0 var(--conn-color); }

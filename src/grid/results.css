@@ -33,8 +33,8 @@
 .saved-queries > summary, .side-heading { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .saved-queries > summary { list-style: none; }
 .saved-queries > summary::-webkit-details-marker { display: none; }
-.saved-queries > summary::before { content: "›"; font-size: 13px; transition: transform 120ms ease-out; }
-.saved-queries[open] > summary::before { transform: rotate(90deg); }
+.saved-queries > summary::before { content: ""; flex: none; width: 5px; height: 5px; margin: 0 2px 0 1px; border: solid currentColor; border-width: 1.5px 1.5px 0 0; transform: rotate(45deg); transition: transform 120ms ease-out; }
+.saved-queries[open] > summary::before { transform: rotate(135deg); }
 .saved-queries > summary .count { font-weight: 400; }
 .saved-queries > summary button { font-size: 11px; padding: 2px 8px; text-transform: none; letter-spacing: 0; }
 .favorites { overflow: auto; max-height: 40vh; padding: 0; }

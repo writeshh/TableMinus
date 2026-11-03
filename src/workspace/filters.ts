@@ -1,7 +1,7 @@
 // The filter bar for table tabs: rows of column · operator · value, combined with AND or OR. The values go to
 // the backend's `browse` command, which binds them; nothing here builds SQL (the SQL button asks the backend to show
 // it). New rows follow the filter defaults (Settings › General).
-import { el } from "../dom";
+import { el, icon } from "../dom";
 
 export type Op =
   | "eq" | "ne" | "lt" | "le" | "gt" | "ge"
@@ -83,22 +83,22 @@ export function renderFilters(host: HTMLElement, state: FilterState, columns: st
     // `void`: an on-handler that returns false cancels the event, so every other key would type nothing.
     for (const input of [value, value2]) input.onkeydown = (e) => void (e.key === "Enter" && (e.preventDefault(), apply()));
 
-    const remove = el("button", { type: "button", className: "ghost rm", textContent: "−", title: "Remove this filter" });
+    const remove = el("button", { type: "button", className: "ghost rm", title: "Remove this filter" }, icon("minus"));
     remove.onclick = () => {
       state.filters.splice(i, 1);
       redraw();
       apply();
     };
-    const add = el("button", { type: "button", className: "ghost add", textContent: "+", title: "Add a filter below" });
+    const add = el("button", { type: "button", className: "ghost add", title: "Add a filter below" }, icon("plus"));
     const below = (row: FilterRow) => {
       state.filters.splice(i + 1, 0, row);
       redraw();
       host.querySelectorAll<HTMLInputElement>(".filter-row input[type=text]")[(i + 1) * 2]?.focus();
     };
     add.onclick = () => below({ ...blankFilter(), column: f.column });
-    const clone = el("button", { type: "button", className: "ghost clone", textContent: "⧉", title: "Duplicate this filter" });
+    const clone = el("button", { type: "button", className: "ghost clone", title: "Duplicate this filter" }, icon("copy"));
     clone.onclick = () => below({ ...f });
-    const only = el("button", { type: "button", className: "ghost only", textContent: "▸", title: "Apply only this filter (switches the others off)" });
+    const only = el("button", { type: "button", className: "ghost only", title: "Apply only this filter (switches the others off)" }, icon("only"));
     only.onclick = () => {
       for (const g of state.filters) g.on = g === f;
       redraw();

@@ -2,7 +2,7 @@
 // dragging rows onto groups. connections.ts keeps the groups and tags; connform.ts edits a connection.
 
 import { invoke } from "../ipc";
-import { $, el, setStatus } from "../dom";
+import { $, el, icon, setStatus } from "../dom";
 import { avatar, dumps, engine, engineId, hasProcesses, hostOf, type Saved } from "./engines";
 import * as launcher from "./connections";
 import { COLORS, GROUP_ICONS, tagColor, tagLabel } from "./connections";
@@ -73,7 +73,7 @@ function section(g: launcher.Group, title: string, conns: Saved[], dropTarget: b
   const out = el("li", { className: "conn-section" });
   if (title) {
     const head = el("div", { className: "conn-group", tabIndex: 0 },
-      el("span", { className: "fold", textContent: collapsed.has(title) ? "▸" : "▾" }),
+      el("span", { className: collapsed.has(title) ? "fold" : "fold open" }, icon("chevron")),
       g.icon ? el("span", { textContent: GROUP_ICONS[g.icon] ?? "" }) : "",
       el("span", { className: "group-name", textContent: title }),
       el("span", { className: "count", textContent: String(conns.length) }));

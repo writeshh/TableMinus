@@ -29,7 +29,7 @@ body.overlay-title.full-screen .db-tabs { padding-left: 8px; }
 .db-tab .label { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .db-tab .conn { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--muted); }
 .db-tab .lost-mark { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--orange); color: var(--ink); font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
-.db-tab .close { flex: none; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; opacity: 0; font-size: 13px; }
+.db-tab .close { flex: none; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; opacity: 0; }
 .db-tab:hover .close, .db-tab[aria-selected="true"] .close { opacity: 0.7; }
 .db-tab .close:hover { opacity: 1; background: var(--press); }
 .db-tab.new-ws { --tag: var(--muted); font-style: italic; }
@@ -38,7 +38,8 @@ body.overlay-title.full-screen .db-tabs { padding-left: 8px; }
 .title-actions { position: sticky; right: 0; margin-left: auto; display: flex; align-items: center; gap: 4px; padding-left: 8px; background: var(--side); white-space: nowrap; }
 body:has(#workspace[hidden]) .title-actions { display: none; }
 .title-actions .pill { flex: 0 1 auto; max-width: 340px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 4px; }
-.db-tabs .add { flex: none; align-self: center; width: 24px; height: 24px; margin-left: 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 16px; line-height: 1; }
+.db-tabs .add { flex: none; align-self: center; width: 24px; height: 24px; margin-left: 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); display: grid; place-items: center; }
+.db-tabs .add svg.ico { width: 14px; height: 14px; }
 .db-tabs .add:hover { color: var(--fg); background: var(--press); }
 
 /* Instant tooltips (tip.ts) */
@@ -68,8 +69,9 @@ dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
 #schema-picker { width: calc(100% - 16px); margin: 0 8px 6px; }
 .tree .section { margin-top: 4px; }
 .section-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 4px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: left; }
-.section-head::before { content: "›"; display: inline-block; font-size: 13px; transition: transform 120ms ease-out; }
-.section-head[aria-expanded="true"]::before { transform: rotate(90deg); }
+/* A drawn chevron (two borders turned 45°) rather than a "›" glyph, so it sits in the middle of the line */
+.section-head::before { content: ""; flex: none; width: 5px; height: 5px; margin: 0 2px 0 1px; border: solid currentColor; border-width: 1.5px 1.5px 0 0; transform: rotate(45deg); transition: transform 120ms ease-out; }
+.section-head[aria-expanded="true"]::before { transform: rotate(135deg); }
 .section-head .count { font-weight: 400; }
 .chevron-gap { width: 16px; flex: none; }
 .item-icon { flex: none; width: 13px; height: 11px; border-radius: 3px; border: 1.5px solid color-mix(in srgb, var(--accent) 70%, transparent); }
