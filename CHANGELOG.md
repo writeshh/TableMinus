@@ -4,7 +4,7 @@ What changed in each version of TableMinus. The app shows a version's section wh
 `scripts/latest-json.mjs` copies it into the release's `latest.json`: before a release, rename Unreleased to the
 version in `src-tauri/tauri.conf.json`.
 
-## Unreleased
+## 1.1.0
 
 - New: Settings has a search box. Type a word to see the matching settings from every tab at once.
 - New: Settings › General › Recent folders turns the Recent folder on or off in the Items pane and in the
