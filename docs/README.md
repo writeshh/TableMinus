@@ -11,6 +11,6 @@ How TableMinus is built, how to work on it and how its parts behave.
 | [CONVENTIONS.md](CONVENTIONS.md) | Coding rules, layout and the commit message format |
 | [INTEGRATIONS.md](INTEGRATIONS.md) | Everything outside the app that it talks to: databases, GitHub Releases, AI providers |
 | [UI-UX.md](UI-UX.md) | Behaviour and layout, the visual language, accessibility |
-| [features/](features/README.md) | Deep dives: [safe mode](features/safe-mode.md), [engines](features/engines.md), [MCP and AI](features/mcp-and-ai.md) |
+| [features/](features/README.md) | Deep dives: [safe mode](features/safe-mode.md), [engines](features/engines.md), [MCP and AI](features/mcp-and-ai.md), [plugins](features/plugins.md) |
 
 The user-facing release notes are in [../CHANGELOG.md](../CHANGELOG.md).
