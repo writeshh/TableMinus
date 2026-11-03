@@ -59,7 +59,7 @@ export function renderConns() {
   shown.sort((a, b) => key(a).localeCompare(key(b)) || a.name.localeCompare(b.name));
   $("no-conns").hidden = saved.length > 0;
   const sections: HTMLElement[] = [];
-  const recent = q ? [] : launcher.recent().flatMap((n) => saved.filter((c) => c.name === n)).slice(0, 5);
+  const recent = q || !settings.recentConnections ? [] : launcher.recent().flatMap((n) => saved.filter((c) => c.name === n)).slice(0, 5);
   if (recent.length && saved.length > 5) sections.push(section({ name: "", icon: "" }, "Recent", recent, false));
   for (const g of launcher.groups) sections.push(section(g, g.name, shown.filter((c) => c.group === g.name), true));
   const loose = shown.filter((c) => !c.group || !launcher.groups.some((g) => g.name === c.group));

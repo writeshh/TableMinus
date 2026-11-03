@@ -22,10 +22,20 @@ import { renderHistory } from "../workspace/history";
 /** The SQL editor, which follows the settings (main.ts). */
 type Host = {
   editor: Editor;
+  /** Draws the Items pane again (the Recent folder shows or hides). */
+  redrawItems: () => void;
 };
 let host: Host;
 
 export let settings: Settings = fromStored(readPref<Record<string, unknown>>("settings"));
+
+// Hiding the Items pane's Recent folder used to be kept with the sidebar's looks (sidebar.ts); it is a setting now.
+const looks = readPref<{ off?: string[] }>("sidebar-looks");
+if (looks?.off?.includes("recent")) {
+  settings.recentItems = false;
+  writePref("settings", settings);
+  writePref("sidebar-looks", { ...looks, off: looks.off.filter((x) => x !== "recent") });
+}
 
 export function setSetting<K extends keyof Settings>(key: K, value: Settings[K]) {
   settings[key] = value;
@@ -71,6 +81,8 @@ function applySettings() {
   $<HTMLInputElement>("log-originals").checked = settings.logOriginals;
   $<HTMLInputElement>("reveal-export").checked = settings.revealExport;
   $<HTMLInputElement>("close-brackets").checked = settings.closeBrackets;
+  $<HTMLInputElement>("recent-items").checked = settings.recentItems;
+  $<HTMLInputElement>("recent-connections").checked = settings.recentConnections;
   document.body.classList.toggle("hide-scrollbars", settings.hideScrollbars);
   const tab = current();
   if (tab?.kind === "sql" && !$("workspace").hidden) showResults(tab);
@@ -159,6 +171,8 @@ export function initSettings(h: Host) {
   $("settings-reset").onclick = () => {
     settings = { ...DEFAULT_SETTINGS };
     setSetting("theme", settings.theme); // persists and re-applies everything
+    host.redrawItems();
+    renderConns();
     if (!$("shortcuts-pane").hidden) showTab("shortcuts");
   };
   $("settings-done").onclick = () => $<HTMLDialogElement>("settings").close();
@@ -187,4 +201,6 @@ export function initSettings(h: Host) {
   $<HTMLInputElement>("log-originals").onchange = (e) => setSetting("logOriginals", (e.target as HTMLInputElement).checked);
   $<HTMLInputElement>("reveal-export").onchange = (e) => setSetting("revealExport", (e.target as HTMLInputElement).checked);
   $<HTMLInputElement>("close-brackets").onchange = (e) => setSetting("closeBrackets", (e.target as HTMLInputElement).checked);
+  $<HTMLInputElement>("recent-items").onchange = (e) => (setSetting("recentItems", (e.target as HTMLInputElement).checked), host.redrawItems());
+  $<HTMLInputElement>("recent-connections").onchange = (e) => (setSetting("recentConnections", (e.target as HTMLInputElement).checked), renderConns());
 }

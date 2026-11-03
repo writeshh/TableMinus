@@ -10,6 +10,11 @@ test("fromStored keeps stored values over the defaults", () => {
   assert.equal(s.pageSize, DEFAULT_SETTINGS.pageSize);
 });
 
+test("both Recent folders show unless a stored setting hides them", () => {
+  assert.equal(fromStored(undefined).recentItems, true);
+  assert.equal(fromStored({ recentConnections: false }).recentConnections, false);
+});
+
 test("fromStored turns the old safe mode switch into a level", () => {
   assert.equal(fromStored({ safeDefault: true }).safeLevel, "alert2");
   assert.equal(fromStored({ safeDefault: false }).safeLevel, "silent");

@@ -56,6 +56,8 @@ export type Settings = {
   /** Show an export's files in Finder once it finishes. */
   revealExport: boolean;
   closeBrackets: boolean;
+  /** The Recent folders: tables and other items opened last (Items pane), and connections used last (launcher). */
+  recentItems: boolean; recentConnections: boolean;
 };
 export const DEFAULT_SETTINGS: Settings = {
   theme: "auto", zebra: true, fontSize: 13, lineHeight: 1.5, indent: "2", safeLevel: "alert2", queryTimeout: 300, keepAlive: true,
@@ -64,7 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shortcuts: {}, launcherSort: "name", reopenWorkspaces: false, newTabKind: "sql", autoUpdate: true, betaUpdates: false,
   resultsMode: "tabs", stopOnError: true, historyYears: 0,
   pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, hideScrollbars: false, logOriginals: false,
-  revealExport: false, closeBrackets: true,
+  revealExport: false, closeBrackets: true, recentItems: true, recentConnections: true,
 };
 
 /** Stored settings over the defaults. */

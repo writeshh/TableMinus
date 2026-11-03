@@ -7,6 +7,7 @@ import { connName, el } from "../dom";
 import { modal } from "../database/backup";
 import { dropItem, editable, newMenu, openItem, scriptMenu } from "../database/objects";
 import { readPref, writePref } from "../shell/prefs";
+import { setSetting, settings } from "../shell/settings";
 
 type MenuItem = [string, () => void] | "-";
 type Kind = "schema" | "view" | "matview" | "function" | "procedure" | "sequence" | "type";
@@ -230,7 +231,7 @@ export function renderTree(host: HTMLElement, query: string): number {
   const build = ({ n, kind }: { n: string; kind: Kind | "table" }) => rowFor(n, kind);
   const pinNames = p.pins.filter(shows).filter(exists);
   // Recent: what was opened last that still exists here (another database's names don't show).
-  const recentNames = off.includes("recent") ? [] : (p.recent ?? []).filter(shows).filter(exists);
+  const recentNames = settings.recentItems ? (p.recent ?? []).filter(shows).filter(exists) : [];
   const recentSection = section("recent", "Recent", tableRows(recentNames), build);
   recentSection[0]?.querySelector(".section-head")?.addEventListener("contextmenu", (e) => {
     e.stopPropagation();
@@ -294,7 +295,8 @@ export function treeMenu(): MenuItem[] {
   return [
     ["New group…", () => editGroup({ name: "", rule: "prefix", value: "" }, (g) => savePrefs({ ...prefs(), groups: [...prefs().groups, g] }))],
     "-",
-    ...[["recent", "Recent"], ...SECTIONS].map(([id, title]) => [`${off.includes(id as string) ? "    " : "✓ "}${title}`, () => toggle(id as string)] as MenuItem),
+    [`${settings.recentItems ? "✓ " : "    "}Recent`, () => (setSetting("recentItems", !settings.recentItems), ctx.redraw())],
+    ...SECTIONS.map(([id, title]) => [`${off.includes(id) ? "    " : "✓ "}${title}`, () => toggle(id)] as MenuItem),
     "-",
     ...columnOrderMenu(),
   ];

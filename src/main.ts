@@ -780,7 +780,7 @@ initWorkspaces({
 initDbPicker({ editor, stashEditor, saveSqlTabs });
 initHome();
 initConnForm();
-initSettings({ editor });
+initSettings({ editor, redrawItems: renderTables });
 
 // ---------- Wiring ----------
 

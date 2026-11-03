@@ -7,6 +7,8 @@ version in `src-tauri/tauri.conf.json`.
 ## Unreleased
 
 - New: Settings has a search box. Type a word to see the matching settings from every tab at once.
+- New: Settings › General › Recent folders turns the Recent folder on or off in the Items pane and in the
+  launcher. The right-click menu of the Items pane changes the same setting.
 - Fixed: the tab close buttons, the table chevrons and the filter row buttons were slightly off centre. They are now
   drawn icons. The filter row's Apply-only button is larger.
 - Changed: Settings › Shortcuts shows each key on its own keycap, and the tooltip names the keys in words.
