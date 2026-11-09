@@ -58,6 +58,11 @@
   --shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.3);
   --shadow-popover: 0 10px 28px rgb(0 0 0 / 0.25);
   --shadow-tip: 0 6px 18px rgb(0 0 0 / 0.2);
+  /* Control heights. Plain buttons, inputs and selects are --control-h from their padding and line height. */
+  --control-sm: 24px;
+  --control-md: 28px;
+  --control-h: 32px;
+  --control-lg: 36px;
 }
 /* Derived from --fg and --bg; declared again on the ink panel so they follow its colours, not the page's. */
 :root, .intro {
@@ -95,7 +100,7 @@ button:active { transform: scale(0.97); background: var(--press); } /* feedback 
 button.primary { background: var(--fg); border-color: transparent; color: var(--bg); font-weight: 600; } /* ink on paper, paper on ink */
 button.primary:hover { background: var(--accent); color: var(--on-accent); }
 button.danger { background: var(--orange); border-color: transparent; color: var(--ink); font-weight: 600; }
-button.ghost { border-color: transparent; background: none; color: var(--muted); padding: 4px 6px; }
+button.ghost { border-color: transparent; background: none; color: var(--muted); padding: 0 6px; height: var(--control-md); }
 button.ghost:hover { color: var(--fg); background: var(--hover); }
 kbd { font: 600 var(--text-sm) var(--mono); margin-left: 6px; padding: 1px 5px; border-radius: var(--radius-md); background: color-mix(in srgb, currentColor 12%, transparent); }
 .status { color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.4em; margin: 0; }
@@ -124,13 +129,13 @@ kbd { font: 600 var(--text-sm) var(--mono); margin-left: 6px; padding: 1px 5px; 
 h1 { font-size: var(--text-display); font-weight: 800; line-height: 1; letter-spacing: -0.04em; margin: 0; } /* poster-weight wordmark */
 h3 { font-size: var(--text-lg); } /* dialog titles; the browser default, 1.17em, is off the scale */
 .intro .muted { margin: 0 0 22px; }
-button.wide { width: min(240px, 100%); padding: 9px 16px; text-align: left; }
+button.wide { width: min(240px, 100%); padding: 0 16px; height: var(--control-lg); text-align: left; }
 .intro button.wide:not(.ghost) { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
 .intro button.wide:not(.ghost):hover { background: var(--blue); color: var(--ink); }
 .launcher { display: flex; flex-direction: column; min-height: 0; padding: 20px 22px 12px; }
 .search-row { display: flex; gap: 10px; margin-bottom: 12px; }
-.search-row input { flex: 1; padding: 7px 14px; }
-button.round { width: 34px; height: 34px; padding: 0; border-radius: 50%; font-size: var(--text-xl); line-height: 1; }
+.search-row input { flex: 1; padding: 0 14px; height: var(--control-lg); }
+button.round { width: var(--control-lg); height: var(--control-lg); padding: 0; border-radius: 50%; font-size: var(--text-xl); line-height: 1; }
 #add { display: grid; place-items: center; background: var(--fg); color: var(--bg); border-color: transparent; }
 #add:hover { background: var(--accent); color: var(--on-accent); }
 .conns { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
@@ -144,7 +149,7 @@ button.round { width: 34px; height: 34px; padding: 0; border-radius: 50%; font-s
 .host { color: var(--muted); font-size: var(--text-sm); }
 .actions { display: flex; gap: 4px; opacity: 0; }
 .conns li:hover > .actions, .conns li:focus-within > .actions { opacity: 1; }
-button.icon { padding: 3px 9px; font-size: var(--text-xs); }
+button.icon { padding: 0 9px; height: var(--control-sm); font-size: var(--text-xs); }
 .launcher .status { padding: 6px 4px 0; }
 
 /* ---------- Dialogs: dim to focus on a modal task ---------- */
@@ -232,9 +237,9 @@ aside { display: flex; flex-direction: column; }
 .cursor { font: var(--text-xs) var(--mono); color: var(--muted); }
 .table-foot { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); flex: none; }
 .page-info { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.table-foot button.ghost { font-size: var(--text-lg); padding: 2px 10px; }
+.table-foot button.ghost { font-size: var(--text-lg); padding: 0 10px; height: var(--control-md); }
 /* Filters, Columns, Export…: outlined pills like the Data / Structure segment beside them; on is filled, as there */
-.table-foot button.tool { font-size: var(--text-md); padding: 4px 12px; color: var(--fg); border-color: var(--line); background: var(--raised); }
+.table-foot button.tool { font-size: var(--text-md); padding: 0 12px; height: var(--control-md); color: var(--fg); border-color: var(--line); background: var(--raised); }
 .table-foot button.tool:hover { background: var(--hover); }
 .table-foot button.tool[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
 button:disabled { opacity: 0.35; pointer-events: none; }
@@ -262,11 +267,11 @@ dialog.prefs { width: min(760px, calc(100vw - 32px)); padding: 0; overflow: hidd
 .ghost svg { width: 16px; height: 16px; vertical-align: -3px; }
 /* Drawn icons (dom.ts icon()): a block-level svg in a grid or flex parent sits exactly in the middle, which a text glyph never does */
 svg.ico { display: block; flex: none; width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: baseline; }
-button.icon-btn { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 50%; }
+button.icon-btn { width: var(--control-sm); height: var(--control-sm); padding: 0; display: grid; place-items: center; border-radius: 50%; }
 button.icon-btn svg.ico { width: 14px; height: 14px; }
 /* The header's icon toolbar: each button runs a command (data-command), the same as its menu item and shortcut */
 .tool-icons { display: inline-flex; gap: 2px; }
-.tool-icons button, .title-actions > #assistant-button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; }
+.tool-icons button, .title-actions > #assistant-button { width: var(--control-md); height: var(--control-md); padding: 0; display: grid; place-items: center; }
 .tool-icons button[aria-pressed="true"], .title-actions > #assistant-button[aria-pressed="true"] { color: var(--fg); background: var(--press); }
 dialog.prefs section { padding: 22px 28px 8px; display: grid; gap: 14px; }
 .no-match { display: none !important; }
@@ -287,7 +292,7 @@ dialog.prefs footer { padding: 12px 18px 16px; margin: 0; }
 .hint.inline { margin-left: 8px; }
 .note { margin: 0 0 0 164px; }
 .seg { display: inline-flex; justify-self: start; padding: 3px; gap: 2px; border-radius: 999px; background: var(--hover); }
-.seg button { border: 0; background: none; padding: 4px 14px; }
+.seg button { border: 0; background: none; padding: 0 14px; height: var(--control-md); }
 .seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); font-weight: 600; }
 .intro button.ghost { color: var(--muted); }
 .ws-head { display: flex; justify-content: space-between; align-items: center; }
@@ -387,7 +392,7 @@ td.null { color: var(--grid-null); font-style: italic; }
 .filter-row .rm { grid-column: 8; }
 .filter-row .add { grid-column: 9; }
 /* Glyph buttons sized like the inputs beside them, in ink rather than the ghost style's muted grey. */
-.filter-row button.ghost { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--fg); }
+.filter-row button.ghost { width: var(--control-h); height: var(--control-h); padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--fg); }
 .filter-row button.ghost svg.ico { width: 18px; height: 18px; }
 .filter-row button.only svg.ico { width: 22px; height: 22px; fill: currentColor; stroke-width: 1.5; } /* the Apply button: filled, and as big as its circle allows */
 .filter-foot { display: flex; gap: 6px; align-items: center; }
@@ -410,7 +415,7 @@ th.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
 .paging-row { display: flex; align-items: center; gap: 8px; }
 .paging-row > span:first-child { width: 96px; color: var(--muted); flex: none; }
 .paging-row > span + span { flex: 1; font-variant-numeric: tabular-nums; }
-.table-foot button.page-info { font-size: var(--text-sm); padding: 2px 6px; }
+.table-foot button.page-info { font-size: var(--text-sm); padding: 0 6px; height: var(--control-sm); }
 /* Thin scroll bars over the grid that show while the pointer is on it (WebKit's pseudo-elements: the app's webview) */
 body.hide-scrollbars #out::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
 body.hide-scrollbars #out::-webkit-scrollbar-corner { background: transparent; }
@@ -476,7 +481,7 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .pw-row { grid-template-columns: 1fr 150px; align-items: center; }
 .icon-pick { display: grid; grid-template-columns: repeat(6, 30px); gap: 6px; padding: 4px 0 2px; }
 .opt-row:has(.icon-pick) { margin-top: 10px; }
-.icon-pick button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border-radius: 50%; font-size: var(--text-lg); line-height: 1; }
+.icon-pick button { width: var(--control-md); height: var(--control-md); padding: 0; display: grid; place-items: center; border-radius: 50%; font-size: var(--text-lg); line-height: 1; }
 .icon-pick button[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tag-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; }
 .tag-row { display: grid; grid-template-columns: 36px 1fr auto; gap: 8px; align-items: center; }

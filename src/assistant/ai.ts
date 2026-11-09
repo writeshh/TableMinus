@@ -92,7 +92,7 @@ const STYLE = `
 .ai-code pre { margin: 0; padding: 8px 10px; font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 .ai-code footer { display: flex; gap: 4px; justify-content: flex-end; margin: 0; padding: 4px 6px; border-top: 1px solid var(--line); background: var(--raised); }
 .ai-code footer .grow { flex: 1; color: var(--muted); font-size: var(--text-sm); align-self: center; }
-.ai-code footer button { padding: 2px 8px; font-size: var(--text-sm); }
+.ai-code footer button { padding: 0 8px; height: var(--control-sm); font-size: var(--text-sm); }
 .ai-ask { border-color: var(--warn); }
 .ai-table { max-height: 220px; overflow: auto; border-top: 1px solid var(--line); }
 .ai-table table { border-collapse: collapse; font: var(--text-sm)/1.4 var(--mono); }

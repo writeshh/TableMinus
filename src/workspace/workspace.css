@@ -56,7 +56,7 @@ body:has(#workspace[hidden]) .title-actions { display: none; }
 
 /* Open Anything */
 dialog.anything { width: min(620px, calc(100vw - 32px)); padding: 12px; margin-top: 12vh; }
-dialog.anything input { width: 100%; font-size: var(--text-lg); padding: 8px 10px; }
+dialog.anything input { width: 100%; font-size: var(--text-lg); padding: 0 10px; height: var(--control-lg); }
 .anything-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: min(56vh, 460px); overflow: auto; }
 .anything-list li { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: 999px; cursor: default; }
 .anything-list li[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 22%, transparent); }
@@ -105,4 +105,4 @@ dialog.anything input { width: 100%; font-size: var(--text-lg); padding: 8px 10p
 /* One keycap per key, in the system font at full contrast: the symbols (⇧ ⌘ ⌥) are crisp there and a mono face smudges them */
 .shortcut-row kbd { margin: 0; min-width: 22px; height: 22px; padding: 0 6px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--hover); box-shadow: 0 1px 0 var(--line); color: var(--fg); font: 500 var(--text-md)/1 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Ubuntu, sans-serif; -webkit-font-smoothing: antialiased; }
 .shortcut-row .clash kbd { color: var(--danger); border-color: var(--danger); }
-.shortcut-row button.ghost { font-size: var(--text-sm); padding: 2px 6px; }
+.shortcut-row button.ghost { font-size: var(--text-sm); padding: 0 6px; height: var(--control-sm); }

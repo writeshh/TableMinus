@@ -15,12 +15,12 @@
 .chart-panel { display: flex; flex-direction: column; height: 100%; min-height: 220px; }
 .chart-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); flex: none; flex-wrap: wrap; }
 .chart-pickers { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; font-size: var(--text-sm); }
-.chart-pickers select { padding: 2px 24px 2px 8px; font-size: var(--text-sm); max-width: 180px; }
-.chart-pickers .seg button { padding: 2px 10px; font-size: var(--text-sm); }
+.chart-pickers select { padding: 0 24px 0 8px; height: var(--control-sm); font-size: var(--text-sm); max-width: 180px; }
+.chart-pickers .seg button { padding: 0 10px; height: var(--control-sm); font-size: var(--text-sm); }
 .chart-pickers label.chart-x { display: flex; align-items: center; gap: 6px; }
 #result-chart[aria-pressed="true"] { color: var(--accent); }
 .chart-ys { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-button.chip { padding: 1px 8px; border-radius: 999px; font-size: var(--text-xs); color: var(--muted); }
+button.chip { padding: 0 8px; height: var(--control-sm); border-radius: 999px; font-size: var(--text-xs); color: var(--muted); }
 button.chip[aria-pressed="true"] { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .chart-host { flex: 1; min-height: 0; padding: 8px 10px 4px; }
 .chart { position: relative; height: 100%; display: flex; flex-direction: column; gap: 6px; }

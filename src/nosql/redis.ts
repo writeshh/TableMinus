@@ -73,7 +73,7 @@ body:has(#workspace.redis) :is(#new-sql, #tools-button, #assistant-button, .tool
 #redis-key table { border-collapse: collapse; font: var(--text-sm)/1.4 var(--mono); width: 100%; }
 #redis-key :is(th, td) { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 #redis-key td.acts { white-space: nowrap; width: 1%; }
-#redis-key td.acts button { padding: 1px 8px; font-size: var(--text-sm); }
+#redis-key td.acts button { padding: 0 8px; height: var(--control-sm); font-size: var(--text-sm); }
 #redis-key .add { display: flex; gap: 6px; flex-wrap: wrap; }
 #redis-key .add input { flex: 1; min-width: 120px; }
 #redis-console { flex: none; height: 220px; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--side); }
