@@ -55,6 +55,9 @@
   --radius-lg: 8px;
   --radius-xl: 12px;
   --radius-2xl: 16px;
+  --shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.3);
+  --shadow-popover: 0 10px 28px rgb(0 0 0 / 0.25);
+  --shadow-tip: 0 6px 18px rgb(0 0 0 / 0.2);
 }
 /* Derived from --fg and --bg; declared again on the ink panel so they follow its colours, not the page's. */
 :root, .intro {
@@ -144,7 +147,7 @@ button.icon { padding: 3px 9px; font-size: var(--text-xs); }
 .launcher .status { padding: 6px 4px 0; }
 
 /* ---------- Dialogs: dim to focus on a modal task ---------- */
-dialog { border: 1px solid var(--line); border-radius: var(--radius-2xl); padding: 20px; background: var(--bg); color: var(--fg); box-shadow: 0 24px 64px rgb(0 0 0 / 0.3); width: min(560px, calc(100vw - 32px)); }
+dialog { border: 1px solid var(--line); border-radius: var(--radius-2xl); padding: 20px; background: var(--bg); color: var(--fg); box-shadow: var(--shadow-dialog); width: min(560px, calc(100vw - 32px)); }
 dialog::backdrop { background: color-mix(in srgb, var(--ink) 40%, transparent); backdrop-filter: blur(2px); }
 dialog[open] { animation: arrive 180ms ease-out; }
 dialog.small { width: min(380px, calc(100vw - 32px)); }
@@ -324,7 +327,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .lost { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--orange) 16%, var(--raised)); }
 .lost > span:first-child { font-weight: 600; }
 #pill { cursor: default; }
-.popover { position: fixed; z-index: 20; width: 340px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-2xl); background: var(--raised); box-shadow: 0 12px 32px rgb(0 0 0 / 0.25); }
+.popover { position: fixed; z-index: 20; width: 340px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-2xl); background: var(--raised); box-shadow: var(--shadow-popover); }
 .popover dl { display: grid; grid-template-columns: 84px 1fr; gap: 6px 10px; margin: 0 0 12px; }
 .popover dt { color: var(--muted); }
 .popover dd { margin: 0; overflow-wrap: anywhere; }
@@ -364,7 +367,7 @@ td.null { color: var(--grid-null); font-style: italic; }
 }
 @media (prefers-reduced-transparency: reduce) {
   th { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
-  dialog::backdrop { backdrop-filter: none; background: rgba(0, 0, 0, 0.5); }
+  dialog::backdrop { backdrop-filter: none; background: color-mix(in srgb, var(--ink) 50%, transparent); }
 }
 @media (prefers-contrast: more) {
   :root { --line: color-mix(in srgb, var(--fg) 35%, transparent); --muted: color-mix(in srgb, var(--fg) 80%, transparent); }
@@ -390,7 +393,7 @@ td.null { color: var(--grid-null); font-style: italic; }
 th.sortable { cursor: default; user-select: none; }
 th .sort { margin-left: 4px; color: var(--accent); font-size: var(--text-2xs); }
 th .fk-mark { margin-left: 4px; color: var(--muted); font-size: var(--text-2xs); }
-.menu { position: fixed; z-index: 30; min-width: 200px; padding: 5px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--raised); box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); }
+.menu { position: fixed; z-index: 30; min-width: 200px; padding: 5px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--raised); box-shadow: var(--shadow-popover); }
 .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: var(--radius-lg); }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
@@ -443,7 +446,7 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .note-time { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .note-text { color: var(--muted); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notes li.failed .note-text { color: var(--danger); }
-.job { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-2xl); background: var(--raised); box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); }
+.job { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-2xl); background: var(--raised); box-shadow: var(--shadow-popover); }
 .job strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job progress { width: 100%; }
 .job-foot { display: flex; gap: 8px; align-items: center; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -463,7 +466,7 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .conn-group.drop { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--fg); border-radius: 999px; }
 .conns li.colored { box-shadow: inset 3px 0 0 var(--conn-color); }
 .color-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; }
-.drag-ghost { position: fixed; z-index: 30; pointer-events: none; padding: 4px 12px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line); box-shadow: 0 6px 18px rgb(0 0 0 / 0.25); }
+.drag-ghost { position: fixed; z-index: 30; pointer-events: none; padding: 4px 12px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line); box-shadow: var(--shadow-tip); }
 .tag.colored { color: var(--tag); background: color-mix(in srgb, var(--tag) 16%, transparent); }
 .swatches { display: flex; gap: 8px; align-items: center; }
 .swatches input { appearance: none; margin: 0; padding: 0; width: 18px; height: 18px; border-radius: 50%; background: var(--swatch, transparent); border: 1px solid var(--line); }

@@ -43,7 +43,7 @@ body:has(#workspace[hidden]) .title-actions { display: none; }
 .db-tabs .add:hover { color: var(--fg); background: var(--press); }
 
 /* Instant tooltips (tip.ts) */
-.tip { position: fixed; z-index: 50; padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); color: var(--fg); font-size: var(--text-sm); white-space: nowrap; pointer-events: none; box-shadow: 0 4px 12px rgb(0 0 0 / 0.25); }
+.tip { position: fixed; z-index: 50; padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); color: var(--fg); font-size: var(--text-sm); white-space: nowrap; pointer-events: none; box-shadow: var(--shadow-tip); }
 .tip[hidden] { display: none; }
 
 /* Split panes: side by side, the focused one live, the others still copies. */

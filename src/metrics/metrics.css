@@ -9,7 +9,7 @@ dialog.metrics-board[open] { display: flex; flex-direction: column; }
 .board-grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 64px; gap: 10px; padding: 12px; align-content: start; background: var(--side); }
 .board-empty { grid-column: 1 / -1; text-align: center; margin-top: 48px; font-size: var(--text-md); }
 .widget { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
-.widget.moving { z-index: 1; box-shadow: 0 10px 28px rgb(0 0 0 / 0.25); }
+.widget.moving { z-index: 1; box-shadow: var(--shadow-popover); }
 .widget > header { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px 0 10px; font-size: var(--text-sm); font-weight: 600; color: var(--muted); cursor: grab; touch-action: none; }
 .metrics-board.locked .widget > header { cursor: default; }
 .widget > header:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; border-radius: var(--radius-md); }

@@ -67,16 +67,16 @@ const SVG_STYLE = `
 .dg-dim { opacity: 0.35; }
 .dg-external .dg-box { stroke-dasharray: 2 3; }
 .dg-external .dg-title { fill: var(--muted); }
-.dg-head.c-blue { fill: #0b87d1; fill-opacity: 0.3; }
-.dg-head.c-pink { fill: #f4afc6; fill-opacity: 0.55; }
-.dg-head.c-yellow { fill: #fdd535; fill-opacity: 0.5; }
-.dg-head.c-orange { fill: #eb5e12; fill-opacity: 0.35; }
+.dg-head.c-blue { fill: var(--blue); fill-opacity: 0.3; }
+.dg-head.c-pink { fill: var(--pink); fill-opacity: 0.55; }
+.dg-head.c-yellow { fill: var(--yellow); fill-opacity: 0.5; }
+.dg-head.c-orange { fill: var(--orange); fill-opacity: 0.35; }
 .dg-head.c-green { fill: #2fa36b; fill-opacity: 0.32; }
 .dg-head.c-purple { fill: #7a5cc4; fill-opacity: 0.32; }
-.dg-note rect { fill: #fdd535; fill-opacity: 0.22; stroke: #c9a600; stroke-opacity: 0.5; }
+.dg-note rect { fill: var(--yellow); fill-opacity: 0.22; stroke: #c9a600; stroke-opacity: 0.5; }
 .dg-note text { font: italic 11px -apple-system, system-ui, sans-serif; fill: var(--fg); }
 `;
-const COLOURS = ["--fg", "--bg", "--muted", "--line", "--accent", "--side", "--warn"];
+const COLOURS = ["--fg", "--bg", "--muted", "--line", "--accent", "--side", "--warn", "--blue", "--pink", "--yellow", "--orange"];
 
 /** Opens the diagram of `schema` (Postgres; null is the current schema, and other engines the current database).
  *  `focus` centres a table, and on a very large schema starts from it and its neighbours. */

@@ -41,7 +41,7 @@ button.chip[aria-pressed="true"] { color: var(--fg); border-color: color-mix(in 
 .chart-wash { fill: var(--hover); }
 .chart-slice { stroke: var(--bg); stroke-width: 2; stroke-linejoin: round; transition: opacity 120ms ease-out; } /* the surface gap */
 .chart-slice.dim { opacity: 0.45; }
-.chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); box-shadow: 0 6px 18px rgb(0 0 0 / 0.18); font-size: var(--text-sm); display: grid; gap: 3px; max-width: 280px; }
+.chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); box-shadow: var(--shadow-tip); font-size: var(--text-sm); display: grid; gap: 3px; max-width: 280px; }
 .chart-tip-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-tip-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .chart-tip-row strong { font-variant-numeric: tabular-nums; }
