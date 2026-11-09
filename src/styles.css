@@ -122,6 +122,7 @@ kbd { font: 600 var(--text-sm) var(--mono); margin-left: 6px; padding: 1px 5px; 
   radial-gradient(circle var(--d) at 23px 69px, var(--yellow) calc(100% - 0.5px), transparent),
   radial-gradient(circle var(--d) at 69px 69px, var(--orange) calc(100% - 0.5px), transparent); }
 h1 { font-size: var(--text-display); font-weight: 800; line-height: 1; letter-spacing: -0.04em; margin: 0; } /* poster-weight wordmark */
+h3 { font-size: var(--text-lg); } /* dialog titles; the browser default, 1.17em, is off the scale */
 .intro .muted { margin: 0 0 22px; }
 button.wide { width: min(240px, 100%); padding: 9px 16px; text-align: left; }
 .intro button.wide:not(.ghost) { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
