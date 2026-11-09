@@ -178,7 +178,7 @@ sheet.replaceSync(`
 .safety-menu { width: 300px; }
 #safe-default, select[name="safety"] { min-width: 0; max-width: 100%; }
 .safety-menu button { display: grid; grid-template-columns: 16px 1fr; column-gap: 4px; }
-.safety-menu .what { grid-column: 2; font-size: 11px; color: var(--muted); }
+.safety-menu .what { grid-column: 2; font-size: var(--text-xs); color: var(--muted); }
 .safe-form { display: grid; gap: 10px; }
 .safe-form p { margin: 0; }
 `);

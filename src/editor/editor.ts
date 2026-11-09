@@ -47,21 +47,21 @@ const theme = EditorView.theme({
   ".cm-panels": { backgroundColor: "var(--side)", color: "var(--fg)" },
   // Find and replace: a find row (field, next, previous, all, toggles) over a replace row, in the app's pills.
   // Inline flow, not flex: the panel's <br> is what splits the rows, and a flex container ignores it.
-  ".cm-panel.cm-search": { padding: "5px 40px 5px 10px", fontSize: "12px" },
+  ".cm-panel.cm-search": { padding: "5px 40px 5px 10px", fontSize: "var(--text-sm)" },
   ".cm-search > *": { verticalAlign: "middle", margin: "3px 6px 3px 0" },
   ".cm-search .cm-textfield": {
-    width: "220px", padding: "4px 12px", fontSize: "12px", color: "var(--fg)",
+    width: "220px", padding: "4px 12px", fontSize: "var(--text-sm)", color: "var(--fg)",
     border: "1px solid var(--line)", borderRadius: "999px", backgroundColor: "var(--bg)",
   },
   ".cm-search .cm-button": {
-    padding: "3px 10px", fontSize: "12px", color: "var(--fg)", textTransform: "none",
+    padding: "3px 10px", fontSize: "var(--text-sm)", color: "var(--fg)", textTransform: "none",
     border: "1px solid var(--line)", borderRadius: "999px", backgroundImage: "none", backgroundColor: "var(--raised)",
   },
   ".cm-search .cm-button:hover": { backgroundColor: "var(--hover)" },
   ".cm-search .cm-button:active": { backgroundImage: "none", backgroundColor: "var(--press)" },
-  ".cm-search label": { display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--muted)", fontSize: "12px" },
+  ".cm-search label": { display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--muted)", fontSize: "var(--text-sm)" },
   ".cm-search input[type=checkbox]": { margin: 0, accentColor: "var(--accent)" },
-  ".cm-search button[name=close]": { top: "6px", right: "10px", margin: 0, color: "var(--muted)", fontSize: "18px" },
+  ".cm-search button[name=close]": { top: "6px", right: "10px", margin: 0, color: "var(--muted)", fontSize: "var(--text-xl)" },
   ".cm-placeholder": { color: "var(--muted)" },
   ".cm-current-statement": { backgroundColor: "color-mix(in srgb, var(--accent) 7%, transparent)" },
 });

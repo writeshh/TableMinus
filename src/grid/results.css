@@ -2,26 +2,26 @@
 .result-strip { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--tabs-bg); flex: none; }
 .result-strip[hidden] { display: none; }
 .result-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; flex: 1; }
-.result-tab { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 10px; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--muted); white-space: nowrap; font-size: 12px; }
+.result-tab { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 10px; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--muted); white-space: nowrap; font-size: var(--text-sm); }
 .result-tab[aria-selected="true"] { background: var(--tab-active); color: var(--fg); border-color: var(--line); }
 .result-tab.failed { color: var(--danger); }
 .result-tab .pin { width: 16px; text-align: center; opacity: 0.35; transform: rotate(45deg); }
 .result-tab .pin.on { opacity: 1; color: var(--accent); transform: none; }
 .result-tab .pin:hover { opacity: 1; }
-.appended h4 { position: sticky; left: 0; margin: 0; padding: 8px 10px 4px; font: 600 11.5px -apple-system, system-ui, sans-serif; color: var(--muted); }
+.appended h4 { position: sticky; left: 0; margin: 0; padding: 8px 10px 4px; font: 600 var(--text-sm) -apple-system, system-ui, sans-serif; color: var(--muted); }
 .appended + .appended { border-top: 1px solid var(--line); margin-top: 8px; }
 .load-more { display: block; margin: 8px 10px; }
-.messages { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.messages { list-style: none; margin: 0; padding: 0; font-size: var(--text-sm); }
 .messages li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; padding: 6px 12px; border-bottom: 1px solid var(--grid-line); }
 .message-when { grid-row: span 2; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.message-sql { font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
+.message-sql { font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
 .message-text { color: var(--muted); }
 .messages li.error .message-text { color: var(--danger); white-space: pre-wrap; }
 .console { position: relative; flex: none; height: var(--console-h, 30%); min-height: 80px; max-height: calc(100% - 160px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--grid-bg); }
 .console[hidden] { display: none; }
-.console header { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--line); background: var(--tabs-bg); font-size: 12px; }
+.console header { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--line); background: var(--tabs-bg); font-size: var(--text-sm); }
 .console-body { flex: 1; min-height: 0; overflow: auto; }
-.console-list { list-style: none; margin: 0; padding: 0; font: 12px/1.45 var(--mono); }
+.console-list { list-style: none; margin: 0; padding: 0; font: var(--text-sm)/1.45 var(--mono); }
 .console-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 3px 12px; border-bottom: 1px solid var(--grid-line); }
 .console-when { color: var(--muted); font-family: -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
 .console-sql { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -30,13 +30,13 @@
 /* Saved queries above the history: capped, so a long list scrolls inside it and the history keeps its room. */
 .saved-queries { flex: none; margin: 0 4px 6px; }
 /* Headings like the Items pane's sections (.section-head): small caps-style labels with a fold chevron */
-.saved-queries > summary, .side-heading { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.saved-queries > summary, .side-heading { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .saved-queries > summary { list-style: none; }
 .saved-queries > summary::-webkit-details-marker { display: none; }
 .saved-queries > summary::before { content: ""; flex: none; width: 5px; height: 5px; margin: 0 2px 0 1px; border: solid currentColor; border-width: 1.5px 1.5px 0 0; transform: rotate(45deg); transition: transform 120ms ease-out; }
 .saved-queries[open] > summary::before { transform: rotate(135deg); }
 .saved-queries > summary .count { font-weight: 400; }
-.saved-queries > summary button { font-size: 11px; padding: 2px 8px; text-transform: none; letter-spacing: 0; }
+.saved-queries > summary button { font-size: var(--text-xs); padding: 2px 8px; text-transform: none; letter-spacing: 0; }
 .favorites { overflow: auto; max-height: 40vh; padding: 0; }
 .side-heading { margin: 0 4px; }
 .favorites summary { font-weight: 600; padding: 6px 4px; }
@@ -47,8 +47,8 @@
 .favorite-form label > span { padding-top: 6px; }
 .favorite-form footer { margin-top: 6px; }
 .side-tabs button { min-width: 0; padding-inline: 4px; overflow: hidden; text-overflow: ellipsis; }
-.result-strip > button { padding: 2px 10px; font-size: 12px; }
-.result-edit-info, .result-found { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.result-strip > button { padding: 2px 10px; font-size: var(--text-sm); }
+.result-edit-info, .result-found { color: var(--muted); font-size: var(--text-sm); white-space: nowrap; }
 .result-edit-info.done { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
 .result-edit-info.error { color: var(--danger); }
 #result-search { width: 160px; }

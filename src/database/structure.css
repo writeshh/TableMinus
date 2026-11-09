@@ -1,6 +1,6 @@
 /* Structure view and its dialogs (structure.ts) */
 .structure { padding: 12px 14px 24px; display: grid; gap: 18px; align-content: start; }
-.structure h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.structure h4 { margin: 0 0 6px; font-size: var(--text-sm); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .structure table { width: max-content; }
 .structure th { position: static; }
 .structure td { max-width: 360px; }
@@ -10,7 +10,7 @@
 .structure td input.length { min-width: 64px; width: 72px; }
 .structure .trigger-form { display: grid; gap: 4px; min-width: 320px; }
 .structure .trigger-form select { width: auto; min-width: 0; }
-.structure .trigger-form textarea { width: 100%; font: 12px/1.4 var(--mono); resize: vertical; }
+.structure .trigger-form textarea { width: 100%; font: var(--text-sm)/1.4 var(--mono); resize: vertical; }
 .structure .events { display: inline-flex; gap: 8px; }
 .structure td input:not([type="checkbox"]):hover, .structure td select:hover { border-color: var(--line); }
 .structure td input:focus { border-color: var(--accent); background: var(--bg); }
@@ -18,9 +18,9 @@
 .structure tr.added td { background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .structure tr.dropped td { text-decoration: line-through; color: var(--muted); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .structure tr.dropped input { text-decoration: line-through; }
-.structure button.add { margin-top: 4px; font-size: 12px; }
+.structure button.add { margin-top: 4px; font-size: var(--text-sm); }
 .structure code { white-space: pre-wrap; }
-.structure-error { margin: 0; padding: 8px 10px; border-radius: 7px; background: color-mix(in srgb, var(--danger) 12%, transparent); white-space: pre-wrap; font: 12px var(--mono); }
+.structure-error { margin: 0; padding: 8px 10px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--danger) 12%, transparent); white-space: pre-wrap; font: var(--text-sm) var(--mono); }
 .table-options { display: flex; gap: 16px; flex-wrap: wrap; }
 .table-options label { display: flex; gap: 8px; align-items: center; color: var(--muted); }
 .table-options input { width: 260px; color: var(--fg); }
@@ -30,8 +30,8 @@
 .structure-dialog label.field { display: grid; gap: 4px; color: var(--muted); }
 .structure-dialog label.field input { color: var(--fg); }
 .structure-dialog label.check { display: flex; gap: 6px; align-items: center; }
-.sql-preview { margin: 0; max-height: 50vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); font: 12px/1.5 var(--mono); white-space: pre-wrap; user-select: text; }
-.definition-editor { height: 260px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.sql-preview { margin: 0; max-height: 50vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); font: var(--text-sm)/1.5 var(--mono); white-space: pre-wrap; user-select: text; }
+.definition-editor { height: 260px; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg); }
 .definition-editor.tall { height: min(420px, 55vh); }
 .definition-window .field { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; color: var(--muted); }
 .sequence-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }

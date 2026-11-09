@@ -160,6 +160,6 @@ async function move(which: Location, docs: Doc[], folder: string | null) {
 const sheet = new CSSStyleSheet();
 sheet.replaceSync(`
 .loc { display: grid; gap: 6px; min-width: 0; }
-.loc-path { font: 11.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.loc-path { font: var(--text-sm) var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 `);
 document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];

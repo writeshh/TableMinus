@@ -192,7 +192,7 @@ sheet.replaceSync(`
 #lock { width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0; border: 0; border-radius: 0; padding: 0; background: var(--bg); box-shadow: none; animation: none; }
 #lock::backdrop { background: var(--bg); }
 .lock-form { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
-.lock-form h2 { font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--fg); margin: 8px 0; }
+.lock-form h2 { font-size: var(--text-xl); text-transform: none; letter-spacing: 0; color: var(--fg); margin: 8px 0; }
 .lock-form input, .lock-form button:not(.ghost) { width: 240px; }
 .row-items { display: flex; gap: 8px; align-items: center; }
 .passcode-rows { display: grid; gap: 14px; }

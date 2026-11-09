@@ -1,11 +1,11 @@
 /* Workspace extras: tab renaming, split panes, workspace switcher, Open Anything, sidebar sections, shortcuts. */
-.tab-rename { width: 140px; padding: 1px 4px; font: inherit; border: 1px solid var(--accent); border-radius: 4px; }
+.tab-rename { width: 140px; padding: 1px 4px; font: inherit; border: 1px solid var(--accent); border-radius: var(--radius-sm); }
 #return-workspace { margin-top: 8px; }
 
 /* Workspaces: the connection name in the header opens the switcher. */
-.where-conn { cursor: default; border-radius: 6px; padding: 2px 4px; }
+.where-conn { cursor: default; border-radius: var(--radius-md); padding: 2px 4px; }
 .where-conn:hover { background: var(--hover); }
-.ws-count { font-size: 11px; padding: 0 7px; border-radius: 999px; background: var(--hover); color: var(--muted); }
+.ws-count { font-size: var(--text-xs); padding: 0 7px; border-radius: 999px; background: var(--hover); color: var(--muted); }
 .ws-count.lost { background: var(--orange); color: var(--ink); }
 
 /* Database tabs: one per open workspace above the header, marked with its connection's tag colour. */
@@ -27,8 +27,8 @@ body.overlay-title.full-screen .db-tabs { padding-left: 8px; }
 .db-tab.production { --tag: var(--orange); }
 .db-tab .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--tag); }
 .db-tab .label { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
-.db-tab .conn { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--muted); }
-.db-tab .lost-mark { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--orange); color: var(--ink); font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
+.db-tab .conn { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-xs); color: var(--muted); }
+.db-tab .lost-mark { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--orange); color: var(--ink); font-size: var(--text-2xs); font-weight: 700; line-height: 14px; text-align: center; }
 .db-tab .close { flex: none; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; opacity: 0; }
 .db-tab:hover .close, .db-tab[aria-selected="true"] .close { opacity: 0.7; }
 .db-tab .close:hover { opacity: 1; background: var(--press); }
@@ -43,7 +43,7 @@ body:has(#workspace[hidden]) .title-actions { display: none; }
 .db-tabs .add:hover { color: var(--fg); background: var(--press); }
 
 /* Instant tooltips (tip.ts) */
-.tip { position: fixed; z-index: 50; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); color: var(--fg); font-size: 12px; white-space: nowrap; pointer-events: none; box-shadow: 0 4px 12px rgb(0 0 0 / 0.25); }
+.tip { position: fixed; z-index: 50; padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); color: var(--fg); font-size: var(--text-sm); white-space: nowrap; pointer-events: none; box-shadow: 0 4px 12px rgb(0 0 0 / 0.25); }
 .tip[hidden] { display: none; }
 
 /* Split panes: side by side, the focused one live, the others still copies. */
@@ -56,28 +56,28 @@ body:has(#workspace[hidden]) .title-actions { display: none; }
 
 /* Open Anything */
 dialog.anything { width: min(620px, calc(100vw - 32px)); padding: 12px; margin-top: 12vh; }
-dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
+dialog.anything input { width: 100%; font-size: var(--text-lg); padding: 8px 10px; }
 .anything-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: min(56vh, 460px); overflow: auto; }
 .anything-list li { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: 999px; cursor: default; }
 .anything-list li[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .anything-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .anything-list .name b { color: var(--accent); }
-.anything-list .detail { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
-.anything-list .kind { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.anything-list .detail { color: var(--muted); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.anything-list .kind { color: var(--muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; }
 
 /* Sidebar sections, schema picker, search in database, overview */
 #schema-picker { width: calc(100% - 16px); margin: 0 8px 6px; }
 .tree .section { margin-top: 4px; }
-.section-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 4px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: left; }
+.section-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 4px 6px; font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: left; }
 /* A drawn chevron (two borders turned 45°) rather than a "›" glyph, so it sits in the middle of the line */
 .section-head::before { content: ""; flex: none; width: 5px; height: 5px; margin: 0 2px 0 1px; border: solid currentColor; border-width: 1.5px 1.5px 0 0; transform: rotate(45deg); transition: transform 120ms ease-out; }
 .section-head[aria-expanded="true"]::before { transform: rotate(135deg); }
 .section-head .count { font-weight: 400; }
 .chevron-gap { width: 16px; flex: none; }
-.item-icon { flex: none; width: 13px; height: 11px; border-radius: 3px; border: 1.5px solid color-mix(in srgb, var(--accent) 70%, transparent); }
+.item-icon { flex: none; width: 13px; height: 11px; border-radius: var(--radius-xs); border: 1.5px solid color-mix(in srgb, var(--accent) 70%, transparent); }
 .item-icon.view, .item-icon.matview { border-style: dashed; }
 .item-icon.function, .item-icon.procedure { border-radius: 50%; }
-.item-icon.sequence { border-radius: 1px; border-width: 1.5px 0; }
+.item-icon.sequence { border-radius: var(--radius-xs); border-width: 1.5px 0; }
 .item-icon.type { transform: rotate(45deg) scale(0.8); }
 .db-search-row { display: flex; gap: 6px; margin: 0 8px 6px; }
 .db-search-row select { flex: 1; min-width: 0; }
@@ -86,7 +86,7 @@ dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
 #db-search-results { overflow: auto; flex: 1; }
 #db-search-results .found { display: flex; width: 100%; gap: 8px; border: 0; background: none; padding: 4px 10px; border-radius: 999px; text-align: left; }
 #db-search-results .found:hover { background: var(--hover); }
-#db-search-results .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+#db-search-results .count { margin-left: auto; color: var(--muted); font-size: var(--text-sm); }
 .overview { width: 260px; }
 .overview h4 { margin: 0 0 8px; overflow-wrap: anywhere; }
 .overview dl { margin: 0; }
@@ -98,11 +98,11 @@ dialog.anything input { width: 100%; font-size: 15px; padding: 8px 10px; }
 .shortcut-search { flex: 1; }
 .shortcut-list { overflow: auto; min-height: 0; flex: 1; }
 .shortcut-row { display: grid; grid-template-columns: 82px 1fr auto auto auto; gap: 6px; align-items: center; padding: 3px 0; }
-.shortcut-row .menu-name { color: var(--muted); font-size: 11px; }
-.shortcut-row .keys { min-width: 120px; display: flex; gap: 8px; justify-content: center; align-items: center; padding: 3px 10px; font-size: 13px; }
+.shortcut-row .menu-name { color: var(--muted); font-size: var(--text-xs); }
+.shortcut-row .keys { min-width: 120px; display: flex; gap: 8px; justify-content: center; align-items: center; padding: 3px 10px; font-size: var(--text-md); }
 .shortcut-row .keys.recording { border-color: var(--accent); color: var(--accent); }
 .shortcut-row .combo { display: inline-flex; gap: 3px; }
 /* One keycap per key, in the system font at full contrast: the symbols (⇧ ⌘ ⌥) are crisp there and a mono face smudges them */
-.shortcut-row kbd { margin: 0; min-width: 22px; height: 22px; padding: 0 6px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--hover); box-shadow: 0 1px 0 var(--line); color: var(--fg); font: 500 13px/1 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Ubuntu, sans-serif; -webkit-font-smoothing: antialiased; }
+.shortcut-row kbd { margin: 0; min-width: 22px; height: 22px; padding: 0 6px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--hover); box-shadow: 0 1px 0 var(--line); color: var(--fg); font: 500 var(--text-md)/1 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Ubuntu, sans-serif; -webkit-font-smoothing: antialiased; }
 .shortcut-row .clash kbd { color: var(--danger); border-color: var(--danger); }
-.shortcut-row button.ghost { font-size: 12px; padding: 2px 6px; }
+.shortcut-row button.ghost { font-size: var(--text-sm); padding: 2px 6px; }

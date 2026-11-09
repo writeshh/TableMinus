@@ -87,19 +87,19 @@ const STYLE = `
 .ai-log .hint { margin: 0; }
 .ai-msg { display: grid; gap: 6px; max-width: 100%; }
 .ai-msg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
-.ai-msg.user { justify-self: end; max-width: 88%; padding: 6px 10px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
-.ai-code { position: relative; display: grid; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; }
-.ai-code pre { margin: 0; padding: 8px 10px; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.ai-msg.user { justify-self: end; max-width: 88%; padding: 6px 10px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
+.ai-code { position: relative; display: grid; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg); overflow: hidden; }
+.ai-code pre { margin: 0; padding: 8px 10px; font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 .ai-code footer { display: flex; gap: 4px; justify-content: flex-end; margin: 0; padding: 4px 6px; border-top: 1px solid var(--line); background: var(--raised); }
-.ai-code footer .grow { flex: 1; color: var(--muted); font-size: 12px; align-self: center; }
-.ai-code footer button { padding: 2px 8px; font-size: 12px; }
+.ai-code footer .grow { flex: 1; color: var(--muted); font-size: var(--text-sm); align-self: center; }
+.ai-code footer button { padding: 2px 8px; font-size: var(--text-sm); }
 .ai-ask { border-color: var(--warn); }
 .ai-table { max-height: 220px; overflow: auto; border-top: 1px solid var(--line); }
-.ai-table table { border-collapse: collapse; font: 11.5px/1.4 var(--mono); }
+.ai-table table { border-collapse: collapse; font: var(--text-sm)/1.4 var(--mono); }
 .ai-table :is(th, td) { padding: 2px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 .ai-table .null { color: var(--muted); font-style: italic; }
 .ai-error { color: var(--danger); }
-.ai-tool { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.ai-tool { margin: 0; color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .ai-tool::before { content: "⚙ "; }
 .ai-busy { color: var(--muted); font-style: italic; }
 #ai-form { display: grid; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }

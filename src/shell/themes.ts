@@ -308,7 +308,7 @@ dialog.theme-editor { width: min(620px, calc(100vw - 32px)); }
 dialog.theme-editor[open] { display: grid; gap: 10px; }
 dialog.theme-editor h3, dialog.theme-editor footer { margin: 0; }
 .theme-body { max-height: min(60vh, 520px); overflow-y: auto; }
-.theme-body legend { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 0 4px; }
+.theme-body legend { color: var(--muted); font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 0 4px; }
 .theme-body label { grid-template-columns: 160px 1fr; }
 .theme-body input[type="color"] { width: 40px; padding: 2px; flex: none; }
 `);

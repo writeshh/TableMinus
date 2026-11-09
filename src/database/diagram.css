@@ -9,7 +9,7 @@ dialog.diagram .status { margin-top: 8px; }
 .dg-zoom { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; color: var(--muted); }
 .dg-search { width: 220px; padding: 4px 9px; }
 .dg-count { color: var(--muted); font-variant-numeric: tabular-nums; }
-.dg-stage { position: relative; flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+.dg-stage { position: relative; flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden;
   background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 20px 20px, var(--bg); }
 .dg-canvas { display: block; width: 100%; height: 100%; cursor: default; touch-action: none; user-select: none; -webkit-user-select: none; }
 .dg-canvas:focus { outline: none; }
@@ -20,8 +20,8 @@ dialog.diagram .status { margin-top: 8px; }
 dialog.dg-pick { width: min(480px, calc(100vw - 32px)); }
 .dg-pick-bar { display: flex; gap: 6px; margin-bottom: 8px; }
 .dg-pick-bar input { flex: 1; }
-.dg-pick-list { display: grid; gap: 2px; max-height: min(55vh, 460px); overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 8px; }
-.dg-pick-list label { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dg-pick-list { display: grid; gap: 2px; max-height: min(55vh, 460px); overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.dg-pick-list label { font-family: var(--mono); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Printing: printDiagram() puts a copy of the SVG in .dg-print, and only that copy prints. */
 .dg-print { display: none; }

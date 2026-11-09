@@ -57,31 +57,31 @@ body:has(#workspace.redis) :is(#new-sql, #tools-button, #assistant-button, .tool
 #redis-keys li { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: 999px; cursor: default; white-space: nowrap; }
 #redis-keys li:hover { background: var(--hover); }
 #redis-keys li.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-#redis-keys .name { overflow: hidden; text-overflow: ellipsis; font: 12px/1.4 var(--mono); }
+#redis-keys .name { overflow: hidden; text-overflow: ellipsis; font: var(--text-sm)/1.4 var(--mono); }
 #redis-keys .folder .chevron { width: 18px; text-align: center; color: var(--muted); flex: none; }
-#redis-keys .folder .count { margin-left: auto; color: var(--muted); font-size: 11px; }
-.redis-type { flex: none; width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 5px; font: 700 10px/1 var(--mono); color: var(--ink); background: var(--yellow); }
+#redis-keys .folder .count { margin-left: auto; color: var(--muted); font-size: var(--text-xs); }
+.redis-type { flex: none; width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: var(--radius-sm); font: 700 var(--text-2xs)/1 var(--mono); color: var(--ink); background: var(--yellow); }
 .redis-type.hash { background: var(--blue); } .redis-type.list { background: var(--orange); } .redis-type.set { background: var(--pink); }
 .redis-type.zset { background: color-mix(in srgb, var(--blue) 50%, var(--pink)); } .redis-type.stream { background: var(--muted); }
-#redis-side .redis-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+#redis-side .redis-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--text-sm); }
 #redis-main { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 #redis-key { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; display: grid; align-content: start; gap: 10px; }
 #redis-key header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-#redis-key header h3 { margin: 0; font: 600 14px/1.3 var(--mono); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-#redis-key .meta { color: var(--muted); font-size: 12px; }
-#redis-key textarea { width: 100%; box-sizing: border-box; min-height: 160px; font: 12px/1.45 var(--mono); padding: 8px; resize: vertical; }
-#redis-key table { border-collapse: collapse; font: 12px/1.4 var(--mono); width: 100%; }
+#redis-key header h3 { margin: 0; font: 600 var(--text-lg)/1.3 var(--mono); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+#redis-key .meta { color: var(--muted); font-size: var(--text-sm); }
+#redis-key textarea { width: 100%; box-sizing: border-box; min-height: 160px; font: var(--text-sm)/1.45 var(--mono); padding: 8px; resize: vertical; }
+#redis-key table { border-collapse: collapse; font: var(--text-sm)/1.4 var(--mono); width: 100%; }
 #redis-key :is(th, td) { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 #redis-key td.acts { white-space: nowrap; width: 1%; }
-#redis-key td.acts button { padding: 1px 8px; font-size: 12px; }
+#redis-key td.acts button { padding: 1px 8px; font-size: var(--text-sm); }
 #redis-key .add { display: flex; gap: 6px; flex-wrap: wrap; }
 #redis-key .add input { flex: 1; min-width: 120px; }
 #redis-console { flex: none; height: 220px; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--side); }
-#redis-console pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 8px 12px; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+#redis-console pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 8px 12px; font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 #redis-console pre .cmd { color: var(--accent); }
 #redis-console pre .err { color: var(--danger); }
 #redis-console form { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); }
-#redis-console input { flex: 1; font: 12px/1.4 var(--mono); }
+#redis-console input { flex: 1; font: var(--text-sm)/1.4 var(--mono); }
 `);
 document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
 
