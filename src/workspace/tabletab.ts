@@ -4,7 +4,7 @@
 import { $, el } from "../dom";
 import { lastPage, nextSort, pageLabel, totalLabel } from "./table-text";
 import {
-  call, current, loadColumns, note, okToDiscard, pendingCount, S, sessionKey, status, type Tab, type TableTab,
+  call, current, loadColumns, note, okToDiscard, pendingCount, S, sessionKey, type Tab, type TableTab,
 } from "./state";
 import { activeFilters, blankFilter, renderFilters, type FilterRow } from "./filters";
 import { noteOpened } from "./sidebar";
@@ -181,7 +181,7 @@ async function showFilterSql(tab: TableTab) {
     const request = { ...browseRequest(tab), limit: settings.pageSize, offset: tab.offset };
     await showSql(`SQL for ${tab.table}`, await call<string>("filter_sql", { name: sessionKey(), request }));
   } catch (e) {
-    status(String(e), "error");
+    note(String(e), "error");
   }
 }
 

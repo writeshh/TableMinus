@@ -2,6 +2,7 @@
 // focused pane's tabs. Another module can't assign an imported `let`, so the state lives on one object, `S`;
 // workspaces.ts swaps it in and out per workspace. Also the helpers they all use on it.
 
+import { toast } from "../shell/toast";
 import { codeOf, invoke } from "../ipc";
 import { $, setStatus } from "../dom";
 import { label } from "../shell/keys";
@@ -129,14 +130,9 @@ export async function loadColumns(table: string) {
   return cache.get(table)!;
 }
 
-/** A short note where the current tab shows messages: the run bar for SQL tabs, the footer for table tabs. */
-export function note(text: string, kind: StatusKind) {
-  if (current()?.kind !== "table") return status(text, kind);
-  // Written directly: a full re-render would also redraw the grid and drop the selection.
-  const m = $("foot-msg");
-  m.textContent = text;
-  m.className = `foot-msg ${kind}`;
-}
+/** A notice about an action (saved, copied, could not export): a toast at the bottom right, whatever the tab.
+ *  status() is only for the state of the current run, in the run bar. */
+export const note = (text: string, kind: StatusKind) => toast(text, kind);
 
 // ---------- Unsaved edits ----------
 

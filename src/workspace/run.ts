@@ -7,7 +7,7 @@ import { $, el, icon } from "../dom";
 import type { BoardCtx } from "../metrics/metrics";
 import type { Editor } from "../editor/editor";
 import type { Ctx as TransferCtx } from "../database/importexport";
-import { call, current, loadColumns, okToDiscard, S, sessionKey, status, type StatusKind } from "./state";
+import { call, current, loadColumns, note, okToDiscard, S, sessionKey, status, type StatusKind } from "./state";
 import { ask, contextMenu, type MenuItem } from "../shell/dialogs";
 import {
   ALL, MESSAGES, renderMessages, renderStrip, rowsLabel, searchRows, type QueryResult, type Results, type ResultTab,
@@ -359,7 +359,7 @@ async function replaceInResult() {
   if (!got) return;
   const cells = replaceCells(target.result.rows, String(got.find), String(got.replace), { matchCase: !!got.matchCase, wholeCell: !!got.wholeCell });
   res.search = ""; // show every row again, with the replaced values staged in them
-  if (!cells.length || !grid.stageCells(target, cells)) return void (showResults(tab as SqlTab), status("Nothing to replace", ""));
+  if (!cells.length || !grid.stageCells(target, cells)) return void (showResults(tab as SqlTab), note("Nothing to replace", ""));
   showResults(tab as SqlTab);
 }
 
@@ -396,7 +396,7 @@ export function initRun(h: Host) {
     const tab = current();
     if (tab?.kind !== "sql" || !S.active) return;
     const list = tab.out?.tabs ?? [];
-    if (!list.length) return status("Run a query first; its result is exported by running it again.", "error");
+    if (!list.length) return note("Run a query first. Export runs it again to write every row.", "error");
     const on = list.find((r) => r.id === tab.out!.shown) ?? list.at(-1)!;
     if (list.length === 1) return exportResults(list);
     contextMenu(e, [[`Export ${on.title}…`, () => exportResults([on])], [`Export all ${list.length} results…`, () => exportResults(list)]]);
@@ -412,7 +412,7 @@ export function initRun(h: Host) {
   $("explain").onclick = async () => {
     const sql = host.editor.current();
     if (!sql.trim() || !S.active) return;
-    if (S.active.kind === "bigquery") return status("BigQuery shows a query's plan in the console's Execution details, not through SQL.", "error");
+    if (S.active.kind === "bigquery") return note("BigQuery shows a query's plan in the console's Execution details, not through SQL.", "error");
     // SQL Server shows a plan through a session setting, in a batch of its own on each side of the statement; Oracle
     // stores it in its plan table, which DBMS_XPLAN prints.
     const explain = S.active.kind === "mssql" ? `SET SHOWPLAN_TEXT ON\nGO\n${sql}\nGO\nSET SHOWPLAN_TEXT OFF`

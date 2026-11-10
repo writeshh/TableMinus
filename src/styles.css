@@ -371,6 +371,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #ask-text { font-weight: 500; }
 #ask-detail { flex: 1; min-width: 0; font: var(--text-sm) var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes arrive { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes rise { from { opacity: 0; transform: translateY(4px); } }
 
 #out { flex: 1; min-height: 0; overflow: auto; background: var(--grid-bg); scroll-padding: 28px 0 0 52px; } /* clear of the sticky header and row numbers */
 .empty { margin: 16px 12px; }
@@ -384,6 +385,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.null { color: var(--grid-null); font-style: italic; }
 
 @media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
   #ask, dialog[open] { animation: none; }
   .status.busy::before { animation: none; }
   button:active { transform: none; }
@@ -469,6 +471,12 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .note-time { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .note-text { color: var(--muted); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notes li.failed .note-text { color: var(--danger); }
+/* Toasts (toast.ts): a notice about an action, in the same stack as the job cards. An error carries the danger wash
+   and edge; its words say what failed. */
+.toast { display: flex; align-items: flex-start; gap: 8px; padding: 10px 8px 10px 14px; border: 1px solid var(--line); border-radius: var(--radius-2xl); background: var(--raised); box-shadow: var(--shadow-popover); animation: rise 180ms ease-out; }
+.toast-text { flex: 1; min-width: 0; padding-top: 2px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.toast.error { border-color: var(--danger); background: linear-gradient(var(--danger-soft), var(--danger-soft)), var(--raised); }
+.toast .icon-btn { flex: none; }
 .job { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-2xl); background: var(--raised); box-shadow: var(--shadow-popover); }
 .job strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job progress { width: 100%; }

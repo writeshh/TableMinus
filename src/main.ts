@@ -88,7 +88,7 @@ function formatSql() {
   try {
     editor.format(settings.formatStyle);
   } catch (e) {
-    status(`Couldn't format: ${e instanceof Error ? e.message.split("\n")[0] : e}`, "error");
+    note(`Couldn't format: ${e instanceof Error ? e.message.split("\n")[0] : e}`, "error");
   }
 }
 // ---------- Workspace ----------
@@ -153,7 +153,7 @@ async function openSqlFile() {
     addTab(tab);
     saveSqlTabs();
   } catch (e) {
-    status(String(e), "error");
+    note(String(e), "error");
   }
 }
 
@@ -174,9 +174,9 @@ async function saveSqlFile(pick: boolean) {
     tab.title = fileName(path);
     renderMain();
     saveSqlTabs();
-    status(`Saved ${tab.title}`, "done");
+    note(`Saved ${tab.title}`, "done");
   } catch (e) {
-    status(String(e), "error");
+    note(String(e), "error");
   }
 }
 
@@ -214,7 +214,7 @@ function tableRow(t: string, label: string, first: MenuItem[], last: MenuItem[])
         await loadColumns(t);
       } catch (err) {
         S.expanded.delete(t);
-        status(String(err), "error");
+        note(String(err), "error");
       }
     }
     renderTables();

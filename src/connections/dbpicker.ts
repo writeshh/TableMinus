@@ -3,7 +3,7 @@
 
 import { $, el, setStatus } from "../dom";
 import type { Editor } from "../editor/editor";
-import { allTabs, call, connectCommand, isMongo, isRedis, okToDiscard, ownView, S, sessionKey, status, type Info } from "../workspace/state";
+import { allTabs, call, connectCommand, isMongo, isRedis, note, okToDiscard, ownView, S, sessionKey, type Info } from "../workspace/state";
 import { applyInfo, openWorkspace, showWorkspace } from "../workspace/workspaces";
 import { dropDatabase, newDatabase, renameDatabase } from "../database/structure";
 
@@ -80,7 +80,7 @@ async function openDb(name?: string) {
     host.saveSqlTabs(); // under the database being left
     applyInfo(next);
     $<HTMLDialogElement>("dbpicker").close();
-    status(`${name} · ${S.tables.length} tables`, "done");
+    note(`Opened ${name}: ${S.tables.length} tables`, "done");
     host.editor.focus();
   } catch (e) {
     setStatus("db-status", String(e), "error");

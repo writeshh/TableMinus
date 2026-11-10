@@ -7,7 +7,7 @@ import { invoke } from "../ipc";
 import { $, el, setStatus } from "../dom";
 import type { Editor } from "../editor/editor";
 import {
-  allTabs, call, connectCommand, dbLabel, keyLabel, newPane, okToDiscard, ownView, S, sessionKey, status, type Info, type Pane,
+  allTabs, call, connectCommand, dbLabel, keyLabel, newPane, note, okToDiscard, ownView, S, sessionKey, status, type Info, type Pane,
   type Tab, type Workspace,
 } from "./state";
 import { forgetRedis, syncRedis } from "../nosql/redis";
@@ -76,9 +76,11 @@ export async function reconnect() {
     host.renderTables();
     host.loadSchema();
     syncViews(true);
-    status(`Reconnected · ${S.info.server}`, "done");
+    status("");
+    note(`Reconnected to ${S.info.server}`, "done");
   } catch (e) {
-    status(String(e), "error");
+    status("");
+    note(String(e), "error");
   } finally {
     btn.disabled = false;
   }
@@ -258,7 +260,7 @@ export async function reconnectAll() {
       Object.assign(w, { tables: w.info.tables, columns: new Map(), lost: false });
       forgetItems(w.key);
     } catch (e) {
-      status(`${w.conn.name}: ${e}`, "error");
+      note(`${w.conn.name}: ${e}`, "error");
     }
   }
   renderDbTabs();
