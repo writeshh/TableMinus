@@ -61,6 +61,7 @@ function apply() {
   for (const [v] of VARS) root.style.removeProperty(v);
   for (const [k, v] of Object.entries(t.vars)) root.style.setProperty(k, v);
   root.style.colorScheme = t.scheme;
+  root.dataset.scheme = t.scheme; // for what light-dark() can't switch, such as the logo image
 }
 
 /** Shows the theme for `m` (Settings › Appearance › Theme); Auto follows the system between the two defaults. */

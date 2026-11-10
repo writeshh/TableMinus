@@ -76,8 +76,8 @@
   /* The height of each bar across the window: database tabs, object tabs, the table header and footer. */
   --bar-h: 40px;
 }
-/* Derived from --fg and --bg; declared again on the ink panel so they follow its colours, not the page's. */
-:root, .intro {
+/* Derived from --fg and --bg, so a theme only needs to set those two. */
+:root {
   --line: color-mix(in srgb, var(--fg) 11%, transparent);
   --hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --press: color-mix(in srgb, var(--fg) 12%, transparent);
@@ -94,7 +94,6 @@
   --warn-soft: color-mix(in srgb, var(--warn) 22%, transparent); /* a staged, unsaved change */
   --danger-soft: color-mix(in srgb, var(--danger) 14%, transparent); /* a deleted row, an error, a lost connection */
 }
-.intro { color-scheme: dark; --bg: var(--ink); --fg: var(--paper); }
 * { box-sizing: border-box; }
 body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); -webkit-font-smoothing: antialiased; }
 [hidden] { display: none !important; }
@@ -140,10 +139,11 @@ kbd { font: 600 var(--text-sm) var(--mono); margin-left: 6px; padding: 1px 6px; 
 
 /* ---------- Launcher ---------- */
 #home { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 34%) 1fr; }
-/* The ink panel: the brand's one loud surface, with the mockingbird as the mark */
-.intro { background: var(--bg); color: var(--fg); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 6px; padding: 32px 28px; }
-/* The logo: the app icon's mockingbird on its paper tile. Bare, its darkest facets vanish on ink and on the dark theme. */
+/* The launcher's panel: the sidebar's ground in a light theme, ink in a dark one, with the mockingbird as the mark */
+.intro { background: light-dark(var(--side), var(--ink)); color: var(--fg); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 6px; padding: 32px 28px; }
+/* The logo: the bare mockingbird. A dark theme gets its dark variant, whose lifted facets read on ink (themes.ts sets data-scheme). */
 .mark { width: 92px; height: 92px; margin-bottom: auto; background: url("./mark.svg") center / contain no-repeat; }
+:root[data-scheme="dark"] .mark { background-image: url("./mark-dark.svg"); }
 h1 { font-size: var(--text-display); font-weight: 800; line-height: 1; letter-spacing: -0.04em; margin: 0; } /* poster-weight wordmark */
 h3 { font-size: var(--text-lg); } /* dialog titles; the browser default, 1.17em, is off the scale */
 .intro .muted { margin: 0 0 24px; }
