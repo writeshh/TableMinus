@@ -3,10 +3,14 @@
 
 import { $, el } from "../dom";
 
-export function confirmDialog(text: string, okLabel: string): Promise<boolean> {
+/** Actions that destroy something or can't be undone; their button is danger, any other action's is primary. */
+const DESTROYS = /^(Delete|Drop|Remove|Discard|Clear|Kill|Restore|Truncate|Overwrite)\b/;
+
+export function confirmDialog(text: string, okLabel: string, tone: "danger" | "primary" = DESTROYS.test(okLabel) ? "danger" : "primary"): Promise<boolean> {
   const d = $<HTMLDialogElement>("confirm");
   $("confirm-text").textContent = text;
   $("confirm-ok").textContent = okLabel;
+  $("confirm-ok").className = tone;
   d.showModal();
   $("confirm-cancel").focus(); // the safe choice is the default
   return new Promise((resolve) => {

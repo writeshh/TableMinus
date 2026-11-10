@@ -430,7 +430,7 @@ export async function save(tab: EditTab, confirmed = false, byIdentity = false):
       const id = conn.kind === "postgres" ? "ctid" : "rowid";
       const again = await host.confirm(
         `A key matched more than one row, so nothing was saved. Save again, finding each row by its row identity (${id}) instead?`,
-        "Save Again with Row Identity",
+        "Save again by row identity",
       );
       if (again) return save(tab, confirmed, true);
     }
