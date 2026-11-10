@@ -484,6 +484,16 @@
           <input id="result-search" type="search" placeholder="Search result" hidden />
           <button id="result-replace" class="ghost" title="Replace text in this result's cells; the changes are staged to review and save" hidden>Replace…</button>
         </nav>
+        <!-- A table tab's header: what it is and how to look at it. The footer says where you are and what changed. -->
+        <header id="table-head" class="table-head" hidden>
+          <span class="table-title"><strong id="table-name"></strong><span id="table-meta" class="table-meta"></span></span>
+          <div class="seg" id="view-seg"><button data-view="data">Data</button><button data-view="structure">Structure</button></div>
+          <span class="spacer"></span>
+          <button id="add-row" class="ghost" title="Add a row" hidden>+ Row</button>
+          <button id="toggle-filters" class="tool" title="Filter rows (⌘F)">Filters</button>
+          <button id="columns-button" class="tool" title="Show, hide and size columns">Columns</button>
+          <button id="export-table" class="tool" title="Export these rows to a file">Export…</button>
+        </header>
         <div id="filters" class="filters" hidden></div>
         <style id="column-layout"></style>
         <div class="grid-area">
@@ -491,13 +501,8 @@
           <aside id="row-detail" class="row-detail" hidden></aside>
         </div>
         <footer id="table-foot" class="table-foot" hidden>
-          <div class="seg" id="view-seg"><button data-view="data">Data</button><button data-view="structure">Structure</button></div>
-          <button id="toggle-filters" class="tool" title="Filter rows (⌘F)">Filters</button>
-          <button id="columns-button" class="tool" title="Show, hide and size columns">Columns</button>
-          <button id="export-table" class="tool" title="Export these rows to a file">Export…</button>
           <span id="foot-msg" class="foot-msg"></span>
           <span class="spacer"></span>
-          <button id="add-row" class="ghost" title="Add a row" hidden>+ Row</button>
           <span id="edit-info" class="edit-info"></span>
           <button id="preview-edits" class="ghost" hidden title="Preview the changes as SQL">SQL</button>
           <button id="discard-edits" hidden>Discard</button>

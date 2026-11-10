@@ -58,9 +58,15 @@ export async function reloadTab() {
   else (dropDraft(tab.id), host.renderMain());
 }
 
-/** A table tab below the tab strip: the footer, then its structure, its error or its page of rows. */
+/** A table tab below the tab strip: the header and footer, then its structure, its error or its page of rows. */
 export function renderTableTab(tab: TableTab) {
   $("result-strip").hidden = true;
+  $("table-name").textContent = tab.table;
+  const columns = tab.result?.columns.length;
+  $("table-meta").textContent = [
+    tab.total != null && `${tab.estimated ? "~" : ""}${tab.total.toLocaleString()} row${tab.total === 1 ? "" : "s"}`,
+    columns && `${columns} column${columns === 1 ? "" : "s"}`,
+  ].filter(Boolean).join(" · ");
   for (const b of $("view-seg").querySelectorAll<HTMLElement>("button")) b.setAttribute("aria-pressed", String(b.dataset.view === tab.view));
   const from = tab.offset;
   const page = { offset: from, shown: tab.result?.rows.length ?? 0, total: tab.total, estimated: tab.estimated };
@@ -78,6 +84,7 @@ export function renderTableTab(tab: TableTab) {
   const readOnly = !!keyless && !grid.findBy(tab);
   m.textContent = readOnly ? keyless : msg || keyless || "";
   $("add-row").hidden = tab.view !== "data" || !tab.result || !grid.findBy(tab);
+  for (const id of ["toggle-filters", "columns-button", "export-table"]) $(id).hidden = tab.view !== "data"; // they act on rows
   m.className = `foot-msg ${readOnly ? "" : msg ? kind : keyless ? "warn" : ""}`;
   if (tab.view === "structure") showStructure($("out"), tab.id, tab.table, !!tab.create);
   else if (tab.error) $("out").replaceChildren(el("p", { className: "hint empty error-text", textContent: tab.error }));

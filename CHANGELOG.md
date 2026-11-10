@@ -10,6 +10,8 @@ version in `src-tauri/tauri.conf.json`.
   corners are slightly larger or smaller.
 - Changed: the row under the workspace tabs is gone. The database to switch and the file and row-detail
   buttons are now in the top bar, next to the connection pill. The data starts 40px higher.
+- Changed: a table has a header with its name, row and column counts, Data and Structure, + Row,
+  Filters, Columns and Export. The footer keeps only messages, unsaved edits and the pages.
 
 ## 1.1.0
 

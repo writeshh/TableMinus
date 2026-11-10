@@ -40,5 +40,5 @@ dialog.cell-dialog h3, dialog.cell-dialog p, dialog.cell-dialog footer { margin:
 .row-detail label.field > :is(input, textarea, select) { grid-column: 1 / -1; width: 100%; color: var(--fg); font: var(--text-sm)/1.4 var(--mono); }
 .row-detail textarea { padding: 5px 8px; resize: vertical; field-sizing: content; max-height: 240px; }
 .row-detail .changed { background: color-mix(in srgb, var(--warn) 18%, var(--bg)); }
-.table-foot #add-row, .table-foot #preview-edits { font-size: var(--text-sm); white-space: nowrap; flex: none; }
+.table-head #add-row, .table-foot #preview-edits { font-size: var(--text-sm); white-space: nowrap; flex: none; }
 .table-foot .edit-info { white-space: nowrap; }

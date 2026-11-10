@@ -436,7 +436,7 @@ function renderMain() {
   if (!tab) return showNoTab();
 
   $("sql-pane").hidden = tab.kind !== "sql";
-  $("table-foot").hidden = tab.kind !== "table";
+  $("table-head").hidden = $("table-foot").hidden = tab.kind !== "table";
   showFilters(tab);
   applyLayout(tab);
   if (tab.kind === "sql") {
@@ -456,7 +456,7 @@ function renderMain() {
 
 /** The workspace with every tab closed (or an empty tab showing): still connected, saying how to go on or leave. */
 function showNoTab(emptyTab = false) {
-  for (const id of ["sql-pane", "table-foot", "result-strip", "filters"]) $(id).hidden = true;
+  for (const id of ["sql-pane", "table-head", "table-foot", "result-strip", "filters"]) $(id).hidden = true;
   redrawFilters();
   setSelection(null);
   syncDetail();

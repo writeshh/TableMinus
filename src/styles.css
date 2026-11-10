@@ -63,7 +63,7 @@
   --control-md: 28px;
   --control-h: 32px;
   --control-lg: 36px;
-  /* The height of each bar across the window: database tabs, object tabs and the table footer. */
+  /* The height of each bar across the window: database tabs, object tabs, the table header and footer. */
   --bar-h: 40px;
 }
 /* Derived from --fg and --bg; declared again on the ink panel so they follow its colours, not the page's. */
@@ -235,13 +235,17 @@ aside { display: flex; flex-direction: column; }
 .sql-pane { position: relative; display: flex; flex-direction: column; height: var(--sql-h, 38%); min-height: 120px; max-height: calc(100% - 140px); flex: none; }
 .sql-pane .editor { background: var(--editor-bg); flex: 1; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--line); }
 .cursor { font: var(--text-xs) var(--mono); color: var(--muted); }
+.table-head { display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: var(--bar-h); box-sizing: border-box; border-bottom: 1px solid var(--line); flex: none; min-width: 0; }
+.table-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-right: 4px; white-space: nowrap; }
+.table-title strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.table-meta { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .table-foot { display: flex; align-items: center; gap: 8px; padding: 0 10px; min-height: var(--bar-h); box-sizing: border-box; border-top: 1px solid var(--line); flex: none; }
 .page-info { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-foot button.ghost { font-size: var(--text-lg); padding: 0 10px; height: var(--control-md); }
-/* Filters, Columns, Export…: outlined pills like the Data / Structure segment beside them; on is filled, as there */
-.table-foot button.tool { font-size: var(--text-md); padding: 0 12px; height: var(--control-md); color: var(--fg); border-color: var(--line); background: var(--raised); }
-.table-foot button.tool:hover { background: var(--hover); }
-.table-foot button.tool[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
+/* Filters, Columns, Export… in the table header: outlined pills; on is filled, as in the Data / Structure segment */
+.table-head button.tool { font-size: var(--text-md); padding: 0 12px; height: var(--control-md); color: var(--fg); border-color: var(--line); background: var(--raised); }
+.table-head button.tool:hover { background: var(--hover); }
+.table-head button.tool[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
 button:disabled { opacity: 0.35; pointer-events: none; }
 th.rownum, td.rownum { position: sticky; left: 0; text-align: right; color: var(--muted); background: var(--side); min-width: 44px; font-variant-numeric: tabular-nums; }
 th.rownum { z-index: 2; }
