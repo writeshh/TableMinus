@@ -63,6 +63,8 @@
   --control-md: 28px;
   --control-h: 32px;
   --control-lg: 36px;
+  /* The height of each bar across the window: database tabs, the header, object tabs and the table footer. */
+  --bar-h: 40px;
 }
 /* Derived from --fg and --bg; declared again on the ink panel so they follow its colours, not the page's. */
 :root, .intro {
@@ -222,7 +224,7 @@ aside { display: flex; flex-direction: column; }
 .history-item .when { display: block; font-size: var(--text-xs); color: var(--muted); margin-bottom: 2px; }
 .history-item code { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; font: var(--text-sm)/1.45 var(--mono); }
 .sql-btn { font: 600 var(--text-xs) var(--mono); letter-spacing: 0.04em; color: var(--fg); border: 1px solid var(--line); }
-.tabs { display: flex; gap: 4px; padding: 6px 8px; background: var(--tabs-bg); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; }
+.tabs { display: flex; align-items: center; gap: 4px; padding: 0 8px; min-height: var(--bar-h); box-sizing: border-box; background: var(--tabs-bg); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; }
 .tab { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 220px; padding: 4px 6px 4px 12px; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--muted); white-space: nowrap; }
 .tab[aria-selected="true"] { background: var(--tab-active); color: var(--fg); border-color: var(--line); font-weight: 600; }
 .tab .close { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; opacity: 0; }
@@ -233,7 +235,7 @@ aside { display: flex; flex-direction: column; }
 .sql-pane { position: relative; display: flex; flex-direction: column; height: var(--sql-h, 38%); min-height: 120px; max-height: calc(100% - 140px); flex: none; }
 .sql-pane .editor { background: var(--editor-bg); flex: 1; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--line); }
 .cursor { font: var(--text-xs) var(--mono); color: var(--muted); }
-.table-foot { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); flex: none; }
+.table-foot { display: flex; align-items: center; gap: 8px; padding: 0 10px; min-height: var(--bar-h); box-sizing: border-box; border-top: 1px solid var(--line); flex: none; }
 .page-info { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-foot button.ghost { font-size: var(--text-lg); padding: 0 10px; height: var(--control-md); }
 /* Filters, Columns, Export…: outlined pills like the Data / Structure segment beside them; on is filled, as there */
@@ -318,7 +320,7 @@ aside { background: var(--side); color: var(--side-fg); border-right: 1px solid 
 .ws-head { padding: 2px 0 4px; }
 h2 { font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 12px 8px 6px; }
 main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-#where { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); min-width: 0; }
+#where { display: flex; align-items: center; gap: 10px; padding: 0 12px; min-height: var(--bar-h); box-sizing: border-box; border-bottom: 1px solid var(--line); min-width: 0; }
 .where-conn { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; }
 .where-conn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #where .avatar { width: 24px; height: 24px; font-size: var(--text-2xs); }
