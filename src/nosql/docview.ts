@@ -143,7 +143,7 @@ export function docView(engine: Engine, host: Host) {
   const docsView = el("section", { className: "doc-docs" }, bar, grid);
   const editorHost = el("div", { className: "editor" });
   const runButton = button("Run", () => void runConsole(), "primary", "Run (⌘↩)");
-  const outTabs = el("div", { className: "tabs" });
+  const outTabs = el("div", { className: "out-tabs" }); // not .tabs: that is the object tab strip
   const note = el("span", { className: "status" });
   const out = el("div", { className: "out" });
   const consolePane = el("section", { className: "doc-console" }, editorHost, el("div", { className: "run" }, runButton, outTabs, el("span", { className: "spacer" }), note), out);
@@ -505,8 +505,8 @@ body:has(#workspace.doc-ws) :is(#new-sql, #tools-button, #assistant-button, .too
 .doc-console .editor { flex: 0 0 110px; min-height: 0; overflow: auto; border-bottom: 1px solid var(--line); }
 .doc-console .editor .cm-editor { height: 100%; }
 .doc-console .run { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); }
-.doc-console .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-.doc-console .tabs button[aria-pressed="true"] { background: var(--accent-soft); }
+.doc-console .out-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.doc-console .out-tabs button[aria-pressed="true"] { background: var(--accent-soft); color: var(--fg); }
 .doc-console .out { flex: 1; min-height: 0; overflow: auto; }
 .doc-console pre { margin: 0; padding: 8px 12px; font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .doc-edit textarea { width: 100%; box-sizing: border-box; min-height: 320px; font: var(--text-sm)/1.45 var(--mono); padding: 8px; resize: vertical; }

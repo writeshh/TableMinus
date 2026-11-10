@@ -122,6 +122,7 @@ button.primary:hover { background: var(--accent); color: var(--on-accent); }
 button.danger { background: var(--orange); border-color: transparent; color: var(--ink); font-weight: 600; }
 button.ghost { border-color: transparent; background: none; color: var(--muted); padding: 0 6px; height: var(--control-md); }
 button.ghost:hover { color: var(--fg); background: var(--hover); }
+button.ghost[aria-pressed="true"] { color: var(--fg); background: var(--press); } /* a toggle such as Console, on */
 kbd { font: 600 var(--text-sm) var(--mono); margin-left: 6px; padding: 1px 6px; border-radius: var(--radius-md); background: color-mix(in srgb, currentColor 12%, transparent); }
 .status { color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.4em; margin: 0; }
 .status.error { color: var(--danger); }
@@ -208,6 +209,9 @@ details.more > summary { color: var(--muted); padding: 2px 4px 8px; cursor: defa
 .opt-row { display: grid; grid-template-columns: 96px 1fr; gap: 10px; color: var(--muted); }
 .checks { display: grid; gap: 6px; }
 label.check { display: flex; align-items: center; gap: 8px; color: var(--fg); }
+/* A label over its field, for one-field windows; a check inside a table cell */
+label.stack { grid-template-columns: 1fr; gap: 6px; }
+label.inline { display: inline-flex; align-items: center; gap: 4px; color: var(--fg); }
 
 /* ---------- Workspace: sidebar tree, history, tabs, table footer ---------- */
 aside { display: flex; flex-direction: column; }
