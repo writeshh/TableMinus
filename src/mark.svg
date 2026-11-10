@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="180 182 680 680">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<rect width="1024" height="1024" rx="228" fill="#F5F5F1"/>
+<rect x="4" y="4" width="1016" height="1016" rx="224" fill="none" stroke="#131313" stroke-opacity="0.1" stroke-width="8"/>
 <g transform="translate(512 520) scale(0.94) translate(-540 -570)">
 <polygon points="196,336 292,300 296,338" fill="#074A78"></polygon>
 <polygon points="292,300 352,244 372,300" fill="#3FA2E0"></polygon>
