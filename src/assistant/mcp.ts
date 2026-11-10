@@ -66,7 +66,7 @@ const PANE = `
 `;
 
 const STYLE = `
-section[data-pane="mcp"] { max-height: min(560px, 68vh); overflow-y: auto; }
+section[data-pane="mcp"] { overflow-y: auto; } /* the Settings dialog gives every tab one height (settings.ts) */
 .mcp-head { display: flex; justify-content: space-between; align-items: center; margin: 8px 0 0; font-size: var(--text-md); }
 .mcp-head select { font-weight: normal; }
 .mcp-box { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); }

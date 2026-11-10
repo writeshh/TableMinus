@@ -103,10 +103,22 @@ function applySettings() {
 }
 
 let activeTab = "general";
+const drawShortcuts = () => renderShortcuts($("shortcuts-pane"), settings.shortcuts, (o) => setSetting("shortcuts", o));
+
+/** Measures every tab and gives the dialog the tallest one's height (--pane-h), so it keeps its size between tabs. */
+function sizePanes(d: HTMLElement) {
+  const panes = [...d.querySelectorAll<HTMLElement>(":scope > [data-pane]")];
+  const hidden = panes.map((p) => p.hidden);
+  d.style.removeProperty("--pane-h");
+  for (const p of panes) p.hidden = false;
+  const tallest = Math.max(...panes.map((p) => p.scrollHeight));
+  panes.forEach((p, i) => (p.hidden = hidden[i]));
+  d.style.setProperty("--pane-h", `${tallest}px`);
+}
 
 export function showTab(tab: string) {
   activeTab = tab;
-  if (tab === "shortcuts") renderShortcuts($("shortcuts-pane"), settings.shortcuts, (o) => setSetting("shortcuts", o));
+  if (tab === "shortcuts") drawShortcuts();
   $<HTMLInputElement>("settings-search").value = "";
   searchSettings("");
 }
@@ -144,6 +156,8 @@ export const openSettings = () => {
   $<HTMLInputElement>("settings-search").value = "";
   searchSettings("");
   d.showModal();
+  drawShortcuts(); // drawn before measuring, so its height counts
+  sizePanes(d);
   $("settings-search").focus(); // type to find a setting straight away
 };
 

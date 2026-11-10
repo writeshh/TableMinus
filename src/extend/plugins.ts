@@ -58,7 +58,7 @@ settings.querySelector(":scope > footer")!.before(pane);
 
 const sheet = new CSSStyleSheet();
 sheet.replaceSync(`
-section[data-pane="plugins"] { max-height: min(560px, 68vh); overflow-y: auto; }
+section[data-pane="plugins"] { overflow-y: auto; } /* the Settings dialog gives every tab one height (settings.ts) */
 .plugin-install { display: flex; gap: 6px; }
 .plugin-install input { flex: 1; }
 .plugin-list li { align-items: flex-start; }
