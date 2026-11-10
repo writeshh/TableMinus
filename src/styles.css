@@ -11,11 +11,11 @@
   /* Every colour, font and size a theme can set (themes.ts); light-dark() follows the theme's scheme */
   --bg: light-dark(var(--paper), #171717);
   --fg: light-dark(var(--ink), #efeee9);
-  --accent: light-dark(#0a74b5, #2e9fe4); /* the brand blue, darkened or lifted to read as text on either ground */
+  --accent: light-dark(#0b6ca8, #2e9fe4); /* the brand blue, darkened or lifted to read as text (4.5:1) on every ground */
   --on-accent: light-dark(#fdfdfb, var(--ink));
-  --warn: light-dark(#946e00, var(--yellow));
-  --danger: light-dark(#cc4b07, #f4722c);
-  --ok: light-dark(#1d7f47, #45c982);
+  --warn: light-dark(#836202, var(--yellow));
+  --danger: light-dark(#b34309, #f4722c);
+  --ok: light-dark(#1c7643, #45c982);
   /* SQL syntax colours, drawn from the brand where it has a hue to give */
   --syn-keyword: light-dark(#0a6aa6, #5bb6ee);
   --syn-type: light-dark(#00756f, #6fd2c8);
@@ -23,7 +23,7 @@
   --syn-string: light-dark(#b9480a, #f68d50);
   --syn-quoted: light-dark(#b0386b, var(--pink));
   --syn-number: light-dark(#876400, var(--yellow));
-  --syn-comment: light-dark(#7b7b74, #77776f);
+  --syn-comment: light-dark(#70706a, #808078);
   --mono: ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
   --side-fg: var(--fg);
   --tabs-bg: transparent;
@@ -71,7 +71,10 @@
   --line: color-mix(in srgb, var(--fg) 11%, transparent);
   --hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --press: color-mix(in srgb, var(--fg) 12%, transparent);
-  --muted: color-mix(in srgb, var(--fg) 58%, transparent);
+  /* Secondary text: 4.5:1 or more on bg, side, raised and their hover rows. Light needs more ink than dark for that. */
+  --muted: light-dark(color-mix(in srgb, var(--fg) 64%, transparent), color-mix(in srgb, var(--fg) 58%, transparent));
+  /* The outline of a field, where the border is all that shows the control: 3:1 on bg and raised. */
+  --line-strong: light-dark(color-mix(in srgb, var(--fg) 48%, transparent), color-mix(in srgb, var(--fg) 40%, transparent));
   --side: color-mix(in srgb, var(--fg) 4%, var(--bg));
   --raised: color-mix(in srgb, var(--fg) 3%, var(--bg));
 }
@@ -86,16 +89,16 @@ body { margin: 0; height: 100vh; display: flex; flex-direction: column; backgrou
 /* ---------- Controls ---------- */
 input, select, textarea, button { font: inherit; color: inherit; }
 /* Shapes: controls and rows are pills, windows and panels 16-20px, the grid square. */
-input, select { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); min-width: 0; }
+input, select { padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--bg); min-width: 0; }
 /* WebKit keeps a select's native square shape unless appearance is off; the chevron is drawn back in, in the text colour. */
 select:not([multiple]) {
   appearance: none; -webkit-appearance: none; padding-right: 28px;
   background-image: conic-gradient(from -45deg at 50% 100%, var(--muted) 90deg, transparent 0); /* ▼, one shape, no seam */
   background-position: calc(100% - 12px) 55%; background-size: 9px 4.5px; background-repeat: no-repeat;
 }
-textarea { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--bg); min-width: 0; }
-input::placeholder { color: color-mix(in srgb, var(--fg) 45%, transparent); }
-:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
+textarea { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-xl); background: var(--bg); min-width: 0; }
+input::placeholder { color: var(--muted); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button { padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); cursor: default; transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1), background-color 120ms ease-out; }
 button:hover { background: var(--hover); }
 button:active { transform: scale(0.97); background: var(--press); } /* feedback on press */
@@ -140,7 +143,7 @@ button.round { width: var(--control-lg); height: var(--control-lg); padding: 0; 
 .conns { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
 .conns li { display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 8px; border-radius: 999px; cursor: default; }
 .conns li:hover, .conns li:focus-visible { background: var(--hover); }
-.conns li:focus { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: -2px; } /* also on click; inside the row, because the scrolling list clips an outline drawn outside */
+.conns li:focus { outline: 2px solid var(--accent); outline-offset: -2px; } /* also on click; inside the row, because the scrolling list clips an outline drawn outside */
 .conns li:active { background: var(--press); }
 .who { flex: 1; min-width: 0; }
 .name { display: flex; align-items: center; gap: 8px; font-size: var(--text-lg); font-weight: 500; }
@@ -246,7 +249,7 @@ aside { display: flex; flex-direction: column; }
 button:disabled { opacity: 0.35; pointer-events: none; }
 th.rownum, td.rownum { position: sticky; left: 0; text-align: right; color: var(--muted); background: var(--side); min-width: 44px; font-variant-numeric: tabular-nums; }
 th.rownum { z-index: 2; }
-td.empty-val::after { content: "EMPTY"; font-size: var(--text-2xs); letter-spacing: 0.06em; color: color-mix(in srgb, var(--fg) 30%, transparent); }
+td.empty-val::after { content: "EMPTY"; font-size: var(--text-2xs); letter-spacing: 0.06em; color: var(--muted); }
 .error-text { color: var(--danger); white-space: pre-wrap; }
 /* Inline editing: staged cells stay highlighted until saved or discarded */
 td.changed { background: color-mix(in srgb, var(--warn) 22%, transparent); }
