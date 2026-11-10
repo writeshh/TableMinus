@@ -430,7 +430,7 @@ function renderMain() {
   $("tabs").querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 
   const env = S.active?.tag ? `${tagLabel(S.active.tag)} | ` : "";
-  $("pill").textContent = `${env}${S.info?.server ?? ""}${S.info?.database ? ` : ${dbLabel(S.info.database)}` : ""}${tab && !ownView() ? ` : ${tab.title}` : ""}`;
+  $("pill").textContent = `${env}${S.info?.server ?? ""}${S.info?.database && !S.info.can_switch ? ` : ${dbLabel(S.info.database)}` : ""}${tab && !ownView() ? ` : ${tab.title}` : ""}`;
   $("pill").className = `pill ${S.active?.tag ?? ""}`;
   if (tab?.kind === "empty") return showNoTab(true);
   if (!tab) return showNoTab();

@@ -2,13 +2,7 @@
 .tab-rename { width: 140px; padding: 1px 4px; font: inherit; border: 1px solid var(--accent); border-radius: var(--radius-sm); }
 #return-workspace { margin-top: 8px; }
 
-/* Workspaces: the connection name in the header opens the switcher. */
-.where-conn { cursor: default; border-radius: var(--radius-md); padding: 2px 4px; }
-.where-conn:hover { background: var(--hover); }
-.ws-count { font-size: var(--text-xs); padding: 0 7px; border-radius: 999px; background: var(--hover); color: var(--muted); }
-.ws-count.lost { background: var(--orange); color: var(--ink); }
-
-/* Database tabs: one per open workspace above the header, marked with its connection's tag colour. */
+/* Database tabs: one per open workspace across the top, marked with its connection's tag colour. */
 .db-tabs { display: flex; align-items: center; gap: 4px; padding: 0 8px; min-height: var(--bar-h); box-sizing: border-box; background: var(--side); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; flex: none; }
 /* macOS (main.ts sets overlay-title): the window's title bar is see-through, so the workspace tabs sit beside the
    traffic lights and their empty parts drag the window. With no tabs (the launcher) a strip of the same height does. */
@@ -35,9 +29,11 @@ body.overlay-title.full-screen .db-tabs { padding-left: 8px; }
 .db-tab.new-ws { --tag: var(--muted); font-style: italic; }
 /* The workspace's actions (icons, safe mode, Tools, Console, SQL) live at the right end of the tab strip, which stays
    put while the tabs scroll; there is no workspace behind the launcher, so they hide there. */
-.title-actions { position: sticky; right: 0; margin-left: auto; display: flex; align-items: center; gap: 4px; padding-left: 8px; background: var(--side); white-space: nowrap; }
+.title-actions { position: sticky; right: 0; margin-left: auto; min-width: 0; display: flex; align-items: center; gap: 4px; padding-left: 8px; background: var(--side); white-space: nowrap; }
 body:has(#workspace[hidden]) .title-actions { display: none; }
-.title-actions .pill { flex: 0 1 auto; max-width: 340px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 4px; }
+/* A squeezed title bar gives way at the status pill first, then the database name; buttons never wrap. */
+.title-actions .pill { flex: 0 4 auto; max-width: 340px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 4px; }
+.title-actions #db-button { flex: 0 2 auto; min-width: 0; }
 .db-tabs .add { flex: none; align-self: center; width: 24px; height: 24px; margin-left: 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); display: grid; place-items: center; }
 .db-tabs .add svg.ico { width: 14px; height: 14px; }
 .db-tabs .add:hover { color: var(--fg); background: var(--press); }

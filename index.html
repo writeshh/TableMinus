@@ -415,9 +415,8 @@
         </div>
       </aside>
       <main>
-        <header id="where">
-          <span id="where-conn" class="where-conn" role="button" tabindex="0" title="Workspaces"></span>
-          <span class="spacer"></span>
+        <!-- Holds the workspace's actions until workspace-tabs.ts moves them into the title bar; never shown -->
+        <header id="where" hidden>
           <span class="tool-icons" role="toolbar" aria-label="Workspace tools">
             <button class="ghost" data-command="reload-tab" data-tip="Reload the tab" aria-label="Reload the tab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v5h-5" /></svg></button>
             <button class="ghost" data-command="toggle-assistant" id="assistant-button" data-tip="Assistant" aria-label="Assistant" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8zM18 15l.9 2.1 2.1.9-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z" /></svg></button>
@@ -426,7 +425,7 @@
           </span>
           <span id="pill" class="pill" role="button" tabindex="0" title="Connection info"></span>
           <button id="db-button" class="ghost" title="Open a database"></button>
-          <span class="tool-icons in-header" role="toolbar" aria-label="Workspace tools">
+          <span class="tool-icons" role="toolbar" aria-label="Workspace tools">
             <button class="ghost" data-command="open-file" data-tip="Open a SQL file" aria-label="Open a SQL file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10V19H3z" /></svg></button>
             <button class="ghost" data-command="toggle-row-detail" id="row-detail-button" data-tip="Row detail" aria-label="Row detail" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2" /><path d="M15 4.5v15" /></svg></button>
           </span>

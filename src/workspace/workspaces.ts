@@ -15,7 +15,7 @@ import { forgetMongo, syncMongo } from "../nosql/mongo";
 import { forgetDynamo, syncDynamo } from "../nosql/dynamo";
 import { forgetElastic, syncElastic } from "../nosql/elastic";
 import { forgetCassandra, syncCassandra } from "../nosql/cassandra";
-import { avatar, engineId, hostOf, isFile, managesUsers, type Saved } from "../connections/engines";
+import { isFile, managesUsers, type Saved } from "../connections/engines";
 import { docsReady } from "../shell/locations";
 import * as launcher from "../connections/connections";
 import { renderHistory } from "./history";
@@ -24,7 +24,7 @@ import { showSafety } from "../shell/safety";
 import { openDbPicker } from "../connections/dbpicker";
 import { forgetItems } from "./sidebar";
 import { settings } from "../shell/settings";
-import { colorDot, refresh, showRecent } from "../connections/home";
+import { refresh, showRecent } from "../connections/home";
 import { redrawFilters } from "./tabletab";
 import { refreshMenu } from "../shell/menu";
 import { selection, setSelection } from "../grid/gridview";
@@ -188,10 +188,9 @@ export function applyInfo(i: Info) {
   syncViews(true);
 }
 
-/** The workspace header, the database button and the sidebar filter for the active connection. */
+/** The database button and the sidebar filter for the active connection. */
 function showHeader() {
   const c = S.active!;
-  $("where-conn").replaceChildren(avatar(engineId(c)), colorDot(c), el("span", { textContent: c.name }), el("span", { className: "host", textContent: hostOf(c) }));
   document.body.dataset.env = c.tag; // production gets a red edge
   const btn = $("db-button");
   btn.hidden = !S.info?.can_switch;
@@ -199,7 +198,7 @@ function showHeader() {
   btn.title = `Open a database (${keyLabel("open-database")})`;
   $<HTMLInputElement>("filter").hidden = !S.tables.length;
   $("users-button").hidden = !managesUsers(c);
-  renderWorkspaceButton();
+  renderDbTabs();
 }
 
 /** Writes the on-screen state back into its workspace before another takes the screen. Off screen (the launcher
@@ -262,24 +261,12 @@ export async function reconnectAll() {
       status(`${w.conn.name}: ${e}`, "error");
     }
   }
-  renderWorkspaceButton();
-}
-
-/** The connection name in the header opens the switcher ("Show All Workspaces"); a count shows when there are several. */
-function renderWorkspaceButton() {
-  const head = $("where-conn");
-  head.querySelector(".ws-count")?.remove();
-  const others = S.workspaces.filter((w) => w !== S.ws);
-  if (others.length) {
-    const lost = others.some((w) => w.lost);
-    head.append(el("span", { className: `ws-count${lost ? " lost" : ""}`, textContent: `+${others.length}`,
-      title: lost ? "Another workspace lost its connection" : `${others.length} more workspace${others.length === 1 ? "" : "s"}` }));
-  }
   renderDbTabs();
 }
 
+/** "Show All Workspaces": a menu under the workspace's tab. */
 export function showWorkspaces() {
-  const r = $("where-conn").getBoundingClientRect();
+  const r = (document.querySelector('#db-tabs [aria-selected="true"]') ?? $("db-tabs")).getBoundingClientRect();
   const items: MenuItem[] = S.workspaces.map((w) => [
     `${w === S.ws ? "✓ " : "    "}${w.conn.name}${w.info?.database ? ` · ${w.info.database}` : ""}${w.lost ? " (disconnected)" : ""}`,
     () => showWorkspace(w),
@@ -468,7 +455,7 @@ export function initWorkspaces(h: Host) {
     if (!w) return; // the MCP server's own session, or one closed meanwhile
     w.lost = true;
     if (w === S.ws) $("lost").hidden = false;
-    renderWorkspaceButton();
+    renderDbTabs();
   }).catch(() => {}); // no event bridge outside the app
   $("pill").onclick = showConnectionInfo;
   $("pill").onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), showConnectionInfo()));
@@ -479,7 +466,5 @@ export function initWorkspaces(h: Host) {
     if (!pop.hidden && !pop.contains(e.target as Node) && e.target !== $("pill")) pop.hidden = true;
   });
   document.addEventListener("keydown", (e) => e.key === "Escape" && ($("conn-info").hidden = true));
-  $("where-conn").onclick = showWorkspaces;
-  $("where-conn").onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), showWorkspaces()));
   $("return-workspace").onclick = () => S.ws && showWorkspace(S.ws);
 }

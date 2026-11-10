@@ -8,6 +8,8 @@ version in `src-tauri/tauri.conf.json`.
 
 - Changed: text sizes and rounded corners come from one small set, so screens match. Some labels and
   corners are slightly larger or smaller.
+- Changed: the row under the workspace tabs is gone. The database to switch and the file and row-detail
+  buttons are now in the top bar, next to the connection pill. The data starts 40px higher.
 
 ## 1.1.0
 
