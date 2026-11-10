@@ -460,7 +460,7 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .job-foot .reveal { margin-left: auto; } /* with Close at the right, not in the middle */
 
 /* ---------- Launcher groups, colors, tags (connections.ts) ---------- */
-#conn-sort { border-radius: 999px; padding: 5px 10px; }
+#conn-sort { padding: 0 28px 0 12px; height: var(--control-lg); } /* 28px on the right keeps the chevron off the text */
 .conns li.conn-section { display: block; padding: 0; border-radius: 0; }
 .conns li.conn-section:hover { background: none; }
 .conns .conns { overflow: visible; }
