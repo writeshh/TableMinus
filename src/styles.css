@@ -121,13 +121,10 @@ kbd { font: 600 var(--text-sm) var(--mono); margin-left: 6px; padding: 1px 5px; 
 
 /* ---------- Launcher ---------- */
 #home { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 34%) 1fr; }
-/* The ink panel: the brand's one loud surface, the poster's four discs as the mark */
+/* The ink panel: the brand's one loud surface, with the mockingbird as the mark */
 .intro { background: var(--bg); color: var(--fg); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 6px; padding: 32px 28px; }
-.mark { --d: 20px; width: 92px; height: 92px; margin-bottom: auto; background:
-  radial-gradient(circle var(--d) at 23px 23px, var(--blue) calc(100% - 0.5px), transparent),
-  radial-gradient(circle var(--d) at 69px 23px, var(--pink) calc(100% - 0.5px), transparent),
-  radial-gradient(circle var(--d) at 23px 69px, var(--yellow) calc(100% - 0.5px), transparent),
-  radial-gradient(circle var(--d) at 69px 69px, var(--orange) calc(100% - 0.5px), transparent); }
+/* The logo: the app icon's mockingbird without its plate (src-tauri/icons/source/icon.svg) */
+.mark { width: 92px; height: 92px; margin-bottom: auto; background: url("./mark.svg") center / contain no-repeat; }
 h1 { font-size: var(--text-display); font-weight: 800; line-height: 1; letter-spacing: -0.04em; margin: 0; } /* poster-weight wordmark */
 h3 { font-size: var(--text-lg); } /* dialog titles; the browser default, 1.17em, is off the scale */
 .intro .muted { margin: 0 0 22px; }

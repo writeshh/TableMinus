@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<rect x="100" y="100" width="824" height="824" rx="185" fill="#1E1E1F"/>
+<g transform="translate(512 512) scale(0.8047) translate(-512 -512)">
+<g transform="translate(512 520) scale(0.94) translate(-540 -570)">
+<polygon points="196,336 292,300 296,338" fill="#074A78"></polygon>
+<polygon points="292,300 352,244 372,300" fill="#3FA2E0"></polygon>
+<polygon points="352,244 438,286 372,300" fill="#6BBBEC"></polygon>
+<polygon points="292,300 372,300 366,360 296,338" fill="#0B2E4A"></polygon>
+<polygon points="372,300 438,286 366,360" fill="#0C87D0"></polygon>
+<polygon points="296,338 366,360 344,438" fill="#0A6AA8"></polygon>
+<polygon points="366,360 438,286 560,380 344,438" fill="#0C87D0"></polygon>
+<polygon points="344,438 560,380 382,566" fill="#3FA2E0"></polygon>
+<polygon points="382,566 560,380 566,526" fill="#0A6AA8"></polygon>
+<polygon points="382,566 566,526 488,690" fill="#0C87D0"></polygon>
+<polygon points="560,380 742,650 566,526" fill="#08507F"></polygon>
+<polygon points="566,526 742,650 640,700" fill="#063A5C"></polygon>
+<polygon points="566,526 640,700 488,690" fill="#0A6AA8"></polygon>
+<polygon points="640,700 900,872 866,900" fill="#08507F"></polygon>
+<polygon points="640,700 742,650 900,872" fill="#0A6AA8"></polygon>
+</g>
+</g>
+</svg>

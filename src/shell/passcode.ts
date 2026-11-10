@@ -20,7 +20,7 @@ const message = el("p", { className: "status" });
 const touch = el("button", { type: "button", textContent: "Use Touch ID" });
 const forgot = el("button", { type: "button", className: "ghost", textContent: "Forgot passcode?" });
 const form = el("form", { className: "lock-form" },
-  el("div", { className: "mark", textContent: "db" }),
+  el("div", { className: "mark", ariaHidden: "true" }),
   el("h2", { textContent: "TableMinus is locked" }),
   input, el("button", { className: "primary", textContent: "Unlock" }), touch, message, forgot);
 const screen = el("dialog", { id: "lock" }, form);
