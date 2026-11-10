@@ -2,6 +2,7 @@
 // (Rust: sql/users.rs). Nothing runs until its SQL was previewed; the preview is the confirmation, also for safe mode.
 
 import { el } from "../dom";
+import { copy as copyText } from "../shell/toast";
 import { modal, type Confirm } from "./backup";
 import { CANCELLED, guarded } from "../shell/safety";
 import "./users.css"; // vite injects it
@@ -416,7 +417,7 @@ function preview(title: string, statements: string[], okLabel: string, danger: b
   cancel.focus(); // Enter never runs by accident
   return new Promise((resolve) => {
     let ran = false;
-    copy.onclick = () => navigator.clipboard.writeText(sql).catch(() => {});
+    copy.onclick = () => void copyText(sql, "the SQL");
     cancel.onclick = () => d.close();
     ok.onclick = () => ((ran = true), d.close());
     d.onclose = () => (d.remove(), resolve(ran));

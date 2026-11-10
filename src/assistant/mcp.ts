@@ -5,6 +5,7 @@
 import { codeOf, invoke } from "../ipc";
 import { listen } from "@tauri-apps/api/event";
 import { $, el } from "../dom";
+import { copy } from "../shell/toast";
 import { askPassword } from "../shell/safety";
 
 type Token = { id: string; name: string; connections: string[] | null; read_only: boolean; created: number; bridge: boolean };
@@ -115,15 +116,18 @@ function svg(path: string) {
 let status: Status | null = null;
 const input = (id: string) => $<HTMLInputElement>(id);
 
-function say(text: string) {
-  $("mcp-state").textContent = text;
+/** The server's state beside the Port field; an error is one, in danger. */
+function say(text: string, kind: "" | "error" = "") {
+  const s = $("mcp-state");
+  s.textContent = text;
+  s.className = `hint inline status ${kind}`;
 }
 
 async function refresh() {
   try {
     status = await invoke<Status>("mcp_status");
   } catch (e) {
-    return say(String(e));
+    return say(String(e), "error");
   }
   input("mcp-enabled").checked = status.enabled;
   input("mcp-port").value = String(status.port);
@@ -146,7 +150,7 @@ async function configure() {
     });
     await refresh();
   } catch (e) {
-    say(String(e));
+    say(String(e), "error");
   }
 }
 
@@ -161,7 +165,7 @@ function renderTokens() {
         try {
           await invoke("mcp_revoke_token", { id: t.id });
         } catch (e) {
-          say(String(e));
+          say(String(e), "error");
         }
         refresh();
       };
@@ -206,7 +210,7 @@ function renderClients(list: Client[]) {
           await invoke("mcp_revoke_token", { id: c.token });
           await refresh();
         } catch (e) {
-          say(String(e));
+          say(String(e), "error");
         }
       };
       return el("li", {},
@@ -257,7 +261,7 @@ async function createToken() {
     $("mcp-created").hidden = false;
     refresh();
   } catch (e) {
-    say(String(e));
+    say(String(e), "error");
   }
 }
 
@@ -271,7 +275,7 @@ $("mcp-create").onclick = createToken;
 input("mcp-all").onchange = () => {
   for (const i of $("mcp-conns").querySelectorAll<HTMLInputElement>("input")) i.disabled = input("mcp-all").checked;
 };
-$("mcp-copy-value").onclick = () => navigator.clipboard.writeText($("mcp-value").textContent ?? "");
+$("mcp-copy-value").onclick = () => void copy($("mcp-value").textContent ?? "", "the token");
 $("mcp-created-done").onclick = () => {
   $("mcp-value").textContent = ""; // gone from the page once dismissed
   $("mcp-created").hidden = true;

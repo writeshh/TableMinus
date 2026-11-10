@@ -161,6 +161,7 @@ async function showSettings() {
   fillSettings();
   const p = prefs();
   const state = $("ai-key-state");
+  state.className = "hint note"; // an earlier error stops being one
   state.textContent = "";
   if (p.provider === "agent") return renderPane();
   try {
@@ -168,6 +169,7 @@ async function showSettings() {
     $("ai-proxy-state").textContent = (await invoke<boolean>("ai_has_proxy_password")) ? "A proxy password is saved." : "";
   } catch (e) {
     state.textContent = String(e);
+    state.className = "hint note status error";
   }
   renderPane();
 }
@@ -203,6 +205,7 @@ settingsTab.addEventListener("click", () => void showSettings());
 
 async function setKey(key: string) {
   const state = $("ai-key-state");
+  state.className = "hint note"; // an earlier error stops being one
   try {
     const provider = prefs().provider;
     if (provider === "agent") return;
@@ -211,6 +214,7 @@ async function setKey(key: string) {
     state.textContent = key ? "The key is saved." : "The key is removed.";
   } catch (e) {
     state.textContent = String(e);
+    state.className = "hint note status error";
   }
 }
 $("ai-key-save").onclick = () => {
@@ -221,12 +225,14 @@ $("ai-key-remove").onclick = () => void setKey("");
 
 async function setProxyPassword(password: string) {
   const state = $("ai-proxy-state");
+  state.className = "hint note"; // an earlier error stops being one
   try {
     await withVault(() => invoke("ai_set_proxy_password", { password }));
     field("ai-proxy-password").value = "";
     state.textContent = password ? "The proxy password is saved." : "The proxy password is removed.";
   } catch (e) {
     state.textContent = String(e);
+    state.className = "hint note status error";
   }
 }
 $("ai-proxy-save").onclick = () => {

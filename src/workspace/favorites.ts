@@ -3,6 +3,7 @@
 // keyword is also an autocomplete snippet in the editor.
 
 import { $, el } from "../dom";
+import { copy } from "../shell/toast";
 import { docEntry, setDocEntry } from "../shell/locations";
 
 export type Favorite = { id: string; name: string; sql: string; folder: string; keyword: string };
@@ -82,7 +83,7 @@ export function render() {
     b.oncontextmenu = (e) => ctx.menu(e, [
       ["Open in a new tab", () => ctx.open(f.name, f.sql)],
       ["Edit…", () => edit(f)],
-      ["Copy SQL", () => navigator.clipboard.writeText(f.sql).catch(() => {})],
+      ["Copy SQL", () => void copy(f.sql, "the SQL")],
       "-",
       ["Delete", async () => (await ctx.confirm(`Delete the saved query "${f.name}"?`, "Delete")) && save({ ...load(), items: load().items.filter((x) => x.id !== f.id) })],
     ]);

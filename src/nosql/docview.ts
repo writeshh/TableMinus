@@ -10,6 +10,7 @@ import { EditorState, Prec, type Extension } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { $, el } from "../dom";
+import { copy } from "../shell/toast";
 import { modal } from "../database/backup";
 import { editorLook } from "../editor/editor";
 import { CANCELLED, guarded, type Approval } from "../shell/safety";
@@ -187,7 +188,7 @@ export function docView(engine: Engine, host: Host) {
       li.onclick = () => void openCollection(c);
       li.oncontextmenu = (e) => host.menu(e, [
         ["Open", () => void openCollection(c)],
-        ["Copy name", () => void navigator.clipboard.writeText(c).catch(() => {})],
+        ["Copy name", () => void copy(c, c)],
         ...(engine.collectionMenu?.(c, script, ask) ?? []),
       ]);
       return li;
@@ -298,8 +299,8 @@ export function docView(engine: Engine, host: Host) {
       ...(found && !fixed ? [["Edit value…", () => void editCell(d, field)] as MenuItem] : []),
       ...(found ? [[`Edit ${engine.words.doc}…`, () => void editDocument(d)] as MenuItem] : []),
       "-",
-      ["Copy value", () => void navigator.clipboard.writeText(engine.cell(v) ?? "null").catch(() => {})],
-      [`Copy ${engine.words.doc} as JSON`, () => void navigator.clipboard.writeText(JSON.stringify(d, null, 2)).catch(() => {})],
+      ["Copy value", () => void copy(engine.cell(v) ?? "null", "the value")],
+      [`Copy ${engine.words.doc} as JSON`, () => void copy(JSON.stringify(d, null, 2), `the ${engine.words.doc}`)],
       ...(v !== undefined ? [[`Filter where ${field} is this`, () => ((filterInput.value = engine.filterFor(field, v)), void apply())] as MenuItem] : []),
       "-",
       ...(found && !fixed && v !== undefined ? [[`Remove ${field}…`, () => void change(engine.edits.remove(found, field), `Remove ${field} from this ${engine.words.doc}?`)] as MenuItem] : []),

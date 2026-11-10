@@ -6,6 +6,7 @@
 /// <reference types="vite/client" />
 import { sqlKind } from "../editor/statements";
 import { connName, el } from "../dom";
+import { copy } from "../shell/toast";
 import { miniEditor } from "../editor/editor";
 import { CANCELLED, guarded } from "../shell/safety";
 import "./structure.css"; // vite injects it
@@ -585,7 +586,7 @@ export async function preview(title: string, statements: string[], okLabel: stri
   const picked = await modal(title, [pre, el("p", { className: "hint", textContent: note })],
     [["Cancel", ""], ["Copy", ""], [okLabel, danger ? "danger" : "primary"]], true);
   if (picked === "Copy") {
-    await navigator.clipboard.writeText(sqlText(statements)).catch(() => {});
+    await copy(sqlText(statements), "the SQL");
     return preview(title, statements, okLabel, danger);
   }
   return picked === okLabel;
@@ -689,7 +690,7 @@ export const dropDatabase = (db: string) => runDatabaseOp(`Drop database ${db}`,
 export async function showSql(title: string, sql: string) {
   const picked = await modal(title, [el("pre", { className: "sql-preview", textContent: sql })],
     [["Close", ""], ["Copy", ""], ["Open in SQL tab", "primary"]], true);
-  if (picked === "Copy") await navigator.clipboard.writeText(sql).catch(() => {});
+  if (picked === "Copy") await copy(sql, "the SQL");
   if (picked === "Open in SQL tab") host.openSql(sql);
 }
 

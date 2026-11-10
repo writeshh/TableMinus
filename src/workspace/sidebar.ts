@@ -4,6 +4,7 @@
 // 100, insert into the editor, open its editor, drop). Table rows come from main.ts (they expand to columns and carry
 // the table menu); everything else is drawn here.
 import { connName, el } from "../dom";
+import { copy as copyText } from "../shell/toast";
 import { modal } from "../database/backup";
 import { dropItem, editable, newMenu, openItem, scriptMenu } from "../database/objects";
 import { readPref, writePref } from "../shell/prefs";
@@ -151,7 +152,7 @@ export function renderTree(host: HTMLElement, query: string): number {
       ? ["Unpin", () => savePrefs({ ...p, pins: p.pins.filter((x) => x !== name) })]
       : ["Pin to top", () => savePrefs({ ...p, pins: [...p.pins, name] })];
     const copy: MenuItem[] = [
-      ["Copy name", () => void navigator.clipboard.writeText(name).catch(() => {})],
+      ["Copy name", () => void copyText(name, name)],
       // A second menu at the same spot, standing in for a submenu.
       ["Copy Script As ›", () => ctx.menu(last!, scriptMenu(kind === "table" || kind === "view" ? null : kind, name))],
     ];

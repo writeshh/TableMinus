@@ -2,6 +2,7 @@
 // for binary cells, and the SQL preview of staged changes. Built on the fly, so index.html needs nothing.
 
 import { el } from "../dom";
+import { copy } from "../shell/toast";
 import { hexDump } from "./staging";
 
 /** Shows `d` as a modal with `buttons` in its footer; resolves with the label pressed, or null on Esc. */
@@ -153,7 +154,7 @@ export async function sqlDialog(title: string, statements: string[], where: stri
   const note = el("p", { className: "hint", textContent: `Runs in one transaction on ${where}. Values are sent as bound parameters.` });
   const picked = await modal(dialog(title, pre, note), [["Cancel", ""], ["Copy", ""], ["Save", "primary"]]);
   if (picked === "Copy") {
-    await navigator.clipboard.writeText(sqlText(statements)).catch(() => {});
+    await copy(sqlText(statements), "the SQL");
     return sqlDialog(title, statements, where);
   }
   return picked === "Save";

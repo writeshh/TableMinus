@@ -17,6 +17,10 @@ function stack() {
   return modal.querySelector<HTMLElement>(":scope > .toasts") ?? modal.appendChild(el("div", { className: "toasts" }));
 }
 
+/** Copies text and says so in a toast; `what` names it ("the SQL"). A failure says why instead of vanishing. */
+export const copy = (text: string, what: string) =>
+  navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}`, "done"), (e) => toast(`Couldn't copy ${what}: ${e}`, "error"));
+
 export function toast(text: string, kind: ToastKind = "") {
   if (!text || kind === "busy") return; // progress belongs to the run bar or a job card, not to a notice
   const panel = stack();

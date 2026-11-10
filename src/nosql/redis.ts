@@ -3,6 +3,7 @@
 // Every change and every command that may write goes through safe mode, like SQL.
 
 import { $, el } from "../dom";
+import { copy } from "../shell/toast";
 import { modal } from "../database/backup";
 import { CANCELLED, guarded } from "../shell/safety";
 import { formatReply, formatTtl, namespaces, type Entry, type Folder, type Key, type Shown } from "./redis-text";
@@ -163,7 +164,7 @@ function keyRow(k: Entry, s: State, depth: number) {
   li.classList.toggle("active", sameKey(k.key, s.key));
   li.onclick = () => void openKey(k.key);
   li.oncontextmenu = (e) => ctx.menu(e, [
-    ["Copy name", () => void navigator.clipboard.writeText(k.key.text).catch(() => {})],
+    ["Copy name", () => void copy(k.key.text, k.key.text)],
     ["Rename…", () => void renameKey(k.key)],
     "-",
     ["Delete…", () => void deleteKey(k.key)],

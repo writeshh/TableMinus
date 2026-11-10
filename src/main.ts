@@ -48,6 +48,7 @@ import "./workspace/workspace.css";
 import "./metrics/charts"; // its stylesheet, before metrics.ts would bring it
 import { openBoard, type BoardCtx } from "./metrics/metrics";
 import { flushPrefs } from "./shell/prefs";
+import { copy } from "./shell/toast";
 // Last, so the modules above (the Settings tabs among them) load in the order they always have.
 import {
   allTabs, call, connectCommand, current, dbLabel, isRedis, keyLabel, loadColumns, note, okToDiscard, ownView, S, sessionKey, status,
@@ -897,7 +898,7 @@ function anythingItems(): AnythingItem[] {
     ...S.tables.filter((t) => !kinds.has(t)).map((t) => ({ label: t, kind: "table", run: () => openTable(t) })),
     ...sideItems.filter((i) => i.kind !== "schema").map((i) => ({
       label: i.name, kind: ITEM_KINDS[i.kind],
-      run: () => (i.kind === "view" || i.kind === "matview" ? openTable(i.name) : navigator.clipboard.writeText(i.name).then(() => note(`Copied ${i.name}`, "done"), () => {})),
+      run: () => (i.kind === "view" || i.kind === "matview" ? openTable(i.name) : copy(i.name, i.name)),
     })),
     ...sqlTabs.map(({ p, t }) => ({ label: t.title, kind: "SQL tab", detail: t.path, run: () => (focusPane(p), select(t.id)) })),
     ...S.workspaces.filter((w) => w !== S.ws).map((w) => ({ label: w.conn.name, kind: "workspace", detail: w.info?.database ?? undefined, run: () => showWorkspace(w) })),
