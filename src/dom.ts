@@ -23,6 +23,7 @@ const ICONS = {
   chevron: "M9 6l6 6-6 6",
   copy: "M9 9h10v10H9zM5 15V5h10",
   only: "M8 5l11 7-11 7z",
+  more: "M5.5 12h1M11.5 12h1M17.5 12h1",
 } as const;
 
 /** A centred stroke icon that takes its colour and size from the button around it (`svg.ico` in styles.css). */
@@ -52,6 +53,7 @@ export function setStatus(id: string, text: string, kind: "" | "busy" | "error" 
   const s = $(id);
   s.textContent = text;
   s.className = `status ${kind}`;
+  s.title = text; // a line cut short shows the rest on hover
 }
 
 /** The saved connection's name in a workspace's session key: the backend keys a further tab on the same connection

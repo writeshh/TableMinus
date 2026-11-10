@@ -3,7 +3,7 @@
 
 import type { EditorState } from "@codemirror/state";
 import { codeOf, invoke } from "../ipc";
-import { $, el } from "../dom";
+import { $, el, icon } from "../dom";
 import type { BoardCtx } from "../metrics/metrics";
 import type { Editor } from "../editor/editor";
 import type { Ctx as TransferCtx } from "../database/importexport";
@@ -404,6 +404,11 @@ export function initRun(h: Host) {
 
   $("run").onclick = runCurrent;
   $("run-all").onclick = runAll;
+  // The run bar's More menu: Format, Explain and Export when the bar is too narrow to show them (styles.css).
+  const more = $("bar-more");
+  more.append(icon("more"));
+  const pass = (id: string, e: MouseEvent) => $(id).dispatchEvent(new MouseEvent("click", { clientX: e.clientX, clientY: e.clientY }));
+  more.onclick = (e) => contextMenu(e, [["Format", () => pass("format-sql", e)], ["Explain", () => pass("explain", e)], ["Export…", () => pass("export-result", e)]]);
   $("explain").onclick = async () => {
     const sql = host.editor.current();
     if (!sql.trim() || !S.active) return;

@@ -355,7 +355,16 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #db-button { font-weight: 500; color: var(--fg); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 #status { color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#status.error { color: var(--danger); white-space: normal; }
+#status.error { color: var(--danger); }
+/* The SQL tab's run bar stays on one line. As it narrows, the shortcut hints and the cursor position go first, then
+   Format, Explain and Export move into the More menu. The run's full messages are in the Messages tab. */
+.sql-pane .bar { container-type: inline-size; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.sql-pane .bar > * { flex: none; white-space: nowrap; }
+.sql-pane .bar > #status { flex: 0 1 auto; min-width: 0; }
+.sql-pane .bar > .spacer { flex: 1; }
+#bar-more { display: none; }
+@container (max-width: 760px) { .sql-pane .bar kbd, .sql-pane .bar .cursor { display: none; } }
+@container (max-width: 600px) { #format-sql, #explain, #export-result { display: none; } #bar-more { display: grid; } }
 #status.done { color: var(--muted); }
 
 #ask { display: flex; gap: 10px; align-items: center; padding: 8px 12px; background: var(--ask-bg); border-bottom: 1px solid var(--ask-line); animation: arrive 160ms ease-out; }
