@@ -64,6 +64,7 @@ body:has(#workspace.redis) :is(#new-sql, #tools-button, #assistant-button, .tool
 .redis-type.hash { background: var(--blue); } .redis-type.list { background: var(--orange); } .redis-type.set { background: var(--pink); }
 .redis-type.zset { background: color-mix(in srgb, var(--blue) 50%, var(--pink)); } .redis-type.stream { background: var(--muted); }
 #redis-side .redis-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--text-sm); }
+#redis-side .redis-foot.error { color: var(--danger); }
 #redis-main { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 #redis-key { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; display: grid; align-content: start; gap: 10px; }
 #redis-key header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

@@ -224,7 +224,7 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
 
   go.onclick = async () => {
     const tables = source.kind === "tables" ? [...picks].filter(([, c]) => c.checked).map(([t]) => t) : [];
-    if (source.kind === "tables" && !tables.length) return void (status.textContent = "Choose at least one table.");
+    if (source.kind === "tables" && !tables.length) return void ((status.className = "status error"), (status.textContent = "Choose at least one table."));
     const prefs: ExportPrefs = {
       format: format.value as ExportPrefs["format"], delimiter: delimiter.value, crlf: lineBreak.value === "crlf",
       header: header.input.checked, quoteAll: quoteAll.input.checked, nullEmpty: nullEmpty.input.checked, quote: quote.value, decimal: decimal.value,
@@ -386,9 +386,9 @@ function importWizard(ctx: Ctx, kind: "csv" | "json", path: string, table: strin
   go.onclick = () => {
     const creating = target.value === NEW_TABLE;
     const table = creating ? newName.value.trim() : target.value;
-    if (!table) return void (status.textContent = "Name the new table.");
+    if (!table) return void ((status.className = "status error"), (status.textContent = "Name the new table."));
     const columns = pickers.map((p) => p.value.trim() || null);
-    if (!columns.some((c) => c)) return void (status.textContent = "Match at least one field to a column.");
+    if (!columns.some((c) => c)) return void ((status.className = "status error"), (status.textContent = "Match at least one field to a column."));
     d.close();
     const imp = { path, format: format(), table, columns, create: creating, conflict: creating ? "stop" : conflict.value };
     startJob(ctx, `Import ${baseName(path)} into ${table}`, "start_import", { import: imp }, (r) => !r.error && ctx.imported(table));

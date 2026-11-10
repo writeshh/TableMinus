@@ -5,7 +5,8 @@
 import { invoke } from "../ipc";
 import { $, el } from "../dom";
 import type { Editor } from "../editor/editor";
-import { current, status } from "../workspace/state";
+import { current } from "../workspace/state";
+import { toast } from "./toast";
 import { DEFAULT_SETTINGS, fromStored, type Settings } from "./settings-defaults";
 import { readPref, writePref } from "./prefs";
 import { applyTheme } from "./themes";
@@ -95,7 +96,7 @@ function applySettings() {
   $<HTMLInputElement>("filter-bar").checked = settings.filterBar;
   host.editor.setCompletion(settings.upperKeywords, settings.completeKey);
   host.editor.setCloseBrackets(settings.closeBrackets);
-  host.editor.setKeyBinding(settings.keyBinding).catch((e) => status(`Vim keys: ${e}`, "error"));
+  host.editor.setKeyBinding(settings.keyBinding).catch((e) => toast(`Vim keys: ${e}`, "error"));
   setFilterDefaults({ column: settings.filterColumn, op: settings.filterOp });
   setOverrides(settings.shortcuts);
   // The backend enforces these; outside the app (a plain browser preview) there's no backend to tell.

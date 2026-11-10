@@ -664,15 +664,16 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
       const tryIt = button("Try", "Run the query to see its columns", "");
       tryIt.onclick = async () => {
         const filled = fill(sql.value);
-        if (typeof filled !== "string") return (status.textContent = `Needs a value for ${filled.missing.join(", ")}.`);
-        status.textContent = "Running…";
+        const say = (text: string, kind: "" | "busy" | "error" | "done") => ((status.className = `status ${kind}`), (status.textContent = text));
+        if (typeof filled !== "string") return say(`Needs a value for ${filled.missing.join(", ")}.`, "error");
+        say("Running…", "busy");
         try {
           const results = await run(w, filled, true);
           if (results) st(w).result = shown(results);
-          status.textContent = results ? `${formatNumber(st(w).result?.rows.length ?? 0)} rows.` : st(w).note ?? "";
+          say(results ? `${formatNumber(st(w).result?.rows.length ?? 0)} rows.` : st(w).note ?? "", "done");
           showPickers();
         } catch (e) {
-          status.textContent = String(e);
+          say(String(e), "error");
         }
       };
       footer.append(tryIt);

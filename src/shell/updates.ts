@@ -6,6 +6,7 @@ import { invoke } from "../ipc";
 import { el } from "../dom";
 import { modal } from "../database/backup";
 import { readPref, writePref } from "./prefs";
+import { toast } from "./toast";
 import changelog from "../../CHANGELOG.md?raw";
 
 type Available = { version: string; current: string; notes: string | null; date: string | null };
@@ -21,24 +22,17 @@ export async function checkForUpdates(opts: { beta: boolean; quiet: boolean }) {
   try {
     const found = await invoke<Available | null>("update_check", { beta: opts.beta });
     if (!found) {
-      if (!opts.quiet) notice("You're up to date", "This is the newest version of TableMinus.");
+      if (!opts.quiet) toast("You're up to date: this is the newest version of TableMinus.", "done");
     } else if (!opts.quiet || readPref<string>(SKIPPED) !== found.version) {
       offer(found);
     }
   } catch (e) {
-    if (!opts.quiet) notice("Couldn't check for updates", String(e));
+    if (!opts.quiet) toast(`Couldn't check for updates: ${e}`, "error");
   } finally {
     checking = false;
   }
 }
 
-function notice(title: string, text: string) {
-  const { d, footer } = modal(title, "small", el("p", { textContent: text }));
-  const ok = el("button", { className: "primary", textContent: "OK" });
-  ok.onclick = () => d.close();
-  footer.append(el("span", { className: "spacer" }), ok);
-  d.showModal();
-}
 
 function offer(u: Available) {
   const notes = el("pre", { className: "release-notes", textContent: u.notes?.trim() || "No notes for this version." });
