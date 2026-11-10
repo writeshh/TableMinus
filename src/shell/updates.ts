@@ -46,7 +46,7 @@ function offer(u: Available) {
     el("p", { className: "hint", textContent: `You have ${u.current}.${u.date ? ` Released ${u.date.slice(0, 10)}.` : ""}` }), notes);
   const install = el("button", { className: "primary", textContent: "Install and Restart" });
   const later = el("button", { textContent: "Later" });
-  const skip = el("button", { className: "ghost", textContent: "Skip This Version" });
+  const skip = el("button", { className: "ghost", textContent: "Skip this version" });
   install.onclick = async () => {
     install.disabled = later.disabled = skip.disabled = true;
     setStatus("Downloading…", "busy");

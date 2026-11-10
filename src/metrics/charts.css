@@ -20,13 +20,13 @@
 .chart-pickers label.chart-x { display: flex; align-items: center; gap: 6px; }
 #result-chart[aria-pressed="true"] { color: var(--accent); }
 .chart-ys { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-button.chip { padding: 0 8px; height: var(--control-sm); border-radius: 999px; font-size: var(--text-xs); color: var(--muted); }
-button.chip[aria-pressed="true"] { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+button.chip { padding: 0 8px; height: var(--control-sm); border-radius: var(--radius-pill); font-size: var(--text-xs); color: var(--muted); }
+button.chip[aria-pressed="true"] { color: var(--fg); border-color: var(--accent); background: var(--accent-soft); }
 .chart-host { flex: 1; min-height: 0; padding: 8px 10px 4px; }
 .chart { position: relative; height: 100%; display: flex; flex-direction: column; gap: 6px; }
 .chart-plot { flex: 1; min-height: 0; overflow: hidden; }
 .chart-plot svg { display: block; outline: none; }
-.chart-plot svg:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); border-radius: var(--radius-sm); }
+.chart-plot svg:focus-visible { outline: 2px solid var(--focus); border-radius: var(--radius-sm); }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); flex: none; max-height: 40%; overflow: auto; }
 .chart-legend li { display: flex; align-items: center; gap: 6px; }
 .chart-key { flex: none; display: inline-block; background: var(--key); }
@@ -41,7 +41,7 @@ button.chip[aria-pressed="true"] { color: var(--fg); border-color: color-mix(in 
 .chart-wash { fill: var(--hover); }
 .chart-slice { stroke: var(--bg); stroke-width: 2; stroke-linejoin: round; transition: opacity 120ms ease-out; } /* the surface gap */
 .chart-slice.dim { opacity: 0.45; }
-.chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); box-shadow: var(--shadow-tip); font-size: var(--text-sm); display: grid; gap: 3px; max-width: 280px; }
+.chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); box-shadow: var(--shadow-tip); font-size: var(--text-sm); display: grid; gap: 3px; max-width: 280px; }
 .chart-tip-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-tip-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .chart-tip-row strong { font-variant-numeric: tabular-nums; }

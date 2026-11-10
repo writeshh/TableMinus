@@ -1,8 +1,8 @@
 /* Grid editing, its dialogs and the row detail sidebar (grid-edit.ts, cell-editors.ts, rowdetail.ts) */
 .grid-area { position: relative; flex: 1; min-height: 0; display: flex; }
 .grid-area > #out { min-width: 0; }
-#out tr.deleted td:not(.rownum) { text-decoration: line-through; color: var(--muted); background: color-mix(in srgb, var(--danger) 10%, transparent); }
-#out tr.added td { background: color-mix(in srgb, var(--ok) 10%, transparent); }
+#out tr.deleted td:not(.rownum) { text-decoration: line-through; color: var(--muted); background: var(--danger-soft); }
+#out tr.added td { background: var(--ok-soft); }
 #out tr.added td.rownum { color: var(--ok); font-weight: 600; text-align: center; }
 #out td.default { color: var(--muted); font-style: italic; font-size: var(--text-2xs); letter-spacing: 0.04em; }
 #out td.file { font-style: italic; }
@@ -15,7 +15,7 @@ dialog.cell-dialog h3, dialog.cell-dialog p, dialog.cell-dialog footer { margin:
 .cell-tools .check { margin-left: auto; }
 .cell-text { width: 100%; height: min(60vh, 520px); resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--bg); font: var(--text-sm)/1.5 var(--mono); tab-size: 2; }
 .json-check { font-size: var(--text-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
-.json-check.ok { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
+.json-check.ok { color: var(--ok); }
 .json-check.error { color: var(--danger); }
 .json-tree { height: min(60vh, 520px); overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--bg); font: var(--text-sm)/1.6 var(--mono); user-select: text; }
 .json-tree details > :not(summary) { margin-left: 16px; }
@@ -36,9 +36,9 @@ dialog.cell-dialog h3, dialog.cell-dialog p, dialog.cell-dialog footer { margin:
 .row-detail .fields { display: grid; gap: 8px; }
 .row-detail label.field { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; color: var(--muted); }
 .row-detail .name { font: 600 var(--text-xs)/1.4 var(--mono); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row-detail .type { font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: 0.04em; }
+.row-detail .type { font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: 0.06em; }
 .row-detail label.field > :is(input, textarea, select) { grid-column: 1 / -1; width: 100%; color: var(--fg); font: var(--text-sm)/1.4 var(--mono); }
-.row-detail textarea { padding: 5px 8px; resize: vertical; field-sizing: content; max-height: 240px; }
-.row-detail .changed { background: color-mix(in srgb, var(--warn) 18%, var(--bg)); }
+.row-detail textarea { padding: 4px 8px; resize: vertical; field-sizing: content; max-height: 240px; }
+.row-detail .changed { background: var(--warn-soft); }
 .table-head #add-row, .table-foot #preview-edits { font-size: var(--text-sm); white-space: nowrap; flex: none; }
 .table-foot .edit-info { white-space: nowrap; }

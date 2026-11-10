@@ -2,13 +2,13 @@
 .result-strip { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--tabs-bg); flex: none; }
 .result-strip[hidden] { display: none; }
 .result-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; flex: 1; }
-.result-tab { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 10px; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--muted); white-space: nowrap; font-size: var(--text-sm); }
+.result-tab { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 10px; border-radius: var(--radius-pill); border: 1px solid transparent; background: none; color: var(--muted); white-space: nowrap; font-size: var(--text-sm); }
 .result-tab[aria-selected="true"] { background: var(--tab-active); color: var(--fg); border-color: var(--line); }
 .result-tab.failed { color: var(--danger); }
 .result-tab .pin { width: 16px; text-align: center; opacity: 0.35; transform: rotate(45deg); }
 .result-tab .pin.on { opacity: 1; color: var(--accent); transform: none; }
 .result-tab .pin:hover { opacity: 1; }
-.appended h4 { position: sticky; left: 0; margin: 0; padding: 8px 10px 4px; font: 600 var(--text-sm) -apple-system, system-ui, sans-serif; color: var(--muted); }
+.appended h4 { position: sticky; left: 0; margin: 0; padding: 8px 10px 4px; font: 600 var(--text-sm) var(--sans); color: var(--muted); }
 .appended + .appended { border-top: 1px solid var(--line); margin-top: 8px; }
 .load-more { display: block; margin: 8px 10px; }
 .messages { list-style: none; margin: 0; padding: 0; font-size: var(--text-sm); }
@@ -23,14 +23,14 @@
 .console-body { flex: 1; min-height: 0; overflow: auto; }
 .console-list { list-style: none; margin: 0; padding: 0; font: var(--text-sm)/1.45 var(--mono); }
 .console-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 3px 12px; border-bottom: 1px solid var(--grid-line); }
-.console-when { color: var(--muted); font-family: -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.console-when { color: var(--muted); font-family: var(--sans); font-variant-numeric: tabular-nums; }
 .console-sql { white-space: pre-wrap; overflow-wrap: anywhere; }
 .history-head { display: flex; gap: 4px; align-items: center; margin: 0 8px 6px; }
 .history-head #history-search { flex: 1; min-width: 0; width: auto; margin: 0; }
 /* Saved queries above the history: capped, so a long list scrolls inside it and the history keeps its room. */
 .saved-queries { flex: none; margin: 0 4px 6px; }
 /* Headings like the Items pane's sections (.section-head): small caps-style labels with a fold chevron */
-.saved-queries > summary, .side-heading { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.saved-queries > summary, .side-heading { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .saved-queries > summary { list-style: none; }
 .saved-queries > summary::-webkit-details-marker { display: none; }
 .saved-queries > summary::before { content: ""; flex: none; width: 5px; height: 5px; margin: 0 2px 0 1px; border: solid currentColor; border-width: 1.5px 1.5px 0 0; transform: rotate(45deg); transition: transform 120ms ease-out; }
@@ -49,7 +49,7 @@
 .side-tabs button { min-width: 0; padding-inline: 4px; overflow: hidden; text-overflow: ellipsis; }
 .result-strip > button { padding: 0 10px; height: var(--control-sm); font-size: var(--text-sm); }
 .result-edit-info, .result-found { color: var(--muted); font-size: var(--text-sm); white-space: nowrap; }
-.result-edit-info.done { color: color-mix(in srgb, var(--ok) 80%, var(--fg)); }
+.result-edit-info.done { color: var(--ok); }
 .result-edit-info.error { color: var(--danger); }
 #result-search { width: 160px; }
 #result-search[hidden] { display: none; }

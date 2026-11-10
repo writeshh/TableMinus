@@ -54,9 +54,9 @@ body:has(#workspace.redis) :is(#new-sql, #tools-button, #assistant-button, .tool
 #redis-side .redis-find { display: flex; gap: 4px; }
 #redis-side .redis-find input { flex: 1; min-width: 0; }
 #redis-keys { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 0; }
-#redis-keys li { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: 999px; cursor: default; white-space: nowrap; }
+#redis-keys li { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: var(--radius-pill); cursor: default; white-space: nowrap; }
 #redis-keys li:hover { background: var(--hover); }
-#redis-keys li.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+#redis-keys li.active { background: var(--accent-soft); }
 #redis-keys .name { overflow: hidden; text-overflow: ellipsis; font: var(--text-sm)/1.4 var(--mono); }
 #redis-keys .folder .chevron { width: 18px; text-align: center; color: var(--muted); flex: none; }
 #redis-keys .folder .count { margin-left: auto; color: var(--muted); font-size: var(--text-xs); }

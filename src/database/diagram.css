@@ -7,7 +7,7 @@ dialog.diagram .status { margin-top: 8px; }
 .dg-toolbar button { padding: 0 10px; height: var(--control-md); }
 .dg-group { display: inline-flex; align-items: center; gap: 2px; }
 .dg-zoom { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; color: var(--muted); }
-.dg-search { width: 220px; padding: 4px 9px; }
+.dg-search { width: 220px; padding: 4px 10px; }
 .dg-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .dg-stage { position: relative; flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden;
   background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 20px 20px, var(--bg); }

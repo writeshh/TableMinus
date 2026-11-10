@@ -298,8 +298,8 @@ type Scripts = "keep" | "drop";
 const scriptsText = el("pre", { className: "mcp-code" });
 Object.assign(scriptsText.style, { maxHeight: "40vh", overflow: "auto" });
 const scriptsCancel = el("button", { type: "button", textContent: "Cancel" });
-const scriptsDrop = el("button", { type: "button", className: "primary", textContent: "Import Without Them" });
-const scriptsKeep = el("button", { type: "button", textContent: "Keep Them" });
+const scriptsDrop = el("button", { type: "button", className: "primary", textContent: "Import without them" });
+const scriptsKeep = el("button", { type: "button", textContent: "Keep them" });
 const scriptsDialog = el("dialog", {},
   el("h3", { textContent: "Startup scripts" }),
   el("p", { textContent: "Keep them only if you trust whoever made this file: they run each time you connect." }),

@@ -14,7 +14,8 @@ const RAW = [
   /font-size:\s*\d[\d.]*px/,
   /fontSize:\s*"\d[\d.]*px/,
   /font:\s*(?:(?:italic|bold|\d00)\s+)*\d[\d.]*px/,
-  /border-radius:\s*(?!999px)\d[\d.]*px/,
+  /border-radius:\s*\d[\d.]*px/,
+  /borderRadius:\s*"\d/,
   /[:(,]\s*#[0-9a-fA-F]{3,8}\b/, // a colour value, not an id selector
   /\brgba?\(/,
 ];
@@ -33,5 +34,5 @@ test("text sizes, corner radii, shadows and colours use the tokens", () => {
       if (RAW.some((r) => r.test(line.replace(definitions, "")))) found.push(`${f}:${i + 1}: ${line.trim().slice(0, 100)}`);
     });
   }
-  assert.deepEqual(found, [], "use the var(--text-*), var(--radius-*) and var(--shadow-*) tokens, or a colour variable, from styles.css :root");
+  assert.deepEqual(found, [], "use the var(--text-*), var(--radius-*) (pills: var(--radius-pill)) and var(--shadow-*) tokens, or a colour variable, from styles.css :root");
 });

@@ -40,8 +40,8 @@ const theme = EditorView.theme({
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--fg)" },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
     { backgroundColor: "color-mix(in srgb, var(--accent) 32%, transparent)" },
-  ".cm-matchingBracket": { backgroundColor: "color-mix(in srgb, var(--accent) 22%, transparent)", outline: "none" },
-  ".cm-tooltip": { backgroundColor: "var(--bg)", color: "var(--fg)", border: "1px solid var(--line)", borderRadius: "8px", overflow: "hidden" },
+  ".cm-matchingBracket": { backgroundColor: "var(--accent-soft)", outline: "none" },
+  ".cm-tooltip": { backgroundColor: "var(--bg)", color: "var(--fg)", border: "1px solid var(--line)", borderRadius: "var(--radius-lg)", overflow: "hidden" },
   ".cm-tooltip-autocomplete > ul > li": { padding: "2px 8px" },
   ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent)", color: "var(--on-accent)" },
   ".cm-panels": { backgroundColor: "var(--side)", color: "var(--fg)" },
@@ -51,11 +51,11 @@ const theme = EditorView.theme({
   ".cm-search > *": { verticalAlign: "middle", margin: "3px 6px 3px 0" },
   ".cm-search .cm-textfield": {
     width: "220px", padding: "4px 12px", fontSize: "var(--text-sm)", color: "var(--fg)",
-    border: "1px solid var(--line)", borderRadius: "999px", backgroundColor: "var(--bg)",
+    border: "1px solid var(--line-strong)", borderRadius: "var(--radius-pill)", backgroundColor: "var(--bg)",
   },
   ".cm-search .cm-button": {
     padding: "3px 10px", fontSize: "var(--text-sm)", color: "var(--fg)", textTransform: "none",
-    border: "1px solid var(--line)", borderRadius: "999px", backgroundImage: "none", backgroundColor: "var(--raised)",
+    border: "1px solid var(--line)", borderRadius: "var(--radius-pill)", backgroundImage: "none", backgroundColor: "var(--raised)",
   },
   ".cm-search .cm-button:hover": { backgroundColor: "var(--hover)" },
   ".cm-search .cm-button:active": { backgroundImage: "none", backgroundColor: "var(--press)" },

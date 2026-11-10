@@ -479,9 +479,9 @@ body:has(#workspace.doc-ws) :is(#new-sql, #tools-button, #assistant-button, .too
 .doc-find { display: flex; gap: 4px; }
 .doc-find input { flex: 1; min-width: 0; }
 .doc-colls { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 0; }
-.doc-colls li { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: 999px; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: var(--text-sm)/1.4 var(--mono); }
+.doc-colls li { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: var(--radius-pill); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: var(--text-sm)/1.4 var(--mono); }
 .doc-colls li:hover { background: var(--hover); }
-.doc-colls li.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.doc-colls li.active { background: var(--accent-soft); }
 .doc-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--text-sm); }
 .doc-main { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .doc-docs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -495,16 +495,16 @@ body:has(#workspace.doc-ws) :is(#new-sql, #tools-button, #assistant-button, .too
 .doc-grid :is(th, td) { padding: 3px 10px; border-bottom: 1px solid var(--grid-line, var(--line)); border-right: 1px solid var(--grid-line, var(--line)); text-align: left; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .doc-grid th { position: sticky; top: 0; background: var(--side); font-weight: 600; z-index: 1; }
 .doc-grid td.null { color: var(--grid-null, var(--muted)); }
-.doc-grid td.missing { background: color-mix(in srgb, var(--muted) 6%, transparent); }
+.doc-grid td.missing { background: var(--hover); }
 .doc-grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.doc-grid tr.picked td { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.doc-grid tr.picked td { background: var(--accent-soft); }
 .doc-grid .hint { padding: 12px 16px; }
 .doc-console { flex: none; height: 300px; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--side); }
 .doc-console .editor { flex: 0 0 110px; min-height: 0; overflow: auto; border-bottom: 1px solid var(--line); }
 .doc-console .editor .cm-editor { height: 100%; }
 .doc-console .run { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); }
 .doc-console .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-.doc-console .tabs button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.doc-console .tabs button[aria-pressed="true"] { background: var(--accent-soft); }
 .doc-console .out { flex: 1; min-height: 0; overflow: auto; }
 .doc-console pre { margin: 0; padding: 8px 12px; font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .doc-edit textarea { width: 100%; box-sizing: border-box; min-height: 320px; font: var(--text-sm)/1.45 var(--mono); padding: 8px; resize: vertical; }

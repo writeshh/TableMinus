@@ -66,7 +66,7 @@ section[data-pane="plugins"] { max-height: min(560px, 68vh); overflow-y: auto; }
 .plugin-review dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
 .plugin-review dt { color: var(--muted); }
 .plugin-review dd { margin: 0; overflow-wrap: anywhere; }
-.plugin-review ul { margin: 0; padding-left: 18px; }
+.plugin-review ul { margin: 0; padding-left: 16px; }
 `);
 document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
 
