@@ -201,9 +201,7 @@ aside { display: flex; flex-direction: column; }
 .show-more { margin: 2px 0 4px 22px; padding: 2px 8px; font-size: var(--text-sm); color: var(--muted); }
 .tree-row:hover { background: var(--hover); }
 .tree-row:active { background: var(--press); }
-.tree-row.active { background: var(--accent); color: var(--on-accent); }
-.tree-row.active .chevron { color: inherit; }
-.tree-row.active :is(.tbl-icon, .item-icon) { --accent: var(--on-accent); } /* or the icon vanishes into the row */
+.tree-row.active { background: var(--grid-sel); } /* the same tint as a selected grid cell or database */
 .label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .chevron { border: 0; background: none; padding: 0; width: 16px; height: 16px; display: grid; place-items: center; color: var(--muted); flex: none; transition: transform 120ms ease-out; }
 .chevron svg.ico { width: 12px; height: 12px; }
