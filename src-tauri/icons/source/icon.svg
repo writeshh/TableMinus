@@ -1,5 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-<rect x="100" y="100" width="824" height="824" rx="185" fill="#1E1E1F"/>
+<defs><filter id="lift" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.28"/></filter></defs>
+<rect x="100" y="100" width="824" height="824" rx="185" fill="#F5F5F1" filter="url(#lift)"/>
+<rect x="100.5" y="100.5" width="823" height="823" rx="184.5" fill="none" stroke="#131313" stroke-opacity="0.08"/>
 <g transform="translate(512 512) scale(0.8047) translate(-512 -512)">
 <g transform="translate(512 520) scale(0.94) translate(-540 -570)">
 <polygon points="196,336 292,300 296,338" fill="#074A78"></polygon>
