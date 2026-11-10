@@ -10,9 +10,16 @@ export type ToastKind = "" | "busy" | "done" | "error";
 const MAX = 3; // older toasts give way, so the stack never covers the window
 const LIFE = { error: 10_000, other: 4_000 };
 
+/** The stack: the jobs panel, or one inside the topmost modal window, where the jobs panel sits behind the backdrop. */
+function stack() {
+  const modal = [...document.querySelectorAll("dialog:modal")].pop();
+  if (!modal) return jobsPanel();
+  return modal.querySelector<HTMLElement>(":scope > .toasts") ?? modal.appendChild(el("div", { className: "toasts" }));
+}
+
 export function toast(text: string, kind: ToastKind = "") {
   if (!text || kind === "busy") return; // progress belongs to the run bar or a job card, not to a notice
-  const panel = jobsPanel();
+  const panel = stack();
   for (const old of panel.querySelectorAll<HTMLElement>(".toast")) if (old.dataset.text === text) old.remove();
   const close = el("button", { type: "button", className: "icon-btn ghost", ariaLabel: "Dismiss" }, icon("close"));
   const t = el("div", { className: `toast ${kind}` }, el("span", { className: "toast-text", textContent: text }), close);

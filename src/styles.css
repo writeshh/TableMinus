@@ -484,6 +484,7 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .toast-text { flex: 1; min-width: 0; padding-top: 2px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .toast.error { border-color: var(--danger); background: linear-gradient(var(--danger-soft), var(--danger-soft)), var(--raised); }
 .toast .icon-btn { flex: none; }
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); } /* toast.ts: the stack inside a modal window */
 .job { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-2xl); background: var(--raised); box-shadow: var(--shadow-popover); }
 .job strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job progress { width: 100%; }
