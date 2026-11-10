@@ -20,6 +20,21 @@ export function confirmDialog(text: string, okLabel: string, tone: "danger" | "p
   });
 }
 
+/** A window built for one use and removed when it closes: its centred title, the body, a status line for its
+ *  progress and errors, then the footer, where the caller puts other actions, a spacer, Cancel and the main action. */
+export function windowDialog(title: string, className: string, ...body: Node[]) {
+  const status = el("p", { className: "status" });
+  const footer = el("footer");
+  const d = el("dialog", { className }, el("h3", { textContent: title }), ...body, status, footer);
+  document.body.append(d);
+  d.addEventListener("close", () => d.remove());
+  const setStatus = (text: string, kind: "" | "busy" | "error" | "done" = "") => {
+    status.textContent = text;
+    status.className = `status ${kind}`;
+  };
+  return { d, footer, status, setStatus };
+}
+
 export type Prompt = {
   title: string;
   /** A sentence under the title. */

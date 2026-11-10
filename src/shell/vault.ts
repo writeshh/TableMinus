@@ -16,7 +16,7 @@ const cancel = el("button", { type: "button", textContent: "Cancel" });
 const forgot = el("button", { type: "button", className: "ghost", textContent: "Forgot master password?" });
 const ok = el("button", { className: "primary" });
 const form = el("form", { method: "dialog", className: "safe-form" }, text, master, again, message,
-  el("footer", {}, cancel, forgot, el("span", { className: "spacer" }), ok));
+  el("footer", {}, forgot, el("span", { className: "spacer" }), cancel, ok));
 const dialog = el("dialog", { className: "small" }, title, form);
 document.body.append(dialog);
 

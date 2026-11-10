@@ -25,7 +25,6 @@
 .table-options label { display: flex; gap: 8px; align-items: center; color: var(--muted); }
 .table-options input { width: 260px; color: var(--fg); }
 .structure-dialog.wide { width: min(760px, calc(100vw - 32px)); }
-.structure-dialog h3 { margin: 0 0 12px; }
 .structure-dialog form { display: grid; gap: 10px; }
 .structure-dialog label.field { display: grid; gap: 4px; color: var(--muted); }
 .structure-dialog label.field input { color: var(--fg); }

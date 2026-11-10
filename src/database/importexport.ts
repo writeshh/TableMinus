@@ -219,7 +219,7 @@ export function exportDialog(ctx: Ctx, source: ExportSource) {
     labelled("File name", pattern),
     el("p", { className: "hint", textContent: "{connection} {database} {table} {date} {time} are filled in; the extension is added." }),
     status,
-    el("footer", {}, cancel, el("span", { className: "spacer" }), go),
+    el("footer", {}, el("span", { className: "spacer" }), cancel, go),
   );
 
   go.onclick = async () => {
@@ -278,7 +278,7 @@ async function sqlWizard(ctx: Ctx, path: string) {
   cancel.onclick = () => d.close();
   d.append(
     el("p", { className: "hint", textContent: `Every statement runs on "${connName(ctx.conn)}", one after another, stopping at the first error.` }),
-    pre, el("footer", {}, cancel, el("span", { className: "spacer" }), run),
+    pre, el("footer", {}, el("span", { className: "spacer" }), cancel, run),
   );
   run.onclick = () => {
     d.close();
@@ -321,7 +321,7 @@ function importWizard(ctx: Ctx, kind: "csv" | "json", path: string, table: strin
     labelled("Duplicates", conflict),
     el("div", { className: "wizard" }, mapping, grid),
     status,
-    el("footer", {}, cancel, el("span", { className: "spacer" }), go),
+    el("footer", {}, el("span", { className: "spacer" }), cancel, go),
   );
 
   let preview: Preview = { fields: [], rows: [] };

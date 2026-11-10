@@ -15,19 +15,9 @@ type Setup = {
   tools: Tools[]; matched: number | null; problem: string | null;
 };
 
-/** A modal window built for one use and removed when it closes. */
-export function modal(title: string, className: string, ...body: Node[]) {
-  const status = el("p", { className: "status" });
-  const footer = el("footer");
-  const d = el("dialog", { className }, el("h3", { textContent: title }), ...body, status, footer);
-  document.body.append(d);
-  d.addEventListener("close", () => d.remove());
-  const setStatus = (text: string, kind: "" | "busy" | "error" | "done" = "") => {
-    status.textContent = text;
-    status.className = `status ${kind}`;
-  };
-  return { d, footer, setStatus };
-}
+/** The shared window builder, under the name the tool windows import it by. */
+export { windowDialog as modal } from "../shell/dialogs";
+import { windowDialog as modal } from "../shell/dialogs";
 
 const row = (label: string, ...kids: (Node | string)[]) => el("label", {}, label, ...kids);
 const pick = (input: HTMLInputElement, onPick: () => void) => {
@@ -86,7 +76,7 @@ export async function openBackup(c: Conn, database?: string | null) {
   const cancel = el("button", { type: "button", textContent: "Cancel" });
   const start = el("button", { type: "button", className: "primary", textContent: "Start backup", disabled: true });
   cancel.onclick = () => d.close();
-  footer.append(cancel, el("span", { className: "spacer" }), start);
+  footer.append(el("span", { className: "spacer" }), cancel, start);
   d.showModal();
 
   const ext = () => (lite ? ".sqlite" : format.value === "custom" ? ".dump" : ".sql") + (gzip.checked && !lite ? ".gz" : "");
@@ -143,7 +133,7 @@ export async function openRestore(c: Conn, database: string | null | undefined, 
   const cancel = el("button", { type: "button", textContent: "Cancel" });
   const start = el("button", { type: "button", className: "danger", textContent: "Restore…", disabled: true });
   cancel.onclick = () => d.close();
-  footer.append(cancel, el("span", { className: "spacer" }), start);
+  footer.append(el("span", { className: "spacer" }), cancel, start);
   d.showModal();
 
   async function chooseFile() {

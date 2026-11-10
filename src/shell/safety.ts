@@ -79,7 +79,7 @@ const pwError = el("p", { className: "status error" });
 const pwCancel = el("button", { type: "button", textContent: "Cancel" });
 const pwTouch = el("button", { type: "button", textContent: "Use Touch ID" });
 const pwForm = el("form", { method: "dialog", className: "safe-form" }, pwText, pwInput, pwError,
-  el("footer", {}, pwCancel, el("span", { className: "spacer" }), pwTouch, el("button", { className: "primary", textContent: "Run" })));
+  el("footer", {}, el("span", { className: "spacer" }), pwCancel, pwTouch, el("button", { className: "primary", textContent: "Run" })));
 const pwDialog = el("dialog", { className: "small" }, el("h3", { textContent: "Safe mode" }), pwForm);
 document.body.append(pwDialog);
 

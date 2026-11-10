@@ -6,6 +6,7 @@
 /// <reference types="vite/client" />
 import { sqlKind } from "../editor/statements";
 import { connName, el } from "../dom";
+import { windowDialog } from "../shell/dialogs";
 import { copy } from "../shell/toast";
 import { miniEditor } from "../editor/editor";
 import { CANCELLED, guarded } from "../shell/safety";
@@ -553,9 +554,9 @@ export async function saveStructure(tabId: number, out: HTMLElement) {
 
 /** A modal built on the fly, so this module needs nothing in index.html. Resolves with the button pressed. */
 export function modal(title: string, body: Node[], buttons: [string, string][], wide = false): Promise<string | null> {
-  const d = el("dialog", { className: wide ? "structure-dialog wide" : "structure-dialog" });
-  const foot = el("footer", {}, el("span", { className: "spacer" }));
-  d.append(el("h3", { textContent: title }), ...body, foot);
+  const { d, footer: foot, status } = windowDialog(title, wide ? "structure-dialog wide" : "structure-dialog", ...body);
+  status.remove(); // these windows say nothing of their own; outcomes go to a toast
+  foot.append(el("span", { className: "spacer" }));
   return new Promise((resolve) => {
     let picked: string | null = null;
     for (const [label, cls] of buttons) {
@@ -563,8 +564,7 @@ export function modal(title: string, body: Node[], buttons: [string, string][], 
       b.onclick = () => ((picked = label), d.close());
       foot.append(b);
     }
-    d.onclose = () => (d.remove(), resolve(picked));
-    document.body.append(d);
+    d.addEventListener("close", () => resolve(picked));
     d.showModal();
     (foot.querySelector("button") as HTMLElement).focus(); // Cancel (or Close) first: Enter never runs by accident
     (d.querySelector("input:not([type=checkbox])") as HTMLInputElement | null)?.select();

@@ -1,5 +1,4 @@
 /* Backup, restore and process list windows, and the jobs panel (backup.ts, processes.ts). */
-dialog.tools-window h3 { margin: 0 0 14px; text-align: center; font-size: var(--text-lg); }
 dialog.tools-window select { min-width: 0; }
 dialog.tools-window .pick > select { flex: 1; }
 dialog.processes { width: min(1100px, calc(100vw - 32px)); }

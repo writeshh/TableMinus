@@ -312,7 +312,7 @@ const askText = el("p");
 const allow = el("button", { className: "primary", textContent: "Allow" });
 const deny = el("button", { textContent: "Deny" });
 const askDialog = el("dialog", { id: "mcp-ask" },
-  el("strong", { textContent: "An AI agent wants to run this query" }), askText, sqlBox,
+  el("h3", { textContent: "An AI agent wants to run this query" }), askText, sqlBox,
   el("footer", {}, el("span", { className: "spacer" }), deny, allow));
 document.body.append(askDialog);
 

@@ -42,7 +42,6 @@ dialog.metrics-board[open] { display: flex; flex-direction: column; }
 .score strong { font-size: var(--text-display); font-weight: 600; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .score span { color: var(--muted); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 dialog.board-edit { width: min(640px, calc(100vw - 32px)); }
-dialog.board-edit h3, dialog.metrics-board ~ dialog h3 { margin: 0 0 14px; font-size: var(--text-lg); }
 .board-form { display: grid; gap: 10px; }
 .board-form .hint { margin: -4px 0 0 106px; }
 .board-form footer { margin-top: 6px; }

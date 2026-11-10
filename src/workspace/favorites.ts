@@ -151,7 +151,7 @@ function edit(f: Favorite) {
     label("Name", name), label("Folder", folder), folders,
     label("Keyword", keyword), el("p", { className: "hint indent", textContent: "Typing the keyword in the editor offers this query as a completion." }),
     label("SQL", sql), error,
-    el("footer", {}, cancel, el("span", { className: "spacer" }), ok));
+    el("footer", {}, el("span", { className: "spacer" }), cancel, ok));
   const d = el("dialog", { className: "transfer" }, el("h3", { textContent: f.id ? "Edit saved query" : "Save query" }), form);
   d.onclose = () => d.remove();
   document.body.append(d);

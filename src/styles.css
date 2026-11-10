@@ -146,7 +146,9 @@ kbd { font: 600 var(--text-sm) var(--mono); margin-left: 6px; padding: 1px 6px; 
 .mark { width: 92px; height: 92px; margin-bottom: auto; background: url("./mark.svg") center / contain no-repeat; }
 :root[data-scheme="dark"] .mark { background-image: url("./mark-dark.svg"); }
 h1 { font-size: var(--text-display); font-weight: 800; line-height: 1; letter-spacing: -0.04em; margin: 0; } /* poster-weight wordmark */
-h3 { font-size: var(--text-lg); } /* dialog titles; the browser default, 1.17em, is off the scale */
+h3 { font-size: var(--text-lg); } /* the browser default, 1.17em, is off the scale */
+/* Every window's title: centred, 15px, bold. :where keeps it weak, so a window with a layout of its own can adjust it. */
+:where(dialog > h3, dialog > form > h3) { margin: 0 0 14px; text-align: center; font-size: var(--text-lg); font-weight: 700; letter-spacing: -0.01em; }
 .intro .muted { margin: 0 0 24px; }
 button.wide { width: min(240px, 100%); padding: 0 16px; height: var(--control-lg); text-align: left; }
 .intro button.wide:not(.ghost) { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
@@ -185,7 +187,6 @@ dialog footer { display: flex; gap: 8px; align-items: center; margin-top: 16px; 
 .engine { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 6px; border: 2px solid transparent; border-radius: var(--radius-2xl); background: none; }
 .engine .avatar { width: 48px; height: 48px; font-size: var(--text-xl); }
 .engine[aria-selected="true"] { border-color: var(--fg); background: var(--hover); }
-#editor-title, #dbpicker h3 { margin: 0 0 14px; text-align: center; font-size: var(--text-lg); font-weight: 700; letter-spacing: -0.01em; }
 #db-search { width: 100%; border-radius: var(--radius-pill); padding: 6px 14px; margin-bottom: 10px; }
 .dbs { list-style: none; margin: 0; padding: 0; height: min(52vh, 420px); overflow: auto; }
 .dbs li { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: var(--radius-pill); cursor: default; }

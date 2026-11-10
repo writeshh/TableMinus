@@ -60,7 +60,7 @@ const groupError = el("p", { className: "status error" });
 const groupCancel = el("button", { type: "button", textContent: "Cancel" });
 const groupTitle = el("h3");
 const groupForm = el("form", { method: "dialog" }, el("label", {}, "Name", groupName), el("div", { className: "opt-row" }, el("span", { textContent: "Icon" }), groupIcons),
-  groupError, el("footer", {}, groupCancel, el("span", { className: "spacer" }), el("button", { className: "primary", textContent: "Save" })));
+  groupError, el("footer", {}, el("span", { className: "spacer" }), groupCancel, el("button", { className: "primary", textContent: "Save" })));
 const groupDialog = el("dialog", { className: "small" }, groupTitle, groupForm);
 document.body.append(groupDialog);
 
@@ -228,7 +228,7 @@ const exForm = el("form", { method: "dialog" }, exWhat,
   el("label", { className: "check" }, exProtect, "Protect the file with a password"),
   el("div", { className: "pw-pair" }, exPassword, exConfirm),
   el("label", { className: "check" }, exInclude, "Include passwords (only in a password-protected file)"),
-  exError, el("footer", {}, exCancel, el("span", { className: "spacer" }), el("button", { className: "primary", textContent: "Export…" })));
+  exError, el("footer", {}, el("span", { className: "spacer" }), exCancel, el("button", { className: "primary", textContent: "Export…" })));
 const exDialog = el("dialog", { className: "small" }, el("h3", { textContent: "Export connections" }), exForm);
 document.body.append(exDialog);
 
@@ -275,7 +275,7 @@ const scriptsKeep = el("button", { type: "button", textContent: "Keep them" });
 const scriptsDialog = el("dialog", {},
   el("h3", { textContent: "Startup scripts" }),
   el("p", { textContent: "Keep them only if you trust whoever made this file: they run each time you connect." }),
-  scriptsText, el("footer", {}, scriptsCancel, el("span", { className: "spacer" }), scriptsKeep, scriptsDrop));
+  scriptsText, el("footer", {}, el("span", { className: "spacer" }), scriptsCancel, scriptsKeep, scriptsDrop));
 document.body.append(scriptsDialog);
 
 /** Shows the startup scripts a connections file brings along; null when cancelled. */
@@ -328,7 +328,7 @@ const foundCancel = el("button", { type: "button", textContent: "Cancel" });
 const foundSave = el("button", { className: "primary", textContent: "Save" });
 const foundDialog = el("dialog", {}, el("h3", { textContent: "Local databases found" }),
   el("p", { textContent: "Tick the ones to save. A server that refused the default sign-in is saved too, marked so you can give its credentials." }),
-  el("form", { method: "dialog" }, foundList, el("footer", {}, foundCancel, el("span", { className: "spacer" }), foundSave)));
+  el("form", { method: "dialog" }, foundList, el("footer", {}, el("span", { className: "spacer" }), foundCancel, foundSave)));
 document.body.append(foundDialog);
 
 /** Asks which of `found` to save; the ones ticked, or null when cancelled. */

@@ -160,7 +160,7 @@ function passcodeDialog(change: boolean) {
       setStatus(String(e), "error");
     }
   };
-  footer.append(button("Cancel", () => d.close()), el("span", { className: "spacer" }), save);
+  footer.append(el("span", { className: "spacer" }), button("Cancel", () => d.close()), save);
   d.showModal();
   (change ? current : next).focus();
 }
@@ -179,7 +179,7 @@ function removeDialog() {
       setStatus(String(e), "error");
     }
   };
-  footer.append(button("Cancel", () => d.close()), el("span", { className: "spacer" }), remove);
+  footer.append(el("span", { className: "spacer" }), button("Cancel", () => d.close()), remove);
   d.showModal();
   current.focus();
 }

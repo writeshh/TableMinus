@@ -660,7 +660,7 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
     const status = el("p", { className: "status" });
     const cancel = button("Cancel", "", "");
     const ok = el("button", { type: "submit", className: "primary", textContent: "Save" });
-    const footer = el("footer", {}, cancel, el("span", { className: "spacer" }));
+    const footer = el("footer", {}, el("span", { className: "spacer" }), cancel);
     if (CHARTS.includes(w.kind) || w.kind === "dropdown" || w.kind === "table" || w.kind === "score") {
       const tryIt = button("Try", "Run the query to see its columns", "");
       tryIt.onclick = async () => {
