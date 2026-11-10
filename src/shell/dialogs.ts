@@ -1,7 +1,7 @@
 // The small pieces of UI everything asks through: a context menu at the pointer, a popover over a footer button, the
 // confirmation window and the inline confirmation under the run bar.
 
-import { $, el } from "../dom";
+import { $, el, icon } from "../dom";
 
 /** Actions that destroy something or can't be undone; their button is danger, any other action's is primary. */
 const DESTROYS = /^(Delete|Drop|Remove|Discard|Clear|Kill|Restore|Truncate|Overwrite)\b/;
@@ -61,34 +61,88 @@ export function prompt(o: Prompt): Promise<string | null> {
 }
 
 export let menuClose: (() => void) | null = null;
-export type MenuItem = [string, () => void] | "-";
+/** A command, a command with a tick (`checked`), a submenu (its items), or a rule. */
+export type MenuItem = [string, () => void] | [string, () => void, { checked: boolean }] | [string, MenuItem[]] | "-";
 
-/** A small context menu at the pointer; any click or Esc closes it. */
+/** A context menu at the pointer; any click outside or Esc closes it. Items with `checked` show a drawn tick in a
+ *  column the whole menu shares; a submenu opens beside its item on hover, click or →, and ← or Esc goes back. */
 export function contextMenu(e: MouseEvent, items: MenuItem[]) {
   e.preventDefault();
   menuClose?.();
-  const menu = el("div", { className: "menu" });
-  menu.setAttribute("role", "menu");
-  for (const item of items) {
-    if (item === "-") menu.append(el("hr"));
-    else {
-      const b = el("button", { type: "button", textContent: item[0] });
-      b.setAttribute("role", "menuitem");
-      b.onclick = () => (close(), item[1]());
+  // Inside the topmost modal window when there is one, or the window would keep it out of reach.
+  const host = [...document.querySelectorAll("dialog:modal")].pop() ?? document.body;
+  const open: HTMLElement[] = []; // the root menu, then each open submenu
+
+  const place = (menu: HTMLElement, x: number, y: number, flipFrom?: number) => {
+    const r = menu.getBoundingClientRect();
+    const left = x + r.width > innerWidth - 8 && flipFrom !== undefined ? flipFrom - r.width : Math.min(x, innerWidth - r.width - 8);
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${Math.min(y, innerHeight - r.height - 8)}px`;
+  };
+  const closeFrom = (depth: number) => { for (const m of open.splice(depth)) m.remove(); };
+
+  function render(list: MenuItem[], depth: number): HTMLElement {
+    const menu = el("div", { className: "menu" });
+    menu.setAttribute("role", "menu");
+    const ticks = list.some((i) => i !== "-" && i.length === 3);
+    for (const item of list) {
+      if (item === "-") { menu.append(el("hr")); continue; }
+      const b = el("button", { type: "button" });
+      const label = el("span", { className: "menu-label", textContent: item[0] });
+      if (Array.isArray(item[1])) {
+        const sub = item[1];
+        b.setAttribute("role", "menuitem");
+        b.setAttribute("aria-haspopup", "menu");
+        if (ticks) b.append(el("span", { className: "tick" }));
+        b.append(label, el("span", { className: "sub-arrow" }, icon("chevron")));
+        const show = () => {
+          if (open[depth + 1]?.dataset.of === item[0]) return;
+          closeFrom(depth + 1);
+          const child = render(sub, depth + 1);
+          child.dataset.of = item[0];
+          const r = b.getBoundingClientRect();
+          place(child, r.right - 4, r.top - 5, r.left + 4);
+          return child;
+        };
+        b.onpointerenter = () => void show();
+        b.onclick = () => show()?.querySelector("button")?.focus();
+        b.onkeydown = (ev) => ev.key === "ArrowRight" && (ev.preventDefault(), show()?.querySelector("button")?.focus());
+      } else {
+        const [, run, opts] = item;
+        b.setAttribute("role", opts ? "menuitemcheckbox" : "menuitem");
+        if (opts) b.setAttribute("aria-checked", String(opts.checked));
+        if (ticks) b.append(el("span", { className: "tick" }, ...(opts?.checked ? [icon("check")] : [])));
+        b.append(label);
+        b.onpointerenter = () => closeFrom(depth + 1);
+        b.onclick = () => (close(), run());
+      }
       menu.append(b);
     }
+    menu.onkeydown = (ev) => {
+      const buttons = [...menu.querySelectorAll<HTMLButtonElement>(":scope > button")];
+      const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        ev.preventDefault();
+        buttons[(at + (ev.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus();
+      } else if (ev.key === "ArrowLeft" && depth > 0) {
+        ev.preventDefault();
+        closeFrom(depth);
+        open[depth - 1]?.querySelector<HTMLElement>(`[aria-haspopup]`)?.focus();
+      }
+    };
+    host.append(menu);
+    open[depth] = menu;
+    return menu;
   }
-  // Inside the topmost modal window when there is one, or the window would keep it out of reach.
-  ([...document.querySelectorAll("dialog:modal")].pop() ?? document.body).append(menu);
-  const r = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`;
-  menu.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
-  menu.querySelector("button")?.focus();
-  const onDown = (ev: Event) => !menu.contains(ev.target as Node) && close();
+
+  const root = render(items, 0);
+  place(root, e.clientX, e.clientY);
+  root.querySelector("button")?.focus();
+  const onDown = (ev: Event) => !open.some((m) => m.contains(ev.target as Node)) && close();
   // Esc closes only the menu, not a window it sits in.
   const onKey = (ev: KeyboardEvent) => ev.key === "Escape" && (ev.preventDefault(), ev.stopPropagation(), close());
   function close() {
-    menu.remove();
+    closeFrom(0);
     removeEventListener("pointerdown", onDown, true);
     removeEventListener("keydown", onKey, true);
     menuClose = null;

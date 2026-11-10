@@ -10,7 +10,7 @@ import { dropItem, editable, newMenu, openItem, scriptMenu } from "../database/o
 import { readPref, writePref } from "../shell/prefs";
 import { setSetting, settings } from "../shell/settings";
 
-type MenuItem = [string, () => void] | "-";
+import type { MenuItem } from "../shell/dialogs";
 type Kind = "schema" | "view" | "matview" | "function" | "procedure" | "sequence" | "type";
 export type Item = { kind: Kind; name: string };
 export type SearchMode = "contains" | "not_contains" | "starts_with" | "ends_with";
@@ -88,7 +88,7 @@ export const sortColumns = <T extends { name: string }>(columns: T[]) =>
 export function columnOrderMenu(): MenuItem[] {
   const az = !!looks().columnsAz;
   const set = (columnsAz: boolean) => (store("sidebar-looks", { ...looks(), columnsAz }), ctx.redraw());
-  return [[`${az ? "    " : "✓ "}Columns by position`, () => set(false)], [`${az ? "✓ " : "    "}Columns A–Z`, () => set(true)]];
+  return [["Columns by position", () => set(false), { checked: !az }], ["Columns A–Z", () => set(true), { checked: az }]];
 }
 
 // ---------- Items other than tables, loaded once per connection and database ----------
@@ -153,22 +153,20 @@ export function renderTree(host: HTMLElement, query: string): number {
       : ["Pin to top", () => savePrefs({ ...p, pins: [...p.pins, name] })];
     const copy: MenuItem[] = [
       ["Copy name", () => void copyText(name, name)],
-      // A second menu at the same spot, standing in for a submenu.
-      ["Copy Script As ›", () => ctx.menu(last!, scriptMenu(kind === "table" || kind === "view" ? null : kind, name))],
+      ["Copy script as", scriptMenu(kind === "table" || kind === "view" ? null : kind, name)],
     ];
     const insert: MenuItem = ["Insert into SQL editor", () => ctx.insertSql(name)];
-    let last: MouseEvent | undefined;
     const browsable = kind === "table" || kind === "view" || kind === "matview";
     if (browsable) {
       const scriptKind = kind === "matview" ? "matview" : null;
       const handGroups = p.groups.filter((g) => g.items?.includes(name));
-      // A second menu at the same spot, standing in for a submenu: every group, ticked where it's in by hand.
+      // Every group, ticked where the table is in it by hand.
       const groupsMenu = () => p.groups.map((g, gi): MenuItem => {
         const inIt = !!g.items?.includes(name);
-        return [`${inIt ? "✓ " : "    "}${g.name}`, () => setHandGroup(p, gi, name, !inIt)];
+        return [g.name, () => setHandGroup(p, gi, name, !inIt), { checked: inIt }];
       });
       const grouping: MenuItem[] = [
-        ...(p.groups.length ? [["Add to group ›", () => ctx.menu(last!, groupsMenu())] as MenuItem] : []),
+        ...(p.groups.length ? [["Add to group", groupsMenu()] as MenuItem] : []),
         ...handGroups.map((g): MenuItem => [`Remove from ${g.name}`, () => setHandGroup(p, p.groups.indexOf(g), name, false)]),
       ];
       const first: MenuItem[] = [
@@ -180,7 +178,6 @@ export function renderTree(host: HTMLElement, query: string): number {
         insert,
       ];
       const row = ctx.tableRow(name, label(name), first, ["-", pin, ...grouping]);
-      row.addEventListener("contextmenu", (e) => (last = e), true);
       return row;
     }
     const open = editable(kind);
@@ -196,7 +193,7 @@ export function renderTree(host: HTMLElement, query: string): number {
       "-",
       pin,
     ];
-    row.oncontextmenu = (e) => (e.stopPropagation(), (last = e), ctx.menu(e, items));
+    row.oncontextmenu = (e) => (e.stopPropagation(), ctx.menu(e, items));
     return row;
   };
 
@@ -296,8 +293,8 @@ export function treeMenu(): MenuItem[] {
   return [
     ["New group…", () => editGroup({ name: "", rule: "prefix", value: "" }, (g) => savePrefs({ ...prefs(), groups: [...prefs().groups, g] }))],
     "-",
-    [`${settings.recentItems ? "✓ " : "    "}Recent`, () => (setSetting("recentItems", !settings.recentItems), ctx.redraw())],
-    ...SECTIONS.map(([id, title]) => [`${off.includes(id) ? "    " : "✓ "}${title}`, () => toggle(id)] as MenuItem),
+    ["Recent", () => (setSetting("recentItems", !settings.recentItems), ctx.redraw()), { checked: settings.recentItems }],
+    ...SECTIONS.map(([id, title]): MenuItem => [title, () => toggle(id), { checked: !off.includes(id) }]),
     "-",
     ...columnOrderMenu(),
   ];

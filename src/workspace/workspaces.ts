@@ -269,15 +269,16 @@ export async function reconnectAll() {
 /** "Show All Workspaces": a menu under the workspace's tab. */
 export function showWorkspaces() {
   const r = (document.querySelector('#db-tabs [aria-selected="true"]') ?? $("db-tabs")).getBoundingClientRect();
-  const items: MenuItem[] = S.workspaces.map((w) => [
-    `${w === S.ws ? "✓ " : "    "}${w.conn.name}${w.info?.database ? ` · ${w.info.database}` : ""}${w.lost ? " (disconnected)" : ""}`,
+  const items: MenuItem[] = S.workspaces.map((w): MenuItem => [
+    `${w.conn.name}${w.info?.database ? ` · ${w.info.database}` : ""}${w.lost ? " (disconnected)" : ""}`,
     () => showWorkspace(w),
+    { checked: w === S.ws },
   ]);
   contextMenu(new MouseEvent("click", { clientX: r.left, clientY: r.bottom + 4 }), [
     ...items, "-",
-    [`New Workspace…  ${keyLabel("new-workspace")}`, newWorkspace],
-    ["Reconnect All", reconnectAll],
-    ["Close Workspace", () => closeWorkspace()],
+    [`New workspace…  ${keyLabel("new-workspace")}`, newWorkspace],
+    ["Reconnect all", reconnectAll],
+    ["Close workspace", () => closeWorkspace()],
   ]);
 }
 

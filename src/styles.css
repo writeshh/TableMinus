@@ -430,7 +430,12 @@ th.sortable { cursor: default; user-select: none; }
 th .sort { margin-left: 4px; color: var(--accent); font-size: var(--text-2xs); }
 th .fk-mark { margin-left: 4px; color: var(--muted); font-size: var(--text-2xs); }
 .menu { position: fixed; z-index: 30; min-width: 200px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--raised); box-shadow: var(--shadow-popover); }
-.menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: var(--radius-lg); }
+.menu button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: var(--radius-lg); }
+.menu .menu-label { flex: 1; min-width: 0; white-space: nowrap; }
+.menu .tick { flex: none; width: 14px; display: grid; place-items: center; color: var(--accent); } /* the checked items' column */
+.menu .tick svg.ico, .menu .sub-arrow svg.ico { width: 12px; height: 12px; }
+.menu .sub-arrow { flex: none; margin-left: 12px; color: var(--muted); }
+.menu button[aria-haspopup]:focus-visible, .menu button[aria-haspopup]:hover { background: var(--hover); }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 #out td.sel { background: var(--grid-sel); }

@@ -14,7 +14,7 @@ import {
 } from "./diagram-layout";
 import "./diagram.css";
 
-type MenuItem = [string, () => void] | "-";
+import type { MenuItem } from "../shell/dialogs";
 export type Ctx = {
   call: <T>(cmd: string, args: Record<string, unknown>) => Promise<T>;
   /** The on-screen connection: `name` is the session key commands take. */
@@ -427,15 +427,14 @@ export async function openDiagram(schema: string | null, focus?: string) {
       else st.looks.delete(name);
       draw();
     };
-    // A second menu at the same spot, standing in for a submenu.
-    const colours = () => ctx.menu(e, [
-      [`${look.color ? "    " : "✓ "}None`, () => setLook({ color: undefined })],
-      ...TABLE_COLOURS.map((c): MenuItem => [`${look.color === c ? "✓ " : "    "}${c[0].toUpperCase()}${c.slice(1)}`, () => setLook({ color: c as TableColour })]),
-    ]);
+    const colours: MenuItem[] = [
+      ["None", () => setLook({ color: undefined }), { checked: !look.color }],
+      ...TABLE_COLOURS.map((c): MenuItem => [`${c[0].toUpperCase()}${c.slice(1)}`, () => setLook({ color: c as TableColour }), { checked: look.color === c }]),
+    ];
     ctx.menu(e, [
       ["Open table", () => (d.close(), ctx.openTable(name))],
       "-",
-      ["Colour ›", colours],
+      ["Colour", colours],
       [look.note ? "Edit note…" : "Add note…", () => void editNote(look.note ?? "").then((note) => note !== null && setLook({ note }))],
       "-",
       [more.length ? `Add related tables (${more.length})` : "No related tables to add", () => addTables(more)],

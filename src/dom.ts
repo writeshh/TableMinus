@@ -24,6 +24,7 @@ const ICONS = {
   copy: "M9 9h10v10H9zM5 15V5h10",
   only: "M8 5l11 7-11 7z",
   more: "M5.5 12h1M11.5 12h1M17.5 12h1",
+  check: "M5 12.5l4.5 4.5L19 7.5",
 } as const;
 
 /** A centred stroke icon that takes its colour and size from the button around it (`svg.ico` in styles.css). */
