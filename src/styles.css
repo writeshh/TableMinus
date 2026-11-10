@@ -224,10 +224,8 @@ aside { display: flex; flex-direction: column; }
 .chevron { border: 0; background: none; padding: 0; width: 16px; height: 16px; display: grid; place-items: center; color: var(--muted); flex: none; transition: transform 120ms ease-out; }
 .chevron svg.ico { width: 12px; height: 12px; }
 .chevron[aria-expanded="true"] { transform: rotate(90deg); }
-.tbl-icon { flex: none; width: 13px; height: 11px; border-radius: var(--radius-xs); background:
-  linear-gradient(var(--accent) 0 0) 0 0 / 100% 3px no-repeat,
-  repeating-linear-gradient(90deg, transparent 0 3px, color-mix(in srgb, var(--accent) 45%, var(--bg)) 3px 4px),
-  var(--accent-soft); opacity: 0.9; }
+/* A table: a box with a solid header bar (design system: SidebarTree) */
+.tbl-icon { flex: none; width: 13px; height: 11px; border-radius: var(--radius-xs); background: linear-gradient(var(--accent) 0 0) 0 0 / 100% 3px no-repeat, var(--accent-soft); }
 .cols li { display: flex; align-items: center; gap: 6px; padding: 2px 6px 2px 22px; font: var(--text-sm)/1.5 var(--mono); }
 .cols .key { width: 12px; color: var(--warn); font-family: inherit; flex: none; }
 .cols .nokey { width: 12px; flex: none; }

@@ -180,7 +180,9 @@ export function docView(engine: Engine, host: Host) {
     const q = find.value.trim().toLowerCase();
     const all = host.collections();
     list.replaceChildren(...all.filter((c) => c.toLowerCase().includes(q)).map((c) => {
-      const li = el("li", { textContent: c, title: c });
+      // A table engine (Cassandra, DynamoDB) shows the table glyph; a document store (MongoDB, Elasticsearch) a sheet
+      const glyph = engine.words.collection === "table" ? "tbl-icon" : "item-icon collection";
+      const li = el("li", { title: c }, el("span", { className: glyph }), el("span", { className: "label", textContent: c }));
       li.classList.toggle("active", c === s.collection);
       li.onclick = () => void openCollection(c);
       li.oncontextmenu = (e) => host.menu(e, [
