@@ -2,7 +2,7 @@
 // area shows the chosen key's value by type, with its edits, over a console that runs commands as redis-cli does.
 // Every change and every command that may write goes through safe mode, like SQL.
 
-import { $, el } from "../dom";
+import { $, el, icon } from "../dom";
 import { copy } from "../shell/toast";
 import { modal } from "../database/backup";
 import { CANCELLED, guarded } from "../shell/safety";
@@ -59,7 +59,9 @@ body:has(#workspace.redis) :is(#new-sql, #tools-button, #assistant-button, .tool
 #redis-keys li:hover { background: var(--hover); }
 #redis-keys li.active { background: var(--accent-soft); }
 #redis-keys .name { overflow: hidden; text-overflow: ellipsis; font: var(--text-sm)/1.4 var(--mono); }
-#redis-keys .folder .chevron { width: 18px; text-align: center; color: var(--muted); flex: none; }
+#redis-keys .folder .chevron { width: 16px; height: 16px; display: grid; place-items: center; color: var(--muted); flex: none; transition: transform 120ms ease-out; }
+#redis-keys .folder .chevron.open { transform: rotate(90deg); }
+#redis-keys .folder .chevron svg.ico { width: 12px; height: 12px; }
 #redis-keys .folder .count { margin-left: auto; color: var(--muted); font-size: var(--text-xs); }
 .redis-type { flex: none; width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: var(--radius-sm); font: 700 var(--text-2xs)/1 var(--mono); color: var(--ink); background: var(--yellow); }
 .redis-type.hash { background: var(--blue); } .redis-type.list { background: var(--orange); } .redis-type.set { background: var(--pink); }
@@ -177,7 +179,7 @@ function folderRows(f: Folder, s: State, open: Set<string>, depth: number): HTML
   for (const [name, sub] of [...f.folders].sort(([a], [b]) => a.localeCompare(b))) {
     const isOpen = open.has(sub.path);
     const li = el("li", { className: "folder", title: `${sub.path}:*` },
-      el("span", { className: "chevron", textContent: isOpen ? "▾" : "▸" }), el("span", { className: "name", textContent: name || "(empty)" }),
+      el("span", { className: `chevron${isOpen ? " open" : ""}` }, icon("chevron")), el("span", { className: "name", textContent: name || "(empty)" }),
       el("span", { className: "count", textContent: String(sub.count) }));
     li.style.paddingLeft = `${8 + depth * 14}px`;
     li.onclick = () => (isOpen ? open.delete(sub.path) : open.add(sub.path), renderKeys());

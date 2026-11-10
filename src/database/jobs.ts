@@ -1,6 +1,6 @@
 // Background jobs on screen: one panel at the bottom right for every job's card (exports and imports from
-// importexport.ts, backups and restores from backup.ts), and Notifications, this session's list of finished jobs.
-// A card stays until dismissed; its job stays in Notifications (the header's Jobs button, or View › Notifications)
+// importexport.ts, backups and restores from backup.ts), and the Jobs window, this session's list of finished jobs.
+// A card stays until dismissed; its job stays in the Jobs window (the header's Jobs button, or View › Jobs)
 // after that, with Show in Finder for the files it wrote.
 
 import { $, el, revealButton } from "../dom";
@@ -27,7 +27,7 @@ function showButton() {
   button.title = unseen ? `${unseen} finished job${unseen === 1 ? "" : "s"} not yet seen` : "Finished jobs";
 }
 
-/** Records a finished job (also a failed or cancelled one) for Notifications. */
+/** Records a finished job (also a failed or cancelled one) for the Jobs window. */
 export function notify(title: string, text: string, ok: boolean, paths: string[] = []) {
   notes.unshift({ title, text, ok, at: Date.now(), paths });
   notes.length = Math.min(notes.length, MAX_NOTES);
@@ -50,7 +50,7 @@ function openNotes() {
   const empty = el("p", { className: "hint", textContent: "Exports, imports and backups appear here when they finish." });
   const clear = el("button", { type: "button", textContent: "Clear" });
   const close = el("button", { type: "button", className: "primary", textContent: "Close" });
-  const d = el("dialog", { className: "notes-dialog" }, el("h3", { textContent: "Notifications" }), list, empty,
+  const d = el("dialog", { className: "notes-dialog" }, el("h3", { textContent: "Jobs" }), list, empty,
     el("footer", {}, clear, el("span", { className: "spacer" }), close));
   clear.onclick = () => ((notes.length = 0), draw(), showButton());
   close.onclick = () => d.close();
@@ -63,4 +63,4 @@ function openNotes() {
 button.onclick = openNotes;
 showButton();
 
-addCommands([{ id: "notifications", label: "Notifications", menu: "View", run: openNotes }]);
+addCommands([{ id: "notifications", label: "Jobs", menu: "View", run: openNotes }]); // the id stays, so rebound keys keep working

@@ -57,6 +57,8 @@ function renderEngines() {
   const q = $<HTMLInputElement>("engine-search").value.toLowerCase();
   const shown = ENGINES.filter((e) => e.label.toLowerCase().includes(q) || e.id.includes(q));
   if (!shown.some((e) => e.id === picked) && shown.length) picked = shown[0].id;
+  $<HTMLButtonElement>("picker-next").disabled = !shown.length;
+  if (!shown.length) return void $("engines").replaceChildren(el("p", { className: "hint center engines-none", textContent: "No engine matches." }));
   $("engines").replaceChildren(
     ...shown.map((e) => {
       const b = el("button", { className: "engine", type: "button" }, avatar(e.id), el("span", { textContent: e.label }));
