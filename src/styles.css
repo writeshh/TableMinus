@@ -528,7 +528,12 @@ dialog.transfer .opts label:not(.check) { margin-left: -106px; }
 .tag-row input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 50%; }
 .pw-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0 10px 24px; }
 dialog form > .check { margin: 6px 0; }
-.prompt-form input { width: 100%; }
+/* The one-field window (dialogs.ts prompt); a whole document gets a tall mono text area */
+.prompt-form { display: grid; gap: 8px; }
+.prompt-form p { margin: 0; }
+.prompt-form input, .prompt-form textarea { width: 100%; }
+.prompt-form textarea { min-height: 320px; font: var(--text-sm)/1.45 var(--mono); resize: vertical; }
+.prompt-form footer { margin-top: 8px; }
 
 /* Discovered connections whose server refused the default sign-in: a button on the launcher row. */
 .badge-credentials { font-size: var(--text-xs); font-weight: 600; padding: 1px 8px; border: 0; border-radius: var(--radius-pill); color: var(--ink); background: var(--orange); cursor: pointer; }

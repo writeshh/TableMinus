@@ -3,6 +3,7 @@
 // keyword is also an autocomplete snippet in the editor.
 
 import { $, el } from "../dom";
+import { prompt } from "../shell/dialogs";
 import { copy } from "../shell/toast";
 import { docEntry, setDocEntry } from "../shell/locations";
 
@@ -105,23 +106,8 @@ export function render() {
   count.textContent = String(s.items.length);
 }
 
-/** A one-field dialog (the webview has no prompt()); resolves to the trimmed name, or null when cancelled. */
-function askName(title: string, value: string): Promise<string | null> {
-  const input = el("input", { value, required: true });
-  const cancel = el("button", { type: "button", textContent: "Cancel" });
-  const form = el("form", { className: "favorite-form" }, input,
-    el("footer", {}, cancel, el("span", { className: "spacer" }), el("button", { type: "submit", className: "primary", textContent: "OK" })));
-  const d = el("dialog", { className: "transfer" }, el("h3", { textContent: title }), form);
-  document.body.append(d);
-  return new Promise((resolve) => {
-    let result: string | null = null;
-    cancel.onclick = () => d.close();
-    form.onsubmit = (e) => (e.preventDefault(), (result = input.value.trim() || null), d.close());
-    d.onclose = () => (d.remove(), resolve(result));
-    d.showModal();
-    input.select();
-  });
-}
+/** Asks for a folder name; resolves to it trimmed, or null when cancelled or left empty. */
+const askName = async (title: string, value: string) => (await prompt({ title, label: "Name", value }))?.trim() || null;
 
 async function renameFolder(from: string) {
   const to = await askName("Rename folder", from);

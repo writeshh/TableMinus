@@ -20,6 +20,46 @@ export function confirmDialog(text: string, okLabel: string, tone: "danger" | "p
   });
 }
 
+export type Prompt = {
+  title: string;
+  /** A sentence under the title. */
+  text?: string;
+  /** The field's label, over it. */
+  label?: string;
+  ok?: string;
+  value?: string;
+  placeholder?: string;
+  /** A password: never left in the page after it closes. */
+  secret?: boolean;
+  /** A multi-line value (a whole document), in a wide window. */
+  big?: boolean;
+  /** An error from the last try, shown under the field. */
+  error?: string;
+};
+
+/** The one-field window: a title, a sentence, a labelled field and its error line, then Cancel and the action.
+ *  Resolves to the value as typed, or null when cancelled. */
+export function prompt(o: Prompt): Promise<string | null> {
+  const input = o.big ? el("textarea", { value: o.value ?? "", spellcheck: false }) : el("input", { type: o.secret ? "password" : "text", value: o.value ?? "", placeholder: o.placeholder ?? "", autocomplete: "off", spellcheck: false });
+  const field = o.label ? el("label", { className: "stack" }, o.label, input) : input;
+  const cancel = el("button", { type: "button", textContent: "Cancel" });
+  const form = el("form", { method: "dialog", className: "prompt-form" },
+    ...(o.text ? [el("p", { textContent: o.text })] : []), field, el("p", { className: "status error", textContent: o.error ?? "" }),
+    el("footer", {}, el("span", { className: "spacer" }), cancel, el("button", { type: "submit", className: "primary", textContent: o.ok ?? "OK" })));
+  const d = el("dialog", { className: o.big ? "wide" : "small" }, el("h3", { textContent: o.title }), form);
+  // Inside the topmost modal window when one is open, as contextMenu does.
+  ([...document.querySelectorAll("dialog:modal")].pop() ?? document.body).append(d);
+  return new Promise((resolve) => {
+    let result: string | null = null;
+    form.onsubmit = (e) => (e.preventDefault(), (result = input.value), d.close());
+    cancel.onclick = () => d.close();
+    d.onclose = () => ((input.value = ""), d.remove(), resolve(result));
+    d.showModal();
+    if (input instanceof HTMLInputElement) input.select();
+    else input.focus();
+  });
+}
+
 export let menuClose: (() => void) | null = null;
 export type MenuItem = [string, () => void] | "-";
 

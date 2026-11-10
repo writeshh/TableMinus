@@ -11,6 +11,7 @@
 import { invoke } from "../ipc";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { connName, el } from "../dom";
+import { prompt } from "../shell/dialogs";
 import { docEntry, setDocEntry } from "../shell/locations";
 import { CANCELLED, NOT_APPROVED, guarded, isSafetyStop, type Approval } from "../shell/safety";
 import { fillParams, findParams, type Dialect, type ParamFormat } from "../editor/statements";
@@ -718,23 +719,8 @@ export function openBoard(ctx: BoardCtx, add?: Omit<Widget, "id" | "x" | "y" | "
     (hasQuery(w.kind) ? sql : title).focus();
   }
 
-  /** A short form for a name; null when cancelled. */
-  function askName(heading: string, value: string): Promise<string | null> {
-    const input = el("input", { value, required: true });
-    const cancel = button("Cancel", "", "");
-    const form = el("form", { method: "dialog", className: "board-form" }, input,
-      el("footer", {}, el("span", { className: "spacer" }), cancel, el("button", { type: "submit", className: "primary", textContent: "OK" })));
-    const dialog = el("dialog", { className: "small" }, el("h3", { textContent: heading }), form);
-    document.body.append(dialog);
-    dialog.showModal();
-    input.select();
-    return new Promise((resolve) => {
-      let name: string | null = null;
-      cancel.onclick = () => dialog.close();
-      form.onsubmit = (e) => (e.preventDefault(), (name = input.value.trim() || null), dialog.close());
-      dialog.addEventListener("close", () => (dialog.remove(), resolve(name)));
-    });
-  }
+  /** Asks for a board's name; null when cancelled or left empty. */
+  const askName = async (title: string, value: string) => (await prompt({ title, label: "Name", value }))?.trim() || null;
 
   // Auto-refresh: due widgets, while nothing is asked or edited on top of the board.
   const timer = setInterval(() => {

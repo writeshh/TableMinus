@@ -26,37 +26,9 @@ const BUILT_IN_TAGS: Record<string, string> = { local: "Local", development: "De
 export const tagLabel = (name: string) => BUILT_IN_TAGS[name] ?? name;
 export const tagColor = (name: string) => tags.find((t) => t.name === name)?.color;
 
-// ---------- Small dialogs: a text or password prompt ----------
-
-const promptInput = el("input", { autocomplete: "off" });
-const promptText = el("p");
-const promptError = el("p", { className: "status error" });
-const promptCancel = el("button", { type: "button", textContent: "Cancel" });
-const promptOk = el("button", { className: "primary" });
-const promptTitle = el("h3");
-const promptForm = el("form", { method: "dialog", className: "prompt-form" }, promptText, promptInput, promptError,
-  el("footer", {}, promptCancel, el("span", { className: "spacer" }), promptOk));
-const promptDialog = el("dialog", { className: "small" }, promptTitle, promptForm);
-document.body.append(promptDialog);
-
-/** Asks for one line of text (a password when `secret`); null when cancelled. */
-export function prompt(o: { title: string; text: string; ok: string; secret?: boolean; value?: string; error?: string; placeholder?: string }): Promise<string | null> {
-  promptTitle.textContent = o.title;
-  promptText.textContent = o.text;
-  promptError.textContent = o.error ?? "";
-  promptOk.textContent = o.ok;
-  promptInput.type = o.secret ? "password" : "text";
-  promptInput.value = o.value ?? "";
-  promptInput.placeholder = o.placeholder ?? "";
-  promptDialog.showModal();
-  promptInput.select();
-  return new Promise((resolve) => {
-    let result: string | null = null;
-    promptForm.onsubmit = (e) => (e.preventDefault(), (result = promptInput.value), promptDialog.close());
-    promptCancel.onclick = () => promptDialog.close();
-    promptDialog.onclose = () => ((promptInput.value = ""), resolve(result)); // a password doesn't stay in the DOM
-  });
-}
+// One-line text or password prompts: the shared one-field window.
+export { prompt } from "../shell/dialogs";
+import { prompt } from "../shell/dialogs";
 
 // ---------- "Ask every time" passwords ----------
 

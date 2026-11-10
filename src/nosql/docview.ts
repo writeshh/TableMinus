@@ -11,7 +11,7 @@ import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { $, el } from "../dom";
 import { copy } from "../shell/toast";
-import { modal } from "../database/backup";
+import { prompt } from "../shell/dialogs";
 import { editorLook } from "../editor/editor";
 import { CANCELLED, guarded, type Approval } from "../shell/safety";
 
@@ -323,22 +323,8 @@ export function docView(engine: Engine, host: Host) {
     await loadPage();
   }
 
-  /** A dialog with one text field; resolves to its value, or null when cancelled. */
-  const ask: Ask = (heading, label, value, ok, big = false) => {
-    const input = big ? el("textarea", { value, spellcheck: false }) : el("input", { value, spellcheck: false });
-    const { d, footer } = modal(heading, big ? "wide doc-edit" : "small", el("label", { className: "stack" }, label, input));
-    return new Promise((resolve) => {
-      let result: string | null = null;
-      const go = el("button", { className: "primary", textContent: ok });
-      go.onclick = () => ((result = input.value), d.close());
-      const cancel = el("button", { textContent: "Cancel" });
-      cancel.onclick = () => d.close();
-      footer.append(el("span", { className: "spacer" }), cancel, go);
-      d.addEventListener("close", () => resolve(result));
-      d.showModal();
-      input.focus();
-    });
-  };
+  /** One field (a whole document when `big`); resolves to its value, or null when cancelled. */
+  const ask: Ask = (title, label, value, ok, big = false) => prompt({ title, label, value, ok, big });
 
   async function editCell(d: Doc, field: string) {
     const c = stateOf(session()).collection ?? "";
@@ -510,6 +496,5 @@ body:has(#workspace.doc-ws) :is(#new-sql, #tools-button, #assistant-button, .too
 .doc-console .out-tabs button[aria-pressed="true"] { background: var(--accent-soft); color: var(--fg); }
 .doc-console .out { flex: 1; min-height: 0; overflow: auto; }
 .doc-console pre { margin: 0; padding: 8px 12px; font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-.doc-edit textarea { width: 100%; box-sizing: border-box; min-height: 320px; font: var(--text-sm)/1.45 var(--mono); padding: 8px; resize: vertical; }
 `);
 document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
