@@ -30,7 +30,6 @@
 .structure-dialog label.field { display: grid; gap: 4px; color: var(--muted); }
 .structure-dialog label.field input { color: var(--fg); }
 .structure-dialog label.check { display: flex; gap: 6px; align-items: center; }
-.sql-preview { margin: 0; max-height: 50vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); font: var(--text-sm)/1.5 var(--mono); white-space: pre-wrap; user-select: text; }
 .definition-editor { height: 260px; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg); }
 .definition-editor.tall { height: min(420px, 55vh); }
 .definition-window .field { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; color: var(--muted); }

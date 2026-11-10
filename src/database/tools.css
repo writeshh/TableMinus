@@ -12,7 +12,7 @@ dialog.processes { width: min(1100px, calc(100vw - 32px)); }
 .process-actions span { display: flex; gap: 4px; }
 .process-list th.process-actions { z-index: 2; }
 
-.job { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); box-shadow: var(--shadow-popover); display: grid; gap: 4px; font-size: var(--text-sm); }
+/* The card itself is .job in styles.css, shared with the export cards and toasts in the same stack. */
 .job-head { display: flex; align-items: center; gap: 8px; }
 .job-file, .job-meta { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .job-line { font: var(--text-xs)/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
