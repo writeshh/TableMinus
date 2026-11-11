@@ -16,6 +16,9 @@
   --scrim: color-mix(in srgb, var(--ink) 40%, transparent); /* behind a dialog, with a 2px blur */
   --ask-bg: color-mix(in srgb, var(--yellow) 22%, var(--bg)); /* the safe-mode confirmation bar */
   --ask-line: color-mix(in srgb, var(--yellow) 60%, transparent);
+  /* The launcher's left panel: the sidebar's ground in a light theme, ink in a dark one */
+  --panel-bg: light-dark(var(--side), var(--ink)); /* a theme's own --side carries through */
+  --panel-fg: var(--fg);
   /* Every colour, font and size a theme can set (themes.ts); light-dark() follows the theme's scheme */
   --bg: light-dark(var(--paper), #171717);
   --fg: light-dark(var(--ink), #efeee9);
@@ -75,6 +78,7 @@
   --control-lg: 36px;
   /* The height of each bar across the window: database tabs, object tabs, the table header and footer. */
   --bar-h: 40px;
+  --side-w: 248px; /* the sidebar's default width; dragging its divider overrides it on #workspace */
 }
 /* Derived from --fg and --bg, so a theme only needs to set those two. */
 :root {
@@ -141,7 +145,7 @@ kbd { font: 600 var(--text-sm) var(--mono); margin-left: 6px; padding: 1px 6px; 
 /* ---------- Launcher ---------- */
 #home { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 34%) 1fr; }
 /* The launcher's panel: the sidebar's ground in a light theme, ink in a dark one, with the mockingbird as the mark */
-.intro { background: light-dark(var(--side), var(--ink)); color: var(--fg); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 6px; padding: 32px 28px; }
+.intro { background: var(--panel-bg); color: var(--panel-fg); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 6px; padding: 32px 28px; }
 /* The logo: the bare mockingbird. A dark theme gets its dark variant, whose lifted facets read on ink (themes.ts sets data-scheme). */
 .mark { width: 92px; height: 92px; margin-bottom: auto; background: url("./mark.svg") center / contain no-repeat; }
 :root[data-scheme="dark"] .mark { background-image: url("./mark-dark.svg"); }
