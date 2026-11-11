@@ -46,6 +46,7 @@ function openNotes() {
       el("div", { className: "note-text", textContent: n.text, title: n.text }),
       ...(n.ok && n.paths.length ? [revealButton(n.paths, "icon")] : []))));
     empty.hidden = notes.length > 0;
+    clear.disabled = !notes.length;
   };
   const empty = el("p", { className: "hint", textContent: "Exports, imports and backups appear here when they finish." });
   const clear = el("button", { type: "button", textContent: "Clear" });
@@ -58,6 +59,7 @@ function openNotes() {
   document.body.append(d);
   draw();
   d.showModal();
+  close.focus(); // the safe choice is the default, not Clear
 }
 
 button.onclick = openNotes;
