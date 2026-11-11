@@ -52,7 +52,7 @@ body.redis-ws #dbpicker :is(#db-new, #db-rename, #db-drop) { display: none; }
 #workspace.redis :is(#panes, #filters, #table-foot) { display: none !important; }
 body:has(#workspace.redis) :is(#new-sql, #tools-button, #assistant-button, .tool-icons) { display: none !important; }
 #redis-side { display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
-#redis-side .redis-find { display: flex; gap: 4px; }
+#redis-side .redis-find { display: flex; gap: 4px; margin: 0 8px; } /* the sidebar's 16px gutter */
 #redis-side .redis-find input { flex: 1; min-width: 0; }
 #redis-keys { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 0; }
 #redis-keys li { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: var(--radius-pill); cursor: default; white-space: nowrap; }
@@ -66,7 +66,7 @@ body:has(#workspace.redis) :is(#new-sql, #tools-button, #assistant-button, .tool
 .redis-type { flex: none; width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: var(--radius-sm); font: 700 var(--text-2xs)/1 var(--mono); color: var(--ink); background: var(--yellow); }
 .redis-type.hash { background: var(--blue); } .redis-type.list { background: var(--orange); } .redis-type.set { background: var(--pink); }
 .redis-type.zset { background: color-mix(in srgb, var(--blue) 50%, var(--pink)); } .redis-type.stream { background: var(--muted); }
-#redis-side .redis-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--text-sm); }
+#redis-side .redis-foot { display: flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--muted); font-size: var(--text-sm); }
 #redis-side .redis-foot.error { color: var(--danger); }
 #redis-main { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 #redis-key { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; display: grid; align-content: start; gap: 10px; }

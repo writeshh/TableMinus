@@ -465,18 +465,18 @@ body.doc-ws-body #dbpicker :is(#db-new, #db-rename, #db-drop) { display: none; }
 #workspace.doc-ws :is(#panes, #filters, #table-foot) { display: none !important; }
 body:has(#workspace.doc-ws) :is(#new-sql, #tools-button, #assistant-button, .tool-icons) { display: none !important; }
 .doc-side { display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
-.doc-find { display: flex; gap: 4px; }
+.doc-find { display: flex; gap: 4px; margin: 0 8px; } /* the sidebar's 16px gutter, as its fields have in a SQL workspace */
 .doc-find input { flex: 1; min-width: 0; }
 .doc-colls { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 0; }
-.doc-colls li { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: var(--radius-pill); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: var(--text-sm)/1.4 var(--mono); }
+.doc-colls li { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-radius: var(--radius-pill); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .doc-colls li:hover { background: var(--hover); }
 .doc-colls li.active { background: var(--accent-soft); }
-.doc-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--text-sm); }
+.doc-foot { display: flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--muted); font-size: var(--text-sm); }
 .doc-main { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .doc-docs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .doc-docs .bar { display: flex; gap: 6px; align-items: center; padding: 0 10px; min-height: var(--bar-h); border-bottom: 1px solid var(--line); flex-wrap: nowrap; overflow: hidden; } /* one line, like every bar */
 .doc-docs .bar > * { flex: none; }
-.doc-docs .bar h3 { margin: 0 6px 0 0; font: 600 var(--text-md)/1.3 var(--mono); }
+.doc-docs .bar h3 { margin: 0 6px 0 0; font: 600 var(--text-md)/1.3 var(--sans); } /* a name, as a table's in its header */
 .doc-docs .bar input { font: var(--text-sm)/1.4 var(--mono); min-width: 80px; flex: 1 1 140px; }
 .doc-docs .bar .sort { flex: 0 1 180px; }
 .doc-docs .bar h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
