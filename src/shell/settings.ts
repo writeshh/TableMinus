@@ -78,13 +78,11 @@ function applySettings() {
   $<HTMLInputElement>("estimate-over").value = String(settings.estimateOver);
   $<HTMLSelectElement>("default-sort").value = settings.defaultSort;
   $<HTMLInputElement>("geometry-wkt").checked = settings.geometryWkt;
-  $<HTMLInputElement>("hide-scrollbars").checked = settings.hideScrollbars;
   $<HTMLInputElement>("log-originals").checked = settings.logOriginals;
   $<HTMLInputElement>("reveal-export").checked = settings.revealExport;
   $<HTMLInputElement>("close-brackets").checked = settings.closeBrackets;
   $<HTMLInputElement>("recent-items").checked = settings.recentItems;
   $<HTMLInputElement>("recent-connections").checked = settings.recentConnections;
-  document.body.classList.toggle("hide-scrollbars", settings.hideScrollbars);
   const tab = current();
   if (tab?.kind === "sql" && !$("workspace").hidden) showResults(tab);
   host.editor.setDisplay(settings.wrapLines, settings.showInvisibles);
@@ -212,7 +210,6 @@ export function initSettings(h: Host) {
   $<HTMLInputElement>("estimate-over").onchange = (e) => setSetting("estimateOver", Math.max(0, Math.round(Number((e.target as HTMLInputElement).value)) || 0));
   $<HTMLSelectElement>("default-sort").onchange = (e) => setSetting("defaultSort", (e.target as HTMLSelectElement).value as Settings["defaultSort"]);
   $<HTMLInputElement>("geometry-wkt").onchange = (e) => setSetting("geometryWkt", (e.target as HTMLInputElement).checked);
-  $<HTMLInputElement>("hide-scrollbars").onchange = (e) => setSetting("hideScrollbars", (e.target as HTMLInputElement).checked);
   $<HTMLInputElement>("log-originals").onchange = (e) => setSetting("logOriginals", (e.target as HTMLInputElement).checked);
   $<HTMLInputElement>("reveal-export").onchange = (e) => setSetting("revealExport", (e.target as HTMLInputElement).checked);
   $<HTMLInputElement>("close-brackets").onchange = (e) => setSetting("closeBrackets", (e.target as HTMLInputElement).checked);

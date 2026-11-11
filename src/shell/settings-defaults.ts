@@ -49,8 +49,6 @@ export type Settings = {
   defaultSort: "none" | "asc" | "desc";
   /** PostGIS geometry and geography as WKT rather than hex WKB. */
   geometryWkt: boolean;
-  /** Overlay scroll bars on the grid, shown while scrolling. */
-  hideScrollbars: boolean;
   /** Write the values updated and deleted rows had to the console log when saving. */
   logOriginals: boolean;
   /** Show an export's files in Finder once it finishes. */
@@ -65,7 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   keyBinding: "sublime", upperKeywords: false, completeKey: "enter", filterColumn: "any", filterOp: "contains", filterBar: false,
   shortcuts: {}, launcherSort: "name", reopenWorkspaces: false, newTabKind: "sql", autoUpdate: true, betaUpdates: false,
   resultsMode: "tabs", stopOnError: true, historyYears: 0,
-  pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, hideScrollbars: false, logOriginals: false,
+  pageSize: 300, estimateOver: 1_000_000, defaultSort: "none", geometryWkt: true, logOriginals: false,
   revealExport: false, closeBrackets: true, recentItems: true, recentConnections: true,
 };
 
