@@ -182,6 +182,8 @@ dialog { border: 1px solid var(--line); border-radius: var(--radius-2xl); paddin
 dialog::backdrop { background: var(--scrim); backdrop-filter: blur(2px); }
 dialog[open] { animation: arrive 180ms ease-out; }
 dialog.small { width: min(380px, calc(100vw - 32px)); }
+#confirm-title { overflow-wrap: anywhere; } /* a long key or table name in the question */
+#confirm-text { margin: 0; overflow-wrap: anywhere; }
 dialog.wide { width: min(760px, calc(100vw - 32px)); }
 .release-notes { max-height: min(56vh, 520px); overflow: auto; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--raised); white-space: pre-wrap; overflow-wrap: anywhere; font: var(--text-sm)/1.55 var(--mono); user-select: text; -webkit-user-select: text; }
 dialog footer { display: flex; gap: 8px; align-items: center; margin-top: 16px; }

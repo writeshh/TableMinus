@@ -8,7 +8,11 @@ const DESTROYS = /^(Delete|Drop|Remove|Discard|Clear|Kill|Restore|Truncate|Overw
 
 export function confirmDialog(text: string, okLabel: string, tone: "danger" | "primary" = DESTROYS.test(okLabel) ? "danger" : "primary"): Promise<boolean> {
   const d = $<HTMLDialogElement>("confirm");
-  $("confirm-text").textContent = text;
+  // Every message asks its question first: that is the window's title, and what follows it is the body.
+  const end = text.indexOf("?") + 1;
+  $("confirm-title").textContent = end ? text.slice(0, end) : text;
+  $("confirm-text").textContent = end ? text.slice(end).trim() : "";
+  $("confirm-text").hidden = !$("confirm-text").textContent;
   $("confirm-ok").textContent = okLabel;
   $("confirm-ok").className = tone;
   d.showModal();
