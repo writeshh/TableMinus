@@ -493,7 +493,7 @@ body:has(#workspace.doc-ws) :is(#new-sql, #tools-button, #assistant-button, .too
 .doc-console { flex: none; height: 300px; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--side); }
 .doc-console .editor { flex: 0 0 110px; min-height: 0; overflow: auto; border-bottom: 1px solid var(--line); }
 .doc-console .editor .cm-editor { height: 100%; }
-.doc-console .run { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.doc-console .run { display: flex; gap: 6px; align-items: center; padding: 0 8px; min-height: var(--bar-h); box-sizing: border-box; border-bottom: 1px solid var(--line); }
 .doc-console .out-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .doc-console .out-tabs button[aria-pressed="true"] { background: var(--accent-soft); color: var(--fg); }
 .doc-console .out { flex: 1; min-height: 0; overflow: auto; }

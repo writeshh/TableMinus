@@ -372,7 +372,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .pill.staging { background: var(--env-staging); color: var(--ink); }
 .pill.production { background: var(--env-production); color: var(--ink); }
 #db-button { font-weight: 500; color: var(--fg); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.bar { display: flex; gap: 10px; align-items: center; padding: 0 12px; min-height: var(--bar-h); box-sizing: border-box; border-bottom: 1px solid var(--line); }
 #status { color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #status.error { color: var(--danger); }
 /* The SQL tab's run bar stays on one line. As it narrows, the shortcut hints and the cursor position go first, then
@@ -386,7 +386,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 @container (max-width: 600px) { #format-sql, #explain, #export-result { display: none; } #bar-more { display: grid; } }
 #status.done { color: var(--muted); }
 
-#ask { display: flex; gap: 10px; align-items: center; padding: 8px 12px; background: var(--ask-bg); border-bottom: 1px solid var(--ask-line); animation: arrive 160ms ease-out; }
+#ask { display: flex; gap: 10px; align-items: center; padding: 0 12px; min-height: var(--bar-h); box-sizing: border-box; background: var(--ask-bg); border-bottom: 1px solid var(--ask-line); animation: arrive 160ms ease-out; }
 #ask-text { font-weight: 500; }
 #ask-detail { flex: 1; min-width: 0; font: var(--text-sm) var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes arrive { from { opacity: 0; transform: translateY(-4px); } }
