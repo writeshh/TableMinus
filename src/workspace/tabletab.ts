@@ -77,6 +77,7 @@ export function renderTableTab(tab: TableTab) {
   $<HTMLButtonElement>("page-info").disabled = tab.view !== "data";
   $<HTMLButtonElement>("page-prev").disabled = tab.view !== "data" || tab.offset === 0;
   $<HTMLButtonElement>("page-next").disabled = tab.view !== "data" || lastPage(page, settings.pageSize);
+  $("page-prev").hidden = $("page-next").hidden = tab.view !== "data"; // a structure has no pages
   showPending(tab);
   const [msg, kind] = tab.message ?? ["", ""];
   const m = $("foot-msg");
