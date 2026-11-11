@@ -1,5 +1,5 @@
 /* The ER diagram window (diagram.ts). The canvas's own styles sit inside its <svg>, so exports carry them. */
-dialog.diagram[open] { width: calc(100vw - 32px); height: calc(100vh - 32px); max-width: none; max-height: none; display: flex; flex-direction: column; padding: 14px 16px; }
+dialog.diagram[open] { width: calc(100vw - 32px); height: calc(100dvh - var(--room-top) - 32px); max-width: none; max-height: none; display: flex; flex-direction: column; padding: 14px 16px; }
 dialog.diagram h3 { margin-bottom: 10px; }
 dialog.diagram footer { margin-top: 10px; }
 dialog.diagram .status { margin-top: 8px; }

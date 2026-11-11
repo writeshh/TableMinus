@@ -78,6 +78,7 @@
   --control-lg: 36px;
   /* The height of each bar across the window: database tabs, object tabs, the table header and footer. */
   --bar-h: 40px;
+  --room-top: 0px; /* where windows start: below the see-through title bar on macOS (workspace.css) */
   --side-w: 248px; /* the sidebar's default width; dragging its divider overrides it on #workspace */
 }
 /* Derived from --fg and --bg, so a theme only needs to set those two. */
@@ -178,7 +179,9 @@ button.icon { padding: 0 10px; height: var(--control-sm); font-size: var(--text-
 .launcher .status { padding: 6px 4px 0; }
 
 /* ---------- Dialogs: dim to focus on a modal task ---------- */
-dialog { border: 1px solid var(--line); border-radius: var(--radius-2xl); padding: 20px; background: var(--bg); color: var(--fg); box-shadow: var(--shadow-dialog); width: min(560px, calc(100vw - 32px)); }
+dialog { border: 1px solid var(--line); border-radius: var(--radius-2xl); padding: 20px; background: var(--bg); color: var(--fg); box-shadow: var(--shadow-dialog); width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - var(--room-top) - 32px); }
+/* A window centres in the room below the title bar, so it never covers the traffic lights. The lock screen covers all. */
+dialog:modal:not(#lock) { top: var(--room-top); }
 dialog::backdrop { background: var(--scrim); backdrop-filter: blur(2px); }
 dialog[open] { animation: arrive 180ms ease-out; }
 dialog.small { width: min(380px, calc(100vw - 32px)); }
@@ -292,7 +295,7 @@ td.editing { padding: 0; outline: 2px solid var(--focus); outline-offset: -2px; 
 dialog.prefs { width: min(760px, calc(100vw - 32px)); padding: 0; overflow: hidden; }
 /* Every tab is as tall as the tallest one (settings.ts sets --pane-h), so the window keeps its size between tabs;
    on a short screen the tab scrolls inside it instead. */
-dialog.prefs[open] { display: flex; flex-direction: column; max-height: calc(100dvh - 32px); }
+dialog.prefs[open] { display: flex; flex-direction: column; }
 dialog.prefs > :not(section) { flex: none; }
 dialog.prefs:not(.searching) > section:not([hidden]) { flex: 0 1 var(--pane-h, auto); min-height: 0; overflow: auto; }
 dialog.prefs.searching { overflow: auto; }
@@ -562,7 +565,7 @@ dialog form > .check { margin: 6px 0; }
 .check.found small { color: var(--muted); word-break: break-word; }
 
 /* The SQL viewer (viewer.ts): a large dialog around one editor */
-dialog.viewer { width: min(960px, calc(100vw - 32px)); height: min(720px, calc(100vh - 48px)); padding: 12px; }
+dialog.viewer { width: min(960px, calc(100vw - 32px)); height: min(720px, calc(100dvh - var(--room-top) - 48px)); padding: 12px; }
 dialog.viewer[open] { display: flex; flex-direction: column; gap: 8px; }
 .viewer header { display: flex; align-items: center; gap: 8px; }
 .viewer-title { font: 600 var(--text-md)/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

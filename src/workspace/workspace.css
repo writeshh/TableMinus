@@ -8,6 +8,7 @@
    traffic lights and their empty parts drag the window. With no tabs (the launcher) a strip of the same height does. */
 .drag-strip { display: none; }
 body.overlay-title { --title-h: var(--bar-h); }
+body.overlay-title:not(.full-screen) { --room-top: var(--title-h); } /* full screen hides the traffic lights */
 body.overlay-title .drag-strip { display: block; position: fixed; top: 0; left: 0; right: 0; height: var(--title-h); z-index: 1; }
 body.overlay-title:has(> #db-tabs[hidden]) { padding-top: var(--title-h); box-sizing: border-box; }
 body.overlay-title .db-tabs { position: relative; z-index: 2; min-height: var(--title-h); box-sizing: border-box; align-items: center; padding-left: 80px; }

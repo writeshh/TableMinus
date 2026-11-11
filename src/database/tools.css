@@ -20,7 +20,7 @@ dialog.processes { width: min(1100px, calc(100vw - 32px)); }
 .job.failed .job-line { color: var(--danger); white-space: pre-wrap; max-height: 8em; overflow: auto; }
 
 /* Custom scripts (scripts.ts): the editor over the output */
-.script-dialog { width: min(980px, calc(100vw - 32px)); height: min(760px, calc(100vh - 48px)); flex-direction: column; gap: 8px; }
+.script-dialog { width: min(980px, calc(100vw - 32px)); height: min(760px, calc(100dvh - var(--room-top) - 48px)); flex-direction: column; gap: 8px; }
 .script-dialog[open] { display: flex; } /* only when open: a closed dialog stays display: none */
 .script-editor { flex: 3; min-height: 120px; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; --editor-pad: 6px; }
 .script-output { flex: 2; min-height: 80px; overflow: auto; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--side); user-select: text; -webkit-user-select: text; }
