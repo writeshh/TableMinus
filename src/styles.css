@@ -466,13 +466,10 @@ th.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
 .paging-row > span + span { flex: 1; font-variant-numeric: tabular-nums; }
 .table-foot button.page-info { font-size: var(--text-sm); padding: 0 6px; height: var(--control-sm); }
 /* Thin scroll bars over the grid that show while the pointer is on it (WebKit's pseudo-elements: the app's webview) */
-/* Scrollbars: a thin pill in the text colour on a clear track, whatever the system's scroll bar setting is */
-::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
-::-webkit-scrollbar-corner { background: transparent; }
-::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--fg) 24%, transparent) padding-box; }
-::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg) 40%, transparent); }
-body.hide-scrollbars #out::-webkit-scrollbar-thumb { background-color: transparent; } /* Settings: the grid's show on hover */
-body.hide-scrollbars #out:hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--fg) 24%, transparent); }
+/* Scrollbars: thin, in the text colour, and shown only while the pointer is over the part that scrolls. Every element
+   sets its own colour, so a scroller inside a hovered panel stays clear until the pointer reaches it. */
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+:hover { scrollbar-color: color-mix(in srgb, var(--fg) 30%, transparent) transparent; }
 .columns-menu label.check { padding: 3px 2px; }
 
 /* Import and export (importexport.ts) */
