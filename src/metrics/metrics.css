@@ -1,6 +1,8 @@
 /* Metrics boards (metrics.ts): the board window, its grid of widgets, and a widget's settings. */
 dialog.metrics-board { width: calc(100vw - 32px); height: calc(100vh - 32px); max-width: none; max-height: none; padding: 0; overflow: hidden; }
 dialog.metrics-board[open] { display: flex; flex-direction: column; }
+/* macOS: the see-through title bar holds the traffic lights, so the board starts below it, as the workspace does */
+body.overlay-title:not(.full-screen) dialog.metrics-board { margin-top: var(--title-h); height: calc(100vh - var(--title-h) - 16px); }
 .board-head { display: flex; align-items: center; gap: 4px; padding: 4px 12px; min-height: var(--bar-h); box-sizing: border-box; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .board-head > select:first-child { max-width: 220px; font-weight: 600; }
 .board-head select { padding: 0 28px 0 8px; height: var(--control-md); }
