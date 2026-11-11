@@ -80,7 +80,7 @@ async function openDb(name?: string) {
     host.saveSqlTabs(); // under the database being left
     applyInfo(next);
     $<HTMLDialogElement>("dbpicker").close();
-    note(`Opened ${name}: ${S.tables.length} tables`, "done");
+    note(ownView() ? `Opened ${name}` : `Opened ${name}: ${S.tables.length} tables`, "done"); // a NoSQL sidebar counts its own items
     host.editor.focus();
   } catch (e) {
     setStatus("db-status", String(e), "error");
