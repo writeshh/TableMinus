@@ -15,9 +15,9 @@ dialog.users { width: min(1000px, calc(100vw - 32px)); }
 .user-editor label.field input, .user-editor label.field select { color: var(--fg); min-width: 0; }
 .user-editor label.check { display: flex; gap: 6px; align-items: center; }
 .user-flags { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 14px; }
-.user-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 14px; max-height: 140px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.user-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 14px; max-height: 140px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-xl); }
 .privilege-rows { display: grid; gap: 8px; margin-top: 6px; }
-.privilege-row { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 6px 8px; display: grid; gap: 6px; }
+.privilege-row { border: 1px solid var(--line); border-radius: var(--radius-2xl); padding: 6px 8px; display: grid; gap: 6px; }
 .privilege-head { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .privilege-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .privilege-kind { font-size: var(--text-xs); color: var(--muted); }

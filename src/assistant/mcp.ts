@@ -70,16 +70,16 @@ const STYLE = `
 section[data-pane="mcp"] { overflow-y: auto; } /* the Settings dialog gives every tab one height (settings.ts) */
 .mcp-head { display: flex; justify-content: space-between; align-items: center; margin: 8px 0 0; font-size: var(--text-md); }
 .mcp-head select { font-weight: normal; }
-.mcp-box { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); }
+.mcp-box { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-2xl); background: var(--raised); }
 .mcp-box p { margin: 0; }
 .mcp-box footer { margin: 0; }
 .mcp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.mcp-list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border-radius: var(--radius-md); }
+.mcp-list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border-radius: var(--radius-xl); }
 .mcp-list li:nth-child(odd) { background: var(--hover); }
 .mcp-list .grow { flex: 1; min-width: 0; }
 .mcp-list .sub { display: block; color: var(--muted); font-size: var(--text-sm); }
 .mcp-list code { display: block; font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.mcp-code { margin: 0; padding: 8px 10px; border-radius: var(--radius-md); background: var(--hover); font: var(--text-sm)/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.mcp-code { margin: 0; padding: 8px 10px; border-radius: var(--radius-xl); background: var(--hover); font: var(--text-sm)/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 #mcp-ask pre { max-height: 240px; overflow: auto; }
 .mcp-install { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .mcp-install .k { color: var(--muted); margin-right: 4px; }

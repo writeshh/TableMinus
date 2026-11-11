@@ -474,16 +474,18 @@ body:has(#workspace.doc-ws) :is(#new-sql, #tools-button, #assistant-button, .too
 .doc-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--text-sm); }
 .doc-main { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .doc-docs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.doc-docs .bar { display: flex; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.doc-docs .bar { display: flex; gap: 6px; align-items: center; padding: 0 10px; min-height: var(--bar-h); border-bottom: 1px solid var(--line); flex-wrap: nowrap; overflow: hidden; } /* one line, like every bar */
+.doc-docs .bar > * { flex: none; }
 .doc-docs .bar h3 { margin: 0 6px 0 0; font: 600 var(--text-md)/1.3 var(--mono); }
-.doc-docs .bar input { font: var(--text-sm)/1.4 var(--mono); min-width: 140px; flex: 1; }
+.doc-docs .bar input { font: var(--text-sm)/1.4 var(--mono); min-width: 80px; flex: 1 1 140px; }
 .doc-docs .bar .sort { flex: 0 1 180px; }
+.doc-docs .bar h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
 .doc-docs .bar .meta { color: var(--muted); font-size: var(--text-sm); white-space: nowrap; }
 .doc-grid { flex: 1; min-height: 0; overflow: auto; }
 .doc-grid table { border-collapse: collapse; font: var(--grid-size, 12px) var(--grid-font, var(--mono)); }
 .doc-grid :is(th, td) { padding: 3px 10px; border-bottom: 1px solid var(--grid-line, var(--line)); border-right: 1px solid var(--grid-line, var(--line)); text-align: left; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .doc-grid th { position: sticky; top: 0; background: var(--side); font-weight: 600; z-index: 1; }
-.doc-grid td.null { color: var(--grid-null, var(--muted)); }
+.doc-grid td.null { color: var(--grid-null, var(--muted)); font-style: italic; }
 .doc-grid td.missing { background: var(--hover); }
 .doc-grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .doc-grid tr.picked td { background: var(--accent-soft); }

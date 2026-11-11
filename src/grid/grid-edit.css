@@ -13,7 +13,7 @@ dialog.cell-dialog[open] { display: grid; gap: 10px; }
 dialog.cell-dialog h3, dialog.cell-dialog p, dialog.cell-dialog footer { margin: 0; }
 .cell-tools { display: flex; gap: 6px; align-items: center; }
 .cell-tools .check { margin-left: auto; }
-.cell-text { width: 100%; height: min(60vh, 520px); resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--bg); font: var(--text-sm)/1.5 var(--mono); tab-size: 2; }
+.cell-text { width: 100%; height: min(60vh, 520px); resize: vertical; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-xl); background: var(--bg); font: var(--text-sm)/1.5 var(--mono); tab-size: 2; }
 .json-check { font-size: var(--text-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .json-check.ok { color: var(--ok); }
 .json-check.error { color: var(--danger); }

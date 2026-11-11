@@ -20,7 +20,7 @@ dialog.diagram .status { margin-top: 8px; }
 dialog.dg-pick { width: min(480px, calc(100vw - 32px)); }
 .dg-pick-bar { display: flex; gap: 6px; margin-bottom: 8px; }
 .dg-pick-bar input { flex: 1; }
-.dg-pick-list { display: grid; gap: 2px; max-height: min(55vh, 460px); overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.dg-pick-list { display: grid; gap: 2px; max-height: min(55vh, 460px); overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-xl); }
 .dg-pick-list label { font-family: var(--mono); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Printing: printDiagram() puts a copy of the SVG in .dg-print, and only that copy prints. */

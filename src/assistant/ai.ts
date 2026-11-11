@@ -88,7 +88,7 @@ const STYLE = `
 .ai-msg { display: grid; gap: 6px; max-width: 100%; }
 .ai-msg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
 .ai-msg.user { justify-self: end; max-width: 88%; padding: 6px 10px; border-radius: var(--radius-lg); background: var(--accent-soft); }
-.ai-code { position: relative; display: grid; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg); overflow: hidden; }
+.ai-code { position: relative; display: grid; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--bg); overflow: hidden; }
 .ai-code pre { margin: 0; padding: 8px 10px; font: var(--text-sm)/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 .ai-code footer { display: flex; gap: 4px; justify-content: flex-end; margin: 0; padding: 4px 6px; border-top: 1px solid var(--line); background: var(--raised); }
 .ai-code footer .grow { flex: 1; color: var(--muted); font-size: var(--text-sm); align-self: center; }
