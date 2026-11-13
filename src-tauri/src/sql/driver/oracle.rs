@@ -214,8 +214,7 @@ impl Oracle {
         }
         let user = url::form_urlencoded::parse(format!("u={}", u.username()).as_bytes())
             .next()
-            .map(|(_, v)| v.into_owned())
-            .unwrap_or_default();
+            .map_or_default(|(_, v)| v.into_owned());
         let (dial, port) = match tunnel_port {
             Some(p) => ("127.0.0.1".to_string(), p),
             None => (host, u.port().unwrap_or(1521)),
@@ -240,7 +239,7 @@ impl Oracle {
             "tcps://"
         };
         let connect = format!("{protocol}{dial}:{port}/{service}?{}", options.join("&"));
-        let pw = password.map(|p| p.expose_secret().to_string()).unwrap_or_default();
+        let pw = password.map_or_default(|p| p.expose_secret().to_string());
         let conn = tokio::time::timeout(
             crate::sql::db::CONNECT_TIMEOUT + std::time::Duration::from_secs(5),
             blocking(move || {

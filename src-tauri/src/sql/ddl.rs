@@ -301,7 +301,7 @@ fn create_database_sql(d: Dialect, name: &str, encoding: Option<&str>, collation
     if d == Dialect::Bq {
         return Ok(format!("CREATE SCHEMA {name}")); // a dataset, in the project's default location
     }
-    let clause = |keyword: &str, v: Option<&str>| v.map(|v| format!(" {keyword} {}", d.literal(v))).unwrap_or_default();
+    let clause = |keyword: &str, v: Option<&str>| v.map_or_default(|v| format!(" {keyword} {}", d.literal(v)));
     let options = if d == Dialect::Click {
         String::new() // a ClickHouse database has no encoding or collation
     } else if d == Dialect::Mssql {
@@ -341,9 +341,8 @@ fn column_sql(d: Dialect, c: &ColumnDef, kept: Option<&ColumnInfo>) -> Result<St
     if d == Dialect::Click {
         // Nullability is part of the type (`Nullable(String)`), and the type is written as it is.
         let name = d.ident(not_blank(&c.name, "every column needs a name")?);
-        let default = blank_is_none(c.default.as_ref()).map(|v| format!(" DEFAULT {v}")).unwrap_or_default();
-        let comment =
-            blank_is_none(c.comment.as_ref()).map(|v| format!(" COMMENT {}", d.literal(v))).unwrap_or_default();
+        let default = blank_is_none(c.default.as_ref()).map_or_default(|v| format!(" DEFAULT {v}"));
+        let comment = blank_is_none(c.comment.as_ref()).map_or_default(|v| format!(" COMMENT {}", d.literal(v)));
         return Ok(format!("{name} {data_type}{default}{comment}"));
     }
     if d == Dialect::Bq {
@@ -500,7 +499,7 @@ fn trigger_sql(
                 ));
             }
             let events = events.iter().map(|e| e.sql()).collect::<Vec<_>>().join(", ");
-            let schema = table.split_once('.').map(|(s, _)| format!("{}.", d.ident(s))).unwrap_or_default();
+            let schema = table.split_once('.').map_or_default(|(s, _)| format!("{}.", d.ident(s)));
             format!("CREATE TRIGGER {schema}{name} ON {t} AFTER {events} AS\nBEGIN\n  SET NOCOUNT ON;\n  {body}\nEND")
         }
         Dialect::Click => return Err(Error::Invalid("ClickHouse has no triggers")),
@@ -793,8 +792,7 @@ pub(crate) fn mssql_description(
         (true, Some(c)) => ("sp_updateextendedproperty", format!(", @value = {}", d.literal(c))),
         (true, None) => ("sp_dropextendedproperty", String::new()),
     };
-    let column =
-        column.map(|c| format!(", @level2type = N'COLUMN', @level2name = {}", d.literal(c))).unwrap_or_default();
+    let column = column.map_or_default(|c| format!(", @level2type = N'COLUMN', @level2name = {}", d.literal(c)));
     Some(format!(
         "EXEC {procedure} @name = N'MS_Description'{value}, @level0type = N'SCHEMA', @level0name = {}, \
          @level1type = N'{kind}', @level1name = {}{column}",
@@ -1173,7 +1171,7 @@ pub fn pg_create_sql(table: &str, s: &Structure) -> String {
     let mut out = vec![format!("CREATE TABLE {t} (\n  {}\n);", defs.join(",\n  "))];
     for i in s.indexes.iter().filter(|i| !i.primary) {
         let unique = if i.unique { "UNIQUE " } else { "" };
-        let using = i.method.as_deref().filter(|m| *m != "btree").map(|m| format!(" USING {m}")).unwrap_or_default();
+        let using = i.method.as_deref().filter(|m| *m != "btree").map_or_default(|m| format!(" USING {m}"));
         // Index columns may be expressions, which pg_get_indexdef already writes as SQL; names come quoted as needed.
         out.push(format!("CREATE {unique}INDEX {} ON {t}{using} ({});", d.ident(&i.name), i.columns.join(", ")));
     }
@@ -1200,7 +1198,7 @@ pub fn mssql_create_sql(table: &str, s: &Structure) -> String {
         .map(|c| {
             let identity = if c.auto_increment { " IDENTITY(1,1)" } else { "" };
             let null = if c.nullable { "NULL" } else { "NOT NULL" };
-            let default = c.default.as_ref().map(|v| format!(" DEFAULT {v}")).unwrap_or_default();
+            let default = c.default.as_ref().map_or_default(|v| format!(" DEFAULT {v}"));
             format!("{} {}{identity} {null}{default}", d.ident(&c.name), c.data_type)
         })
         .collect();
@@ -1514,7 +1512,7 @@ impl Conn {
                 &[Some(name)],
             )
             .await?;
-        let [Some(charset), Some(collation)] = rows.first().map(Vec::as_slice).unwrap_or_default() else {
+        let [Some(charset), Some(collation)] = rows.first().map_or_default(Vec::as_slice) else {
             return Err(Error::Invalid("no such database"));
         };
         let tables = self

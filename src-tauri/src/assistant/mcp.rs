@@ -460,8 +460,7 @@ pub struct Status {
 /// The stdio bridge binary, next to the app's executable.
 pub(crate) fn bridge_path() -> PathBuf {
     std::env::current_exe()
-        .map(|exe| exe.with_file_name(format!("tableminus-mcp{}", std::env::consts::EXE_SUFFIX)))
-        .unwrap_or_default()
+        .map_or_default(|exe| exe.with_file_name(format!("tableminus-mcp{}", std::env::consts::EXE_SUFFIX)))
 }
 
 fn status(shared: &Shared) -> Status {

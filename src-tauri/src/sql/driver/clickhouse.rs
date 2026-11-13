@@ -57,8 +57,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 fn decode(s: &str) -> String {
     url::form_urlencoded::parse(format!("v={}", s.replace('+', "%2B")).as_bytes())
         .next()
-        .map(|(_, v)| v.into_owned())
-        .unwrap_or_default()
+        .map_or_default(|(_, v)| v.into_owned())
 }
 
 /// A value written the way a TSV field is read: `\N` for NULL, and backslash, tab and line breaks escaped.
@@ -200,7 +199,7 @@ impl ClickHouse {
         let connector = secure.then(|| tls.connector()).transpose()?.map(tokio_native_tls::TlsConnector::from);
         let user = decode(u.username());
         let user = if user.is_empty() { "default".to_string() } else { user };
-        let credentials = format!("{user}:{}", password.map(ExposeSecret::expose_secret).unwrap_or_default());
+        let credentials = format!("{user}:{}", password.map_or_default(ExposeSecret::expose_secret));
         let mut auth = header::HeaderValue::from_str(&format!("Basic {}", base64(credentials.as_bytes())))
             .map_err(|_| Error::Invalid("the user name or password has characters a header can't hold"))?;
         auth.set_sensitive(true);

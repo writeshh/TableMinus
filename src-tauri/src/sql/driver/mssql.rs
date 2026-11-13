@@ -61,7 +61,7 @@ impl SqlServer {
             config.database(database);
         }
         config.application_name("TableMinus");
-        let secret = password.map(ExposeSecret::expose_secret).unwrap_or_default();
+        let secret = password.map_or_default(ExposeSecret::expose_secret);
         config.authentication(AuthMethod::sql_server(decode(u.username()), secret));
         apply_tls(&mut config, tls)?;
         // Through a tunnel the socket goes to the local port, while TLS still checks the real host name.
@@ -103,8 +103,7 @@ fn instance_port_in(answer: &[u8]) -> Option<u16> {
 fn percent_decode(s: &str) -> String {
     url::form_urlencoded::parse(format!("v={}", s.replace('+', "%2B")).as_bytes())
         .next()
-        .map(|(_, v)| v.into_owned())
-        .unwrap_or_default()
+        .map_or_default(|(_, v)| v.into_owned())
 }
 
 /// The TLS settings as tiberius has them: Prefer encrypts when the server can, Require insists, and the verifying

@@ -173,7 +173,7 @@ const BQ: &str = "select 'c', c.table_name, c.column_name, c.data_type, 'false',
      from INFORMATION_SCHEMA.COLUMNS c join INFORMATION_SCHEMA.TABLES t on t.table_name = c.table_name";
 
 fn list(cell: Option<String>) -> Vec<String> {
-    cell.map(|c| c.split(SEP).map(String::from).collect()).unwrap_or_default()
+    cell.map_or_default(|c| c.split(SEP).map(String::from).collect())
 }
 
 /// Turns the query's rows into tables (by name, columns in table order) and foreign keys (by table and name).

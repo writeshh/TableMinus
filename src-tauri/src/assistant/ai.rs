@@ -269,8 +269,7 @@ async fn tunnel(proxy: &Proxy, host: &str, port: u16) -> Result<tokio::net::TcpS
         proxy.host_str().ok_or(Error::Invalid("the proxy has no host"))?.trim_start_matches('[').trim_end_matches(']');
     let mut stream = tokio::net::TcpStream::connect((at, proxy.port_or_known_default().unwrap_or(80))).await?;
     let target = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
-    let credentials =
-        auth.as_ref().map(|a| format!("Proxy-Authorization: {}\r\n", a.expose_secret())).unwrap_or_default();
+    let credentials = auth.as_ref().map_or_default(|a| format!("Proxy-Authorization: {}\r\n", a.expose_secret()));
     stream.write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n{credentials}\r\n").as_bytes()).await?;
     // The proxy's answer is a status line and headers; anything longer isn't one.
     let mut answer = Vec::new();

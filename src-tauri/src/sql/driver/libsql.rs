@@ -162,18 +162,12 @@ struct Outcome {
 }
 
 fn outcome(result: &Value) -> Outcome {
-    let columns = result
-        .get("cols")
-        .and_then(Value::as_array)
-        .map(|c| c.iter().map(|c| c.get("name").and_then(Value::as_str).unwrap_or_default().to_string()).collect())
-        .unwrap_or_default();
-    let rows = result
-        .get("rows")
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter().map(|r| r.as_array().map(|r| r.iter().map(cell).collect()).unwrap_or_default()).collect()
-        })
-        .unwrap_or_default();
+    let columns = result.get("cols").and_then(Value::as_array).map_or_default(|c| {
+        c.iter().map(|c| c.get("name").and_then(Value::as_str).unwrap_or_default().to_string()).collect()
+    });
+    let rows = result.get("rows").and_then(Value::as_array).map_or_default(|rows| {
+        rows.iter().map(|r| r.as_array().map_or_default(|r| r.iter().map(cell).collect())).collect()
+    });
     let affected = result.get("affected_row_count").and_then(Value::as_u64).unwrap_or(0);
     Outcome { columns, rows, affected }
 }

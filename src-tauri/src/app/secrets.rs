@@ -189,10 +189,8 @@ impl Vault {
     /// Moves the file aside (it may yet be opened by someone who remembers the password) and starts over.
     fn reset(&mut self) -> Result<()> {
         if self.exists() {
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or_default();
+            let stamp =
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or_default(|d| d.as_secs());
             let mut aside = self.path.as_os_str().to_owned();
             aside.push(format!(".forgotten-{stamp}"));
             std::fs::rename(&self.path, PathBuf::from(aside))

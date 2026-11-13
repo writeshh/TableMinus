@@ -41,8 +41,7 @@ pub fn record(sql: &str) {
     };
     let at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or_default();
+        .map_or_default(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
     let mut log = log();
     let id = log.next;
     log.next += 1;

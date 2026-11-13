@@ -167,10 +167,9 @@ async fn open_session(
     }
     let user = url::form_urlencoded::parse(format!("u={}", u.username()).as_bytes())
         .next()
-        .map(|(_, v)| v.into_owned())
-        .unwrap_or_default();
+        .map_or_default(|(_, v)| v.into_owned());
     if !user.is_empty() {
-        b = b.user(user, password.as_ref().map(|p| p.expose_secret().to_string()).unwrap_or_default());
+        b = b.user(user, password.as_ref().map_or_default(|p| p.expose_secret().to_string()));
     }
     let cql = tokio::time::timeout(CONNECT_TIMEOUT * 2, b.build())
         .await

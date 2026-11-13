@@ -84,10 +84,7 @@ pub fn add_bridge(path: &Path, bridge: &str) -> Result<Installed> {
             let mut to = path.as_os_str().to_owned();
             to.push(format!(
                 ".tableminus-backup-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or_default()
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or_default(|d| d.as_secs())
             ));
             let to = PathBuf::from(to);
             write_private(&to, text.as_bytes())?;

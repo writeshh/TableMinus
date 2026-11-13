@@ -113,7 +113,7 @@ fn json_value(field: &Value, v: &Value) -> Value {
             f["mode"] = json!("NULLABLE");
             f
         };
-        let items = v.as_array().map(|a| a.iter().map(|i| json_value(&one, &i["v"])).collect()).unwrap_or_default();
+        let items = v.as_array().map_or_default(|a| a.iter().map(|i| json_value(&one, &i["v"])).collect());
         return Value::Array(items);
     }
     let kind = field.get("type").and_then(Value::as_str).unwrap_or_default();
@@ -156,7 +156,7 @@ fn rows(fields: &[Value], answer: &Value) -> Vec<Vec<Option<String>>> {
     let Some(rows) = answer.get("rows").and_then(Value::as_array) else { return vec![] };
     rows.iter()
         .map(|r| {
-            let values = r.get("f").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+            let values = r.get("f").and_then(Value::as_array).map_or_default(Vec::as_slice);
             fields.iter().zip(values).map(|(f, x)| cell(f, &x["v"])).collect()
         })
         .collect()
@@ -280,7 +280,7 @@ impl BigQuery {
         if let Some(auth) = &mut self.auth {
             headers.push((header::AUTHORIZATION, auth.header().await?));
         }
-        let body = body.map(|b| b.to_string().into_bytes()).unwrap_or_default();
+        let body = body.map_or_default(|b| b.to_string().into_bytes());
         let send = self.endpoint.send(method, path, &headers, body, MAX_ANSWER);
         let cancel = self.cancel.clone();
         let (status, bytes) = tokio::select! {
@@ -304,7 +304,7 @@ impl BigQuery {
     async fn list_datasets(&mut self) -> Result<Vec<String>> {
         let (mut names, mut token) = (vec![], None::<String>);
         loop {
-            let page = token.as_deref().map(|t| format!("&pageToken={}", urlencode(t))).unwrap_or_default();
+            let page = token.as_deref().map_or_default(|t| format!("&pageToken={}", urlencode(t)));
             let path = format!("/bigquery/v2/projects/{}/datasets?maxResults=1000{page}", self.project);
             let answer = self.request(Method::GET, &path, None).await?;
             let list = answer.get("datasets").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -390,8 +390,8 @@ impl BigQuery {
         let job = answer.get("jobReference").cloned().unwrap_or_default();
         let project = self.project.clone();
         let results = |token: Option<&str>| {
-            let location = job["location"].as_str().map(|l| format!("&location={}", urlencode(l))).unwrap_or_default();
-            let page = token.map(|t| format!("&pageToken={}", urlencode(t))).unwrap_or_default();
+            let location = job["location"].as_str().map_or_default(|l| format!("&location={}", urlencode(l)));
+            let page = token.map_or_default(|t| format!("&pageToken={}", urlencode(t)));
             format!(
                 "/bigquery/v2/projects/{project}/queries/{}?maxResults={PAGE}&timeoutMs={WAIT_MS}&formatOptions.useInt64Timestamp=true{location}{page}",
                 urlencode(job["jobId"].as_str().unwrap_or_default())
@@ -425,7 +425,7 @@ impl BigQuery {
     /// Asks BigQuery to stop a job the app stopped waiting for; returns the error to report.
     async fn cancel_job(&mut self, job: &Value) -> Error {
         if let Some(id) = job["jobId"].as_str() {
-            let location = job["location"].as_str().map(|l| format!("?location={}", urlencode(l))).unwrap_or_default();
+            let location = job["location"].as_str().map_or_default(|l| format!("?location={}", urlencode(l)));
             let path = format!("/bigquery/v2/projects/{}/jobs/{}/cancel{location}", self.project, urlencode(id));
             // Best effort: the query was stopped here either way.
             let _ = self.request(Method::POST, &path, Some(&json!({}))).await;
@@ -444,7 +444,7 @@ fn sql_type(field: &Value) -> String {
         "FLOAT" => "FLOAT64".to_string(),
         "BOOLEAN" => "BOOL".to_string(),
         "RECORD" | "STRUCT" => {
-            let fields = field["fields"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let fields = field["fields"].as_array().map_or_default(Vec::as_slice);
             let inner: Vec<String> = fields
                 .iter()
                 .map(|f| format!("{} {}", Dialect::Bq.ident(f["name"].as_str().unwrap_or_default()), sql_type(f)))
@@ -467,12 +467,11 @@ fn sql_type(field: &Value) -> String {
 fn primary_key(table: &Value) -> Vec<String> {
     table["tableConstraints"]["primaryKey"]["columns"]
         .as_array()
-        .map(|c| c.iter().filter_map(|c| c.as_str().map(String::from)).collect())
-        .unwrap_or_default()
+        .map_or_default(|c| c.iter().filter_map(|c| c.as_str().map(String::from)).collect())
 }
 
 fn fields(table: &Value) -> &[Value] {
-    table["schema"]["fields"].as_array().map(Vec::as_slice).unwrap_or_default()
+    table["schema"]["fields"].as_array().map_or_default(Vec::as_slice)
 }
 
 /// The columns of a table resource (`tables.get`).
@@ -527,11 +526,10 @@ pub fn structure(table: &Value) -> crate::sql::structure::Structure {
     };
     let foreign_keys = table["tableConstraints"]["foreignKeys"]
         .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
         .iter()
         .map(|k| {
-            let pairs = k["columnReferences"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let pairs = k["columnReferences"].as_array().map_or_default(Vec::as_slice);
             let column = |key: &str| pairs.iter().filter_map(|p| p[key].as_str().map(String::from)).collect();
             ForeignKeyInfo {
                 name: k["name"].as_str().unwrap_or_default().to_string(),
@@ -556,7 +554,7 @@ pub fn create_sql(name: &str, table: &Value) -> String {
         return format!("CREATE VIEW {t} AS\n{};", query.trim().trim_end_matches(';'));
     }
     let described = |text: Option<&str>| {
-        text.filter(|x| !x.is_empty()).map(|x| format!(" OPTIONS(description = {})", d.literal(x))).unwrap_or_default()
+        text.filter(|x| !x.is_empty()).map_or_default(|x| format!(" OPTIONS(description = {})", d.literal(x)))
     };
     let mut lines: Vec<String> = fields(table)
         .iter()
@@ -683,14 +681,14 @@ impl Driver for BigQuery {
         let Some(dataset) = self.dataset.clone() else { return Ok(vec![]) };
         let (mut out, mut token) = (vec![], None::<String>);
         loop {
-            let page = token.as_deref().map(|t| format!("&pageToken={}", urlencode(t))).unwrap_or_default();
+            let page = token.as_deref().map_or_default(|t| format!("&pageToken={}", urlencode(t)));
             let path = format!(
                 "/bigquery/v2/projects/{}/datasets/{}/tables?maxResults=1000{page}",
                 self.project,
                 urlencode(&dataset)
             );
             let answer = self.request(Method::GET, &path, None).await?;
-            for t in answer.get("tables").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default() {
+            for t in answer.get("tables").and_then(Value::as_array).map_or_default(Vec::as_slice) {
                 if let Some(name) = t["tableReference"]["tableId"].as_str() {
                     out.push((name.to_string(), t["type"].as_str().unwrap_or("TABLE").to_string()));
                 }

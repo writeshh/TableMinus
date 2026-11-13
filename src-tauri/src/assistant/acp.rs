@@ -191,7 +191,7 @@ async fn keep_stderr(stream: tokio::process::ChildStderr, tail: Arc<Mutex<String
 /// PATH for the agent: this process's, then the usual places for `npx` and agents.
 fn agent_path() -> std::ffi::OsString {
     let mut dirs: Vec<std::path::PathBuf> =
-        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        std::env::var_os("PATH").map_or_default(|p| std::env::split_paths(&p).collect());
     dirs.extend(MORE_PATH.iter().map(std::path::PathBuf::from));
     if let Some(home) = dirs::home_dir() {
         dirs.extend(MORE_HOME_PATH.iter().map(|d| home.join(d)));

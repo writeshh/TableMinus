@@ -4,6 +4,7 @@ version = "1.1.0"
 description = "Personal database client: Postgres, MySQL/MariaDB and SQLite"
 authors = ["Ritesh Shrestha"]
 edition = "2024"
+rust-version = "1.100" # Option::map_or_default
 publish = false
 default-run = "table-minus"
 

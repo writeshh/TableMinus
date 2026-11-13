@@ -76,8 +76,7 @@ impl Tools {
 /// Where client tools usually live: PATH (short for an app started from the Finder), Homebrew, Postgres.app,
 /// `DBngin`, and the system and MySQL installer folders. Folders named per version are listed one level deep.
 fn search_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> =
-        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map_or_default(|p| std::env::split_paths(&p).collect());
     dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/local/mysql/bin", "/usr/bin"].map(PathBuf::from));
     for parent in [
         "/opt/homebrew/opt",
@@ -144,7 +143,7 @@ fn version_key(engine: Engine, version: &str) -> (u32, u32) {
 /// than itself, and newer tools write SQL an older server may reject.
 fn pick(engine: Engine, server: &str, found: &[Tools]) -> Result<usize> {
     let mariadb = server.starts_with("MariaDB");
-    let want = parse_version(server).map(|v| version_key(engine, &v)).unwrap_or_default();
+    let want = parse_version(server).map_or_default(|v| version_key(engine, &v));
     found.iter().position(|t| t.mariadb == mariadb && version_key(engine, &t.version) >= want).ok_or_else(|| {
         let versions: Vec<&str> = found.iter().map(|t| t.version.as_str()).collect();
         Error::NoTools {
@@ -589,7 +588,7 @@ fn run_tool(mut cmd: Command, feed: Feed, stop: &Stop, report: Report) -> Result
     }
     let missing = || std::io::Error::other("no pipe to the tool");
     let (copied, status, lines) = std::thread::scope(|s| {
-        let lines = s.spawn(|| stderr.map(|e| read_lines(e, report)).unwrap_or_default());
+        let lines = s.spawn(|| stderr.map_or_default(|e| read_lines(e, report)));
         let copied = match feed {
             Feed::Out(out) => stdout
                 .ok_or_else(missing)

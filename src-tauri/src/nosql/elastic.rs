@@ -52,7 +52,7 @@ impl Session {
         if let Some(a) = &self.auth {
             headers.push((header::AUTHORIZATION, a.clone()));
         }
-        let bytes = body.map(|b| b.to_string().into_bytes()).unwrap_or_default();
+        let bytes = body.map_or_default(|b| b.to_string().into_bytes());
         let (status, answer) = self.endpoint.send(method, path, &headers, bytes, MAX_ANSWER).await?;
         let value: Value = serde_json::from_slice(&answer)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&answer).trim().to_string()));
@@ -118,8 +118,7 @@ async fn open_session(
     let endpoint = Endpoint::new("Elasticsearch", &host, port, tls, tunnel.as_ref().map(|t| t.port));
     let user = url::form_urlencoded::parse(format!("u={}", u.username()).as_bytes())
         .next()
-        .map(|(_, v)| v.into_owned())
-        .unwrap_or_default();
+        .map_or_default(|(_, v)| v.into_owned());
     let secret = password.as_ref().map(ExposeSecret::expose_secret).filter(|p| !p.is_empty());
     // A user signs in with Basic; a password alone is an API key.
     let auth = match (user.is_empty(), secret) {

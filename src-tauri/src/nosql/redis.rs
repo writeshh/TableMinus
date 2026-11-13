@@ -56,7 +56,7 @@ impl Reply {
     }
 
     fn text(self) -> String {
-        self.bytes().map(|b| shown(&b)).unwrap_or_default()
+        self.bytes().map_or_default(|b| shown(&b))
     }
 
     fn int(&self) -> i64 {
@@ -267,8 +267,8 @@ impl Client {
 
 /// Whether a command only reads, so safe mode needn't ask. Anything not listed counts as a write.
 pub fn is_read_only(args: &[Vec<u8>]) -> bool {
-    let name = args.first().map(|a| String::from_utf8_lossy(a).to_ascii_uppercase()).unwrap_or_default();
-    let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_ascii_uppercase()).unwrap_or_default();
+    let name = args.first().map_or_default(|a| String::from_utf8_lossy(a).to_ascii_uppercase());
+    let sub = args.get(1).map_or_default(|a| String::from_utf8_lossy(a).to_ascii_uppercase());
     match name.as_str() {
         "CLIENT" => ["LIST", "INFO", "GETNAME", "ID"].contains(&sub.as_str()),
         "CONFIG" => sub == "GET",
@@ -366,7 +366,7 @@ const READ_ONLY: &[&str] = &[
 
 /// Commands that hold the connection until something happens elsewhere; the console doesn't run them.
 fn blocks(args: &[Vec<u8>]) -> bool {
-    let name = args.first().map(|a| String::from_utf8_lossy(a).to_ascii_uppercase()).unwrap_or_default();
+    let name = args.first().map_or_default(|a| String::from_utf8_lossy(a).to_ascii_uppercase());
     let blocking_read = name == "XREAD" || name == "XREADGROUP";
     let has_block = args.iter().any(|a| a.eq_ignore_ascii_case(b"BLOCK"));
     [
@@ -627,7 +627,7 @@ pub async fn redis_databases(
             // Managed servers may refuse CONFIG; 16 is Redis's default.
             let count =
                 it.next().map(Reply::items).and_then(|i| i.into_iter().nth(1)).map_or(16, |r| r.int()).clamp(1, 1024);
-            Ok((count, it.next().map(Reply::text).unwrap_or_default()))
+            Ok((count, it.next().map_or_default(Reply::text)))
         })
     })
     .await?;
@@ -680,7 +680,7 @@ pub async fn redis_scan(
             let mut parts = reply.items().into_iter();
             let cursor = parts.next().map_or_else(|| "0".into(), Reply::text);
             let keys: Vec<Vec<u8>> =
-                parts.next().map(Reply::items).unwrap_or_default().into_iter().filter_map(Reply::bytes).collect();
+                parts.next().map_or_default(Reply::items).into_iter().filter_map(Reply::bytes).collect();
             let types = c.pipeline(&keys.iter().map(|k| vec![b"TYPE".to_vec(), k.clone()]).collect::<Vec<_>>()).await?;
             let keys = keys.into_iter().zip(types).map(|(k, t)| KeyEntry { key: Key::of(k), kind: t.text() }).collect();
             Ok(Scanned { cursor, keys })
@@ -706,7 +706,7 @@ pub struct Value {
 async fn read_value(c: &mut Client, key: &[u8], limit: usize) -> Result<Value> {
     let head = c.pipeline(&[vec![b"TYPE".to_vec(), key.to_vec()], vec![b"PTTL".to_vec(), key.to_vec()]]).await?;
     let mut head = head.into_iter();
-    let kind = head.next().map(Reply::text).unwrap_or_default();
+    let kind = head.next().map_or_default(Reply::text);
     let ttl_ms = head.next().map_or(-2, |r| r.int());
     let shown_n = (limit - 1).to_string();
     let (size, items): (u64, Vec<Vec<String>>) = match kind.as_str() {
@@ -740,7 +740,7 @@ async fn read_value(c: &mut Client, key: &[u8], limit: usize) -> Result<Value> {
                 let reply = c.call(&[scan_cmd, key, &cursor, b"COUNT", b"500"]).await?.ok()?;
                 let mut parts = reply.items().into_iter();
                 cursor = parts.next().and_then(Reply::bytes).unwrap_or_else(|| b"0".to_vec());
-                flat.extend(parts.next().map(Reply::items).unwrap_or_default());
+                flat.extend(parts.next().map_or_default(Reply::items));
                 if cursor == b"0" || flat.len() >= limit * if pairs { 2 } else { 1 } {
                     break;
                 }
@@ -760,8 +760,8 @@ async fn read_value(c: &mut Client, key: &[u8], limit: usize) -> Result<Value> {
                 .into_iter()
                 .map(|e| {
                     let mut parts = e.items().into_iter();
-                    let id = parts.next().map(Reply::text).unwrap_or_default();
-                    let fields = parts.next().map(Reply::items).unwrap_or_default();
+                    let id = parts.next().map_or_default(Reply::text);
+                    let fields = parts.next().map_or_default(Reply::items);
                     std::iter::once(id).chain(fields.into_iter().map(Reply::text)).collect()
                 })
                 .collect();

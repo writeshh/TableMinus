@@ -67,15 +67,10 @@ fn outcome(result: &Value) -> Outcome {
     let columns: Vec<String> = results
         .get("columns")
         .and_then(Value::as_array)
-        .map(|c| c.iter().map(|c| c.as_str().unwrap_or_default().to_string()).collect())
-        .unwrap_or_default();
-    let rows = results
-        .get("rows")
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter().map(|r| r.as_array().map(|r| r.iter().map(cell).collect()).unwrap_or_default()).collect()
-        })
-        .unwrap_or_default();
+        .map_or_default(|c| c.iter().map(|c| c.as_str().unwrap_or_default().to_string()).collect());
+    let rows = results.get("rows").and_then(Value::as_array).map_or_default(|rows| {
+        rows.iter().map(|r| r.as_array().map_or_default(|r| r.iter().map(cell).collect())).collect()
+    });
     let affected = if columns.is_empty() {
         result.get("meta").and_then(|m| m.get("changes")).and_then(Value::as_u64).unwrap_or(0)
     } else {
@@ -212,7 +207,7 @@ impl Driver for D1 {
     }
 
     async fn fetch_with(&mut self, sql: &str, params: &[Option<&str>]) -> Result<Vec<Vec<Option<String>>>> {
-        Ok(self.execute(vec![query(sql, params)]).await?.into_iter().next().map(|o| o.rows).unwrap_or_default())
+        Ok(self.execute(vec![query(sql, params)]).await?.into_iter().next().map_or_default(|o| o.rows))
     }
 
     async fn stream(&mut self, sql: &str, params: &[Option<&str>], sink: &mut dyn RowSink) -> Result<()> {

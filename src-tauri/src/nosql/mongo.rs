@@ -406,7 +406,7 @@ async fn execute(client: &Client, db: &mut String, op: Operation, max: usize) ->
                     }
                 }
             };
-            let upserted = r.upserted_id.map(|id| format!(", upserted _id {}", json(id))).unwrap_or_default();
+            let upserted = r.upserted_id.map_or_default(|id| format!(", upserted _id {}", json(id)));
             done(format!("Matched {}, modified {}{upserted}", r.matched_count, r.modified_count))
         }
         "deleteOne" => done(format!("Deleted {}", coll.delete_one(filter).await?.deleted_count)),

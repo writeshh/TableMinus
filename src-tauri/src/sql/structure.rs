@@ -137,7 +137,7 @@ pub struct NamedDef {
 }
 
 fn list(cell: Option<String>) -> Vec<String> {
-    cell.map(|c| c.split(SEP).map(String::from).filter(|s| !s.is_empty()).collect()).unwrap_or_default()
+    cell.map_or_default(|c| c.split(SEP).map(String::from).filter(|s| !s.is_empty()).collect())
 }
 
 /// Postgres's one-letter referential action codes.
@@ -656,8 +656,7 @@ impl Conn {
             .into_iter()
             .next()
             .and_then(|mut r| take(&mut r, 0))
-            .map(|sql| crate::sql::ddl::lite_checks(&sql))
-            .unwrap_or_default();
+            .map_or_default(|sql| crate::sql::ddl::lite_checks(&sql));
         Ok(Structure { columns, indexes, foreign_keys, checks, triggers, comment: None, options: None })
     }
 
@@ -881,7 +880,7 @@ impl Conn {
             .map(|mut r| IndexInfo {
                 name: take(&mut r, 0).unwrap_or_default(),
                 unique: take(&mut r, 1).as_deref() == Some("true"),
-                columns: take(&mut r, 2).map(|sql| index_columns(&sql)).unwrap_or_default(),
+                columns: take(&mut r, 2).map_or_default(|sql| index_columns(&sql)),
                 primary: false,
                 method: None,
                 constraint: false,
