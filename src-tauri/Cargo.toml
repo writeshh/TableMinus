@@ -38,7 +38,7 @@ tokio-native-tls = "0.3.1"
 base64 = "0.22"
 mysql_async = { version = "0.37.1", default-features = false, features = ["default-rustls-ring"] }
 url = "2.5.8"
-rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher", "backup"] }
+rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher", "backup"] }
 # DuckDB, built from source into the app (a long first compile, no library to install).
 duckdb = { version = "1.10506", features = ["bundled"] }
 sqlparser = { version = "0.63.0", features = ["visitor"] }
@@ -47,7 +47,7 @@ thiserror = "2"
 bytes = "1"
 secrecy = { version = "0.10", features = ["serde"] }
 tokio = { version = "1", features = ["time", "process", "net", "io-std", "io-util", "rt-multi-thread", "sync"] }
-russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-config = "0.58.0"
 tauri-plugin-dialog = "2"
 # Updates from GitHub Releases, signed with the key build.sh finds (app/updater.rs). No `zip`: v2 update artifacts

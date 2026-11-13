@@ -6,6 +6,8 @@ version in `src-tauri/tauri.conf.json`.
 
 ## 1.2.0
 
+- Security: updated the bundled SQLite (SQLCipher 4.20, SQLite 3.54.1), the MCP server library and the SSH library
+  to versions that fix five published advisories (RUSTSEC-2026-0457, -0459, -0461, -0462 and -0495).
 - New: a new logo and app icon, a blue mockingbird. In the Dock it sits on a dark plate with a light edge.
 - New: notices about an action (saved, copied, could not export) show as a toast at the bottom right, also above
   an open window. Copies and settings that failed without a word now say why.

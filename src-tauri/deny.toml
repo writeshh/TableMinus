@@ -33,6 +33,12 @@ allow = [
     "MPL-2.0",
 ]
 
+# The SQLCipher source that rusqlite builds: SQLite's public-domain blessing, and libtomcrypt's WTFPL. Both are
+# permissive. Allowed for this crate only.
+[[licenses.exceptions]]
+crate = "sqlcipher-src"
+allow = ["blessing", "WTFPL"]
+
 # Our own crate isn't published, so it needs no license of its own.
 [licenses.private]
 ignore = true

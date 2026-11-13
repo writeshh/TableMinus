@@ -58,7 +58,7 @@ impl Driver for Sqlite {
             // SQLite prepares one statement at a time; Batch steps through the rest of the text.
             let mut batch = rusqlite::Batch::new(&self.0, sql);
             while let Some(mut st) = batch.next()? {
-                let columns: Vec<String> = st.column_names().into_iter().map(String::from).collect();
+                let columns: Vec<String> = st.column_names().map(String::from).collect();
                 if columns.is_empty() {
                     out.begin(columns);
                     out.end(st.execute([])? as u64);
@@ -100,7 +100,7 @@ impl Driver for Sqlite {
         blocking(|| -> Result<()> {
             let mut st = self.0.prepare(sql)?;
             let n = st.column_count();
-            sink.columns(st.column_names().into_iter().map(String::from).collect())?;
+            sink.columns(st.column_names().map(String::from).collect())?;
             let mut rows = st.query(rusqlite::params_from_iter(params))?;
             while let Some(row) = rows.next()? {
                 sink.row((0..n).map(|i| row.get_ref(i).map(cell)).collect::<rusqlite::Result<_>>()?)?;
