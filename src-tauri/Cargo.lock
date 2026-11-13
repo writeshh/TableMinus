@@ -6984,7 +6984,7 @@ dependencies = [
 
 [[package]]
 name = "table-minus"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "aes-gcm",
  "argon2",

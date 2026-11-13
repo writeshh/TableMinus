@@ -4,14 +4,34 @@ What changed in each version of TableMinus. The app shows a version's section wh
 `scripts/latest-json.mjs` copies it into the release's `latest.json`: before a release, rename Unreleased to the
 version in `src-tauri/tauri.conf.json`.
 
-## Unreleased
+## 1.2.0
 
+- New: a new logo and app icon, a blue mockingbird. In the Dock it sits on a dark plate with a light edge.
+- New: notices about an action (saved, copied, could not export) show as a toast at the bottom right, also above
+  an open window. Copies and settings that failed without a word now say why.
+- New: menus show a tick beside the chosen item and open submenus to the side. The arrow keys move through a menu.
+- Changed: text, secondary text and field outlines have more contrast. All text meets WCAG AA (4.5:1).
+- Changed: the launcher's left panel and its mark follow the light or dark theme.
+- Changed: every window has one title style, with Cancel and the main action at the right of its footer. A confirm
+  window shows its question as its title, and its button is orange only when the step loses data.
+- Changed: each question that asks for one value (a name, a password) uses the same small window.
+- Changed: Settings keeps one height on every tab.
+- Changed: the SQL run bar stays on one line. In a narrow window, Format, Explain and Export move into a More menu.
+- Changed: every bar in the window has the same height.
+- Changed: scroll bars are thin and show only while the pointer is over the part that scrolls. The setting "Hide
+  scroll bars until the pointer is over the grid" is gone, because every scroll bar now works that way.
+- Changed: windows and Metrics boards open below the title bar, clear of the window buttons.
+- Changed: the sidebar shows a drawn glyph for each kind of object, and MongoDB collections have one too. The
+  MongoDB and Redis sidebars match the SQL sidebar.
 - Changed: text sizes and rounded corners come from one small set, so screens match. Some labels and
   corners are slightly larger or smaller.
 - Changed: the row under the workspace tabs is gone. The database to switch and the file and row-detail
   buttons are now in the top bar, next to the connection pill. The data starts 40px higher.
 - Changed: a table has a header with its name, row and column counts, Data and Structure, + Row,
   Filters, Columns and Export. The footer keeps only messages, unsaved edits and the pages.
+- Fixed: opening a MongoDB database said "29 tables". It now names only the database.
+- Fixed: the Structure view showed page buttons that did nothing.
+- Fixed: the Jobs button opened a window named Notifications.
 
 ## 1.1.0
 
