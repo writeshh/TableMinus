@@ -51,11 +51,13 @@ jobs:
         options: --health-cmd "redis-cli ping" --health-interval 2s --health-retries 60
     steps:
       - uses: actions/checkout@v7
-      # Tauri's WebKitGTK webview and menus, SQLCipher's OpenSSL, keyring's Secret Service (D-Bus); mysqldump for
-      # the backup test.
+      # Tauri's WebKitGTK webview and menus, SQLCipher's OpenSSL, keyring's Secret Service (D-Bus). The runner image
+      # already has mysql and mysqldump (for the backup test). Installing mysql-client upgrades the image's MySQL
+      # server too, and its setup script fails while the service container holds port 3306.
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev mysql-client
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev
+          mysqldump --version
       - run: mysql -h 127.0.0.1 -u root -e "set global local_infile = 1"
       - uses: actions/setup-node@v7
         with:
